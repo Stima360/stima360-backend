@@ -56,6 +56,7 @@ from consent.guard import can_send_marketing_bulk
 from . import audience
 from . import email_metadata
 from . import followup_rules
+from . import guida_pdf
 from . import journey_repository as repo
 from . import send_window
 from . import service as communication_service
@@ -734,7 +735,11 @@ def _contesto_di_rendering(ctx, anagrafica: dict[str, Any], *, contact_id: int,
     """
     nome = (anagrafica.get("first_name") or anagrafica.get("display_name") or "").strip()
     portale = f"{_base_pubblica()}/owner/"
+    # V3, email 6: il link della guida PDF, SOLO se il file approvato c'e'.
+    # Senza, il campo manca e il template che lo chiede non si compone.
+    guida = guida_pdf.url(_base_pubblica())
     return {
+        **({templates.GUIDE_FIELD: guida} if guida else {}),
         "contact_first_name": nome,
         "agency_name": (CENTRAL_SIGNATURE_NAME if _firma_centrale(anagrafica)
                         else (anagrafica.get("agency_name") or "").strip()),

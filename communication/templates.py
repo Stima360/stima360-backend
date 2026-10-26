@@ -368,3 +368,44 @@ REGISTRY[("stima_lead_m10", 2)] = Template(
     subject=lambda c: 'Quanto potrebbe ottenere davvero la tua casa?',
     body=lambda c, text=_V2_M10: text.replace("{{contact_first_name}}", c["contact_first_name"]) + _chiusura(c),
 )
+
+
+# ---------------------------------------------------------------------------
+# V3 - FOLLOW-UP PROPRIETARI 180 GIORNI (16 email)
+#
+# I testi stanno in `followup_v3_texts.TESTI` e sono quelli APPROVATI dal
+# titolare. Si registra SOLO un testo presente e valido: se manca, il suo
+# template non esiste e la sequenza non si predispone (`journey_service`
+# rifiuta un passo il cui template non e' nel registro). Mai un ripiego.
+# Oggetto e calendario: `followup_v3_texts.CALENDARIO`. La chiusura (firma
+# e disiscrizione) e' quella di tutte le sequenze: `_chiusura`.
+# ---------------------------------------------------------------------------
+
+from . import followup_v3_texts as _v3  # noqa: E402
+
+#: Il campo con il link della guida PDF: lo richiede solo l'email della guida.
+GUIDE_FIELD = "guide_url"
+
+
+def _v3_corpo(testo: str, c: Mapping[str, str]) -> str:
+    return _v3.componi(testo, nome=c["contact_first_name"], link_guida=c.get(GUIDE_FIELD)) + "\n" + _chiusura(c)
+
+
+def templates_v3(testi: Mapping[int, str]) -> dict[tuple[str, int], Template]:
+    """I template della v3 per i testi dati, SOLO quelli presenti e validi."""
+    registrati = {}
+    for numero, (_giorno, oggetto) in enumerate(_v3.CALENDARIO, start=1):
+        testo = testi.get(numero)
+        if _v3.problemi(numero, testo):
+            continue
+        registrati[(f"followup_v3_m{numero}", 3)] = Template(
+            key=f"followup_v3_m{numero}", version=3, channel="email",
+            communication_type=TYPE_MARKETING,
+            required_fields=BASE_STIMA | ({GUIDE_FIELD} if numero == _v3.EMAIL_GUIDA else frozenset()),
+            subject=lambda c, o=oggetto: o,
+            body=lambda c, t=testo: _v3_corpo(t, c),
+        )
+    return registrati
+
+
+REGISTRY.update(templates_v3(_v3.TESTI))

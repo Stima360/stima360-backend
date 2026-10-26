@@ -46,11 +46,14 @@ def codice(percorso: Path) -> str:
 # SENTINELLA AGGIORNATA DA ADM-3: `central_continuity` (bool, default False,
 # passato solo dal processo centrale delle agenzie sospese) restringe il claim
 # a stima e passi firmati STIMA360. Non tocca `channel`, che resta obbligatorio.
+# SENTINELLA AGGIORNATA DA V3 (follow-up proprietari): `marketing_recipients`
+# (frozenset o None, default None) e' il limite dei destinatari marketing del
+# collaudo TEST. Assente = claim di sempre. Non tocca `channel`.
 @pytest.mark.parametrize("funzione, atteso", [
     (repository.claim_due, {"cur", "ctx", "limit", "provider", "channel", "token_factory",
-                            "central_continuity"}),
+                            "central_continuity", "marketing_recipients"}),
     (service.claim_due, {"ctx", "provider", "channel", "limit", "cur", "token_factory",
-                         "central_continuity"}),
+                         "central_continuity", "marketing_recipients"}),
     (dispatcher.dispatch_batch, {"ctx_operatore", "channel", "limit", "provider",
                                  "central_continuity"}),
 ])

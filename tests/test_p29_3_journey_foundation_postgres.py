@@ -389,7 +389,14 @@ def test_08_una_sola_versione_attiva_per_chiave_e_la_nuova_ritira_la_vecchia(mon
     v1 = _journey_attiva(modulo, ctx)
     v2 = modulo["journeys"].provision_journey(
         ctx, journey_key="stima_lead", version=2, trigger_type="stima_pdf_sent", name="v2", steps=PASSI)
-    modulo["journeys"].activate_journey(ctx, v2["id"])
+    # SENTINELLA AGGIORNATA DA V3: ritirare la versione attiva richiede la
+    # conferma esplicita `replace_active`; senza, rifiuto e niente cambia.
+    from communication.exceptions import ConflictError
+    with pytest.raises(ConflictError):
+        modulo["journeys"].activate_journey(ctx, v2["id"])
+    stati = {r["version"]: r["status"] for r in mondo["righe"]("communication_journeys")}
+    assert stati == {1: "active", 2: "draft"}
+    modulo["journeys"].activate_journey(ctx, v2["id"], replace_active=True)
     stati = {r["version"]: r["status"] for r in mondo["righe"]("communication_journeys")}
     assert stati == {1: "retired", 2: "active"}
     assert mondo["righe"]("communication_journeys", "id=%s", (v1["id"],))[0]["retired_at"] is not None

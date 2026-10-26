@@ -163,13 +163,27 @@ def list_steps(cur, ctx, journey_id: int) -> list[dict[str, Any]]:
     return [_proietta(r, STEP_COLUMNS) for r in cur.fetchall()]
 
 
-def activate_journey(cur, ctx, journey_id: int, *, actor_type, actor_user_id) -> dict[str, Any]:
-    """`draft -> active`. Ritira da sola la versione attiva precedente della
-    stessa chiave: una sola attiva per chiave, e il passaggio e' un atto solo."""
+def activate_journey(cur, ctx, journey_id: int, *, actor_type, actor_user_id,
+                     replace_active: bool = False) -> dict[str, Any]:
+    """`draft -> active`. Una sola attiva per chiave: la versione attiva
+    precedente della stessa chiave si ritira NELLO STESSO atto, ma solo se chi
+    attiva lo conferma (`replace_active=True`). Senza conferma, con un'altra
+    versione attiva, l'attivazione e' rifiutata e niente cambia (V3: nessuna
+    versione attiva si ritira per effetto collaterale)."""
     agency = ctx.require_agency()
     corrente = select_journey(cur, ctx, journey_id)
     if corrente["status"] != "draft":
         raise ConflictError(f"journey {journey_id} is {corrente['status']}, not draft")
+    if not replace_active:
+        cur.execute(
+            """SELECT version FROM communication_journeys
+                WHERE agency_id = %s AND journey_key = %s AND status = 'active' AND id <> %s""",
+            (agency, corrente["journey_key"], journey_id))
+        attiva = cur.fetchone()
+        if attiva is not None:
+            raise ConflictError(
+                f"la versione {attiva['version']} di {corrente['journey_key']!r} e' attiva: "
+                "conferma la sostituzione (replace_active) per ritirarla e attivare questa")
     adesso = utcnow()
     cur.execute(
         """UPDATE communication_journeys SET status = 'retired', retired_at = %s, updated_at = %s
@@ -1205,3 +1219,33 @@ def defer_enrollment(cur, ctx, enrollment_id: int, *, next_action_at) -> dict[st
     return _transizione(
         cur, ctx, enrollment_id, da=(ENR_ACTIVE,),
         assegnazioni="next_action_at = %s", valori=(next_action_at,))
+
+
+def overview(cur, ctx) -> list[dict[str, Any]]:
+    """V3 - il quadro delle sequenze dell'agenzia, per l'amministratore.
+
+    Sola lettura, solo conteggi: nessun nome, nessun indirizzo, nessun testo.
+    Per ogni versione: stato, passi, iscrizioni per stato, prossima azione
+    dovuta, messaggi per stato (inviati, bloccati, in coda, ...)."""
+    agency = ctx.require_agency()
+    cur.execute(
+        """SELECT j.id, j.journey_key, j.version, j.name, j.status, j.trigger_type,
+                  j.activated_at, j.retired_at, j.created_at,
+                  (SELECT count(*) FROM communication_journey_steps s
+                    WHERE s.journey_id = j.id AND s.active) AS steps,
+                  (SELECT jsonb_object_agg(x.status, x.n) FROM (
+                      SELECT e.status, count(*) AS n FROM communication_enrollments e
+                       WHERE e.agency_id = j.agency_id AND e.journey_id = j.id GROUP BY e.status) x) AS enrollments,
+                  (SELECT jsonb_object_agg(x.status, x.n) FROM (
+                      SELECT m.status, count(*) AS n FROM communication_messages m
+                        JOIN communication_enrollments e ON e.id = m.enrollment_id AND e.agency_id = m.agency_id
+                       WHERE m.agency_id = j.agency_id AND e.journey_id = j.id GROUP BY m.status) x) AS messages,
+                  (SELECT jsonb_build_object('at', e.next_action_at, 'step_no', e.next_step_no)
+                     FROM communication_enrollments e
+                    WHERE e.agency_id = j.agency_id AND e.journey_id = j.id AND e.status = 'active'
+                      AND e.next_action_at IS NOT NULL
+                    ORDER BY e.next_action_at, e.id LIMIT 1) AS next_action
+             FROM communication_journeys j
+            WHERE j.agency_id = %s
+            ORDER BY j.journey_key, j.version""", (agency,))
+    return [dict(r) for r in cur.fetchall()]

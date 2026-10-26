@@ -223,6 +223,51 @@ def _evento_journey_inviato(cur, message: dict[str, Any]) -> None:
     )
 
 
+#: V3: l'email 15 chiede di rispondere A/B/C/D. Il CRM NON riceve ne'
+#: interpreta le risposte (non esiste un sistema di posta in arrivo): quando
+#: l'email 15 parte nasce un'ATTIVITA' per l'operatore, che legge la risposta
+#: nella casella di risposta e registra l'esito a mano.
+TEMPLATE_RISPOSTE_V3 = "followup_v3_m15"
+TASK_TYPE_RISPOSTA_V3 = "followup_v3_reply"
+TITOLO_RISPOSTA_V3 = "Controlla la risposta all'email 15 (A/B/C/D)"
+DESCRIZIONE_RISPOSTA_V3 = (
+    "Il contatto ha ricevuto l'email 15 della sequenza «Follow-up proprietari 180 giorni» "
+    "(«Ti regalo una mini-diagnosi della tua situazione immobiliare») e puo' rispondere "
+    "A, B, C oppure D. Il CRM non legge le risposte: controlla la casella di risposta e "
+    "registra l'esito nella scheda del contatto.\n"
+    "A = proprietario indeciso\n"
+    "B = immobile in vendita senza richieste\n"
+    "C = visite senza proposte\n"
+    "D = immobile gia' venduto (aggiorna lo stato dell'immobile)\n"
+    "Nessuna risposta entro qualche giorno: chiudi l'attivita' senza azioni.")
+
+
+def _e_l_email_15_v3(message: dict[str, Any]) -> bool:
+    return message.get("enrollment_id") is not None and message.get("template_key") == TEMPLATE_RISPOSTE_V3
+
+
+def _attivita_risposta_v3(cur, message: dict[str, Any]) -> None:
+    """Un'attivita' per l'operatore, una sola per messaggio. Come l'evento
+    della journey, NON fa cadere l'invio: in un SAVEPOINT, e un errore si
+    registra e si prosegue (la mail e' gia' partita davvero)."""
+    try:
+        cur.execute("SAVEPOINT attivita_risposta_v3")
+        cur.execute(
+            """INSERT INTO tasks (agency_id, contact_id, lead_id, title, description, task_type,
+                                  priority, status, due_at, created_by, metadata)
+               SELECT %s, %s, %s, %s, %s, %s, 'normal', 'open', NOW() + interval '3 days', 'system',
+                      jsonb_build_object('source_message_id', %s::bigint, 'journey_step', 'M15')
+                WHERE NOT EXISTS (SELECT 1 FROM tasks WHERE agency_id = %s
+                                     AND metadata->>'source_message_id' = %s::text)""",
+            (message["agency_id"], message.get("contact_id"), message.get("lead_id"),
+             TITOLO_RISPOSTA_V3, DESCRIZIONE_RISPOSTA_V3, TASK_TYPE_RISPOSTA_V3,
+             message["id"], message["agency_id"], str(message["id"])))
+        cur.execute("RELEASE SAVEPOINT attivita_risposta_v3")
+    except Exception:  # noqa: BLE001 - la mail e' gia' partita: si registra e si prosegue
+        cur.execute("ROLLBACK TO SAVEPOINT attivita_risposta_v3")
+        logger.exception("followup_v3_reply_task_failed message_id=%s", message.get("id"))
+
+
 #: Gli hook, nell'ordine. Ciascuno riceve `(cur, message)` e scrive sul cursore
 #: della finalizzazione. Un hook che solleva annulla il `sent`: e' voluto, ed e'
 #: la ragione per cui questa lista resta corta e ogni voce e' una decisione.
@@ -232,6 +277,8 @@ HOOK_DOPO_INVIO = (
     # non nasce da una iscrizione, un passo di journey nasce da una
     # iscrizione e non e' la mail di stima.
     (_e_un_messaggio_di_journey, _evento_journey_inviato),
+    # V3: l'attivita' per l'operatore quando parte l'email 15 (risposte A/B/C/D).
+    (_e_l_email_15_v3, _attivita_risposta_v3),
 )
 
 

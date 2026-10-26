@@ -129,7 +129,55 @@ const TABS = [
   { key: 'panoramica', label: 'Panoramica' },
   { key: 'regole', label: 'Regole' },
   { key: 'cronologia', label: 'Cronologia' },
+  { key: 'sequenze', label: 'Sequenze email' },
 ];
+
+// V3: le sequenze email (journey) in sola lettura. Una sola chiamata,
+// GET /api/communication/journeys/overview (titolare e amministratore
+// dell'agenzia: un agente prende 403). Nessun pulsante: predisporre e attivare
+// restano atti espliciti e separati.
+const JOURNEY_STATUS_LABELS = { draft: 'In bozza', active: 'Attiva', retired: 'Ritirata' };
+const JOURNEY_STATUS_TONE = { draft: 'warn', active: 'ok', retired: 'gray' };
+const ENROLLMENT_LABELS = { active: 'in corso', paused: 'in pausa', completed: 'completate', stopped: 'fermate' };
+const MESSAGE_LABELS = {
+  sent: 'inviate', suppressed: 'bloccate', queued: 'in coda', sending: 'in invio',
+  failed: 'non riuscite', indeterminate: 'esito incerto', cancelled: 'annullate',
+};
+
+function conteggi(mappa, etichette) {
+  const voci = Object.entries(mappa || {}).filter(([, n]) => Number(n) > 0);
+  if (!voci.length) return '<span class="muted">nessuna</span>';
+  return voci.map(([k, n]) => `${escapeHtml(String(n))} ${escapeHtml(etichette[k] || k)}`).join(' · ');
+}
+
+function renderSequenzeTab(data) {
+  const v3 = data.followup_v3 || {};
+  const limite = data.test_recipients_limit || {};
+  const avvisi = `
+    <div class="card">
+      <h3>Follow-up proprietari 180 giorni</h3>
+      <p>Testi approvati: <strong>${escapeHtml(String(v3.texts_ready ?? 0))} su ${escapeHtml(String(v3.texts_total ?? 16))}</strong>
+        ${Number(v3.texts_ready) === Number(v3.texts_total) ? '' : ' — la sequenza non si può predisporre finché mancano testi.'}</p>
+      <p>Guida PDF dell'email 6 (${escapeHtml(v3.guide_title || '')}): <strong>${v3.guide_available ? 'disponibile' : 'non disponibile'}</strong></p>
+      <p>Limite destinatari di prova: <strong>${limite.active ? `attivo (${escapeHtml(String(limite.allowed_count))} indirizzi)` : 'non attivo'}</strong></p>
+    </div>`;
+  const righe = (data.journeys || []).map((j) => {
+    const prossima = j.next_action
+      ? `${escapeHtml(formatDateTime(j.next_action.at))} · email ${escapeHtml(String(j.next_action.step_no))}${j.next_action.subject ? ` (giorno ${escapeHtml(String(j.next_action.day))}: «${escapeHtml(j.next_action.subject)}»)` : ''}`
+      : '<span class="muted">—</span>';
+    return `<tr>
+      <td><strong>${escapeHtml(j.name || j.journey_key)}</strong><div class="muted">versione ${escapeHtml(String(j.version))} · ${escapeHtml(String(j.steps))} email</div></td>
+      <td>${renderBadge(JOURNEY_STATUS_LABELS[j.status] || j.status, JOURNEY_STATUS_TONE[j.status] || 'gray')}</td>
+      <td>${conteggi(j.enrollments, ENROLLMENT_LABELS)}</td>
+      <td>${prossima}</td>
+      <td>${conteggi(j.messages, MESSAGE_LABELS)}</td>
+    </tr>`;
+  }).join('');
+  const tabella = righe
+    ? `<table class="table"><thead><tr><th>Sequenza</th><th>Stato</th><th>Iscrizioni</th><th>Prossima email</th><th>Email</th></tr></thead><tbody>${righe}</tbody></table>`
+    : '<p class="muted">Nessuna sequenza predisposta per questa agenzia.</p>';
+  return `${avvisi}<div class="card">${tabella}</div>`;
+}
 
 export async function renderAutomazioni(container) {
   const state = {
@@ -160,6 +208,20 @@ export async function renderAutomazioni(container) {
     if (key === 'panoramica') return loadPanoramica();
     if (key === 'regole') return loadRegole();
     if (key === 'cronologia') return loadCronologia();
+    if (key === 'sequenze') return loadSequenze();
+  }
+
+  async function loadSequenze() {
+    contentEl.innerHTML = '<p class="muted">Caricamento…</p>';
+    try {
+      const data = await apiGet('/api/communication/journeys/overview');
+      contentEl.innerHTML = renderSequenzeTab(data || {});
+    } catch (error) {
+      const testo = error && error.status === 403
+        ? 'Le sequenze email sono visibili al titolare e agli amministratori dell’agenzia.'
+        : `Sequenze email temporaneamente non disponibili: ${escapeHtml(error.message)}`;
+      contentEl.innerHTML = `<div class="error-box">${testo}</div>`;
+    }
   }
 
   async function loadPanoramica(force = false) {

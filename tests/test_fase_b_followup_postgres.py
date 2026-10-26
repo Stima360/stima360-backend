@@ -119,7 +119,7 @@ def _sistema(agenzia=1):
     return SystemAgencyContext(agency_id=agenzia, origin="communication_dispatch")
 
 
-def _contatto(m, email, *, agenzia=1, nome=None, consenso=None, quando=None):
+def _contatto(m, email, *, agenzia=1, nome=None, consenso=None, quando=None, ruolo="owner"):
     """Un contatto con email; `consenso`:
         None        mai dato
         'legacy'    il vecchio flag TRUE senza eventi: da C2 NON autorizza
@@ -130,11 +130,17 @@ def _contatto(m, email, *, agenzia=1, nome=None, consenso=None, quando=None):
     SENTINELLA AGGIORNATA DA C1/C2: 'granted' e 'revoked' scrivono eventi con
     canale. I test che prima usavano 'legacy' come "contatto con consenso"
     usano 'granted': il flag storico non e' piu' un'autorizzazione.
+
+    SENTINELLA AGGIORNATA DA V3: la v3 e' solo per proprietari/venditori con
+    ruolo verificato; `ruolo` (default 'owner', come i contatti di questi test
+    sono sempre stati intesi) scrive il ruolo del contatto. `ruolo=None` = senza.
     """
     nome = nome or f"C {uuid.uuid4().hex[:6]}"
     cid = _q(m, "INSERT INTO contacts (agency_id, display_name, first_name, email, email_normalized, status) "
                 "VALUES (%s, %s, %s, %s, %s, 'active') RETURNING id",
              (agenzia, nome, nome.split()[0], email, email.strip().lower()))[0][0]
+    if ruolo:
+        _q(m, "INSERT INTO contact_roles (contact_id, role) VALUES (%s, %s)", (cid, ruolo))
     quando = quando or (ORA - 10 * GIORNO)
     if consenso == "legacy":
         _q(m, "UPDATE contacts SET marketing_consent = TRUE, marketing_consent_at = %s WHERE id = %s", (quando, cid))
@@ -174,12 +180,25 @@ def _template_finti(m, monkeypatch):
             body=lambda c, i=i: f"Ciao {c['contact_first_name']}, passo {i}.\n\nStop: {c['unsubscribe_url']}\n"))
 
 
-def _v3_attiva(m, monkeypatch, agenzia=1, chi="owner_a"):
+#: SENTINELLA AGGIORNATA DA V3: i test delle REGOLE (pausa, ripresa, stop,
+#: 48 ore, iscrizione) fanno i conti sul calendario di 17 passi con cui sono
+#: nati. Lo si da' qui, esplicitamente, perche' cio' che provano sono le
+#: regole e non il calendario; il calendario APPROVATO (16 email, giorno
+#: 4 -> 180) lo prova `test_e1` con `giorni=None`.
+GIORNI_REGOLE = (1, 3, 6, 10, 14, 21, 28, 38, 49, 60, 75, 90, 105, 120, 140, 160, 180)
+
+
+def _v3_attiva(m, monkeypatch, agenzia=1, chi="owner_a", giorni=GIORNI_REGOLE):
     from communication import journey_catalog, journey_service
+    if giorni is not None:
+        monkeypatch.setattr(journey_catalog, "FOLLOWUP_V3_DAYS", giorni)
     _template_finti(m, monkeypatch)
     ctx = _ctx(m, chi)
     j = journey_catalog.ensure_followup_v3(ctx)["journey"]
-    return journey_service.activate_journey(ctx, j["id"])
+    # SENTINELLA AGGIORNATA DA V3: ritirare una versione attiva e' una
+    # conferma esplicita di chi attiva (`replace_active`), mai un effetto
+    # collaterale; questi test la danno, come farebbe l'amministratore.
+    return journey_service.activate_journey(ctx, j["id"], replace_active=True)
 
 
 def _tick(m, agenzia=1, now=ORA):
@@ -234,7 +253,7 @@ def test_a2_la_v2_resta_repeat_last_e_la_v3_nasce_linear_in_bozza(fb, monkeypatc
     v3 = journey_catalog.ensure_followup_v3(_ctx(m))
     assert v3["created"] and v3["journey"]["status"] == "draft"
     assert v3["journey"]["sequence_policy"] == "linear" and v3["journey"]["trigger_type"] == "contact_eligible"
-    assert len(v3["journey"]["steps"]) == 17
+    assert len(v3["journey"]["steps"]) == 16   # SENTINELLA AGGIORNATA DA V3: 16 email
     assert journey_catalog.ensure_followup_v3(_ctx(m))["created"] is False
 
 
@@ -458,7 +477,11 @@ def test_d1_senza_template_la_v3_non_nasce_e_in_bozza_non_iscrive(fb, monkeypatc
     from communication import journey_catalog
     from communication.exceptions import ValidationError
     m = fb
+    from communication import templates
     _contatto(m, "p@example.it", consenso="granted")
+    # SENTINELLA AGGIORNATA DA V3: i 16 testi approvati sono nel registro;
+    # la regola resta, e la si prova togliendone uno: senza, la v3 non nasce.
+    monkeypatch.delitem(templates.REGISTRY, ("followup_v3_m6", 3))
     with pytest.raises(ValidationError):
         journey_catalog.ensure_followup_v3(_ctx(m))
     assert _q(m, "SELECT count(*) FROM communication_journeys")[0][0] == 0
@@ -534,10 +557,11 @@ def test_d3_una_email_una_sequenza_in_tutta_la_piattaforma_e_tetto_giornaliero(f
 # E  il calendario a 180 giorni
 # ---------------------------------------------------------------------------
 
-def test_e1_diciassette_email_nei_giorni_approvati_poi_completata_senza_ripartire(fb, monkeypatch):
+def test_e1_sedici_email_nei_giorni_approvati_poi_completata_senza_ripartire(fb, monkeypatch):
+    # SENTINELLA AGGIORNATA DA V3: 16 email (giorno 4 -> 180), non piu' 17.
     from communication.journey_catalog import FOLLOWUP_V3_DAYS
     m = fb
-    _v3_attiva(m, monkeypatch)
+    _v3_attiva(m, monkeypatch, giorni=None)   # il calendario approvato
     cid = _contatto(m, "cal@example.it", consenso="granted")
     inviati = []
     for giorno in range(0, 185):
@@ -552,16 +576,16 @@ def test_e1_diciassette_email_nei_giorni_approvati_poi_completata_senza_ripartir
                 inviati.append((msg["step_no"], msg["scheduled_at"]))
         _tick(m, now=adesso)  # avanza al passo successivo nello stesso giorno
     iscr = _iscrizioni(m, contact_id=cid)[0]
-    assert [n for n, _ in inviati] == list(range(1, 18))
+    assert [n for n, _ in inviati] == list(range(1, 17))
     for (n, quando), atteso in zip(inviati, FOLLOWUP_V3_DAYS):
         scarto = (quando - ORA) - atteso * GIORNO
         assert timedelta(0) <= scarto <= 2 * GIORNO, (n, quando, atteso)  # finestra: domenica -> lunedi'
     assert iscr["status"] == "completed" and iscr["run_no"] == 1
-    assert len(_messaggi(m, iscr["id"])) == 17
+    assert len(_messaggi(m, iscr["id"])) == 16
     # nessuna ripartenza: altri giri non producono niente
     for giorno in (190, 200):
         _tick(m, now=ORA + giorno * GIORNO)
-    assert len(_messaggi(m, iscr["id"])) == 17 and len(_iscrizioni(m, contact_id=cid)) == 1, "nessuna ripartenza, mai"
+    assert len(_messaggi(m, iscr["id"])) == 16 and len(_iscrizioni(m, contact_id=cid)) == 1, "nessuna ripartenza, mai"
     # il link di disiscrizione delle email e' quello di PIATTAFORMA
     from communication import unsubscribe as u
     corpo = _messaggi(m, iscr["id"])[0]["rendered_body"]

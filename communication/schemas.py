@@ -44,6 +44,16 @@ class DispatchRequest(BaseModel):
         extra = "forbid"
 
 
+class JourneyActivateRequest(BaseModel):
+    """V3: conferma esplicita di ritirare la versione attiva della stessa
+    chiave. Assente o False: con un'altra versione attiva l'attivazione e'
+    rifiutata (409) e niente cambia."""
+
+    model_config = {"extra": "forbid"}
+
+    replace_active: bool = False
+
+
 class JourneyTickRequest(BaseModel):
     """Quanto lavoro al massimo in un giro. Nient'altro.
 

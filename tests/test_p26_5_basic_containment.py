@@ -96,6 +96,11 @@ PUBLIC_BY_DESIGN = {
     ("POST", "/api/public/communication/consent/confirm/{token}"),
     ("GET", "/api/public/communication/consent/{token}"),
     ("POST", "/api/public/communication/consent/{token}"),
+    # SENTINELLA AGGIORNATA DA V3: la guida PDF dell'email 6. Documento
+    # pubblico senza dati personali, in sola lettura: lo apre il destinatario
+    # dal link dell'email, senza login. Servita solo se il file nel
+    # repository ha l'impronta attesa (`communication.guida_pdf`).
+    ("GET", "/api/public/communication/guida-vendere-casa-2026.pdf"),
     # A30-12: il booking pubblico a link singolo-agente. Autenticato dal
     # token opaco del link (SOLO il suo SHA-256 vive nel database), non da
     # una sessione: chi apre il link non e' un operatore. Le tre rotte

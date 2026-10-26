@@ -7,6 +7,9 @@ tick, contatto per contatto (il prefiltro usa il predicato che il pacchetto
 del consenso fornisce, e non conosce le sue colonne).
 
 Chi NON entra, per costruzione:
+  * (V3) chi non e' proprietario/venditore VERIFICATO: vedi
+    `PROPRIETARIO_VERIFICATO` (acquirenti e richiedenti dal sito senza ruolo
+    registrato da un operatore restano fuori);
   * contatti non attivi, nel Cestino, archiviati, senza email scrivibile;
   * chi e' gia' in una sequenza aperta (indice unico per contatto) o in pausa
     manuale (`communication_automation_controls`);
@@ -56,6 +59,21 @@ FINESTRA_CONSENSO_RECENTE = timedelta(days=7)
 LETTURA = 200
 
 
+#: V3: la sequenza e' SOLO per proprietari/venditori con ruolo VERIFICATO,
+#: cioe' registrato da un operatore: il ruolo `owner`/`seller` del contatto
+#: valido adesso, oppure il contatto collegato come `owner`/`seller` a un
+#: immobile della stessa agenzia non nel Cestino. La sola richiesta di
+#: valutazione dal sito NON basta (il sito collega il contatto all'immobile
+#: come `contact`): acquirenti e contatti senza ruolo verificato non entrano.
+PROPRIETARIO_VERIFICATO = """(EXISTS (SELECT 1 FROM contact_roles r
+                     WHERE r.contact_id = c.id AND r.role IN ('owner', 'seller')
+                       AND (r.valid_from IS NULL OR r.valid_from <= %s)
+                       AND (r.valid_to IS NULL OR r.valid_to >= %s))
+            OR EXISTS (SELECT 1 FROM property_contacts pc JOIN properties p ON p.id = pc.property_id
+                        WHERE pc.contact_id = c.id AND pc.role IN ('owner', 'seller')
+                          AND p.agency_id = c.agency_id AND p.deleted_at IS NULL))"""
+
+
 def candidates(cur, ctx, *, now: datetime, limit: int) -> list[dict[str, Any]]:
     """I candidati di oggi, gia' deduplicati per indirizzo, al massimo `limit`.
 
@@ -86,9 +104,10 @@ def candidates(cur, ctx, *, now: datetime, limit: int) -> list[dict[str, Any]]:
                AND NOT {channel_optout_after_grant_sql('c', CANALE)}
                AND NOT EXISTS (SELECT 1 FROM seller_revival_suppressions s
                                 WHERE s.contact_id = c.id AND s.expires_at > %s)
+               AND {PROPRIETARIO_VERIFICATO}
              ORDER BY {channel_granted_at_sql('c', CANALE)} DESC NULLS LAST, c.id
              LIMIT %s""",
-        (agenzia, now, LETTURA))
+        (agenzia, now, now, now, LETTURA))
     righe = [dict(r) for r in cur.fetchall()]
 
     # dedup dentro l'agenzia: una email, un contatto (la concessione piu' recente vince)

@@ -1417,6 +1417,10 @@ def test_47_le_tre_rotte_sono_montate_nell_app_vera(mondo):
         "/api/communication/journeys/enrollments/{enrollment_id}/send-current",
         "/api/communication/journeys/enrollments/{enrollment_id}/skip-current",
         "/api/communication/journeys/enrollments/{enrollment_id}/stop",
+        # SENTINELLA AGGIORNATA DA V3: la predisposizione in bozza della
+        # sequenza proprietari e il quadro in sola lettura del pannello.
+        "/api/communication/journeys/followup-v3/provision",
+        "/api/communication/journeys/overview",
         "/api/communication/journeys/stima-lead/provision",
         "/api/communication/journeys/tick",
         "/api/communication/journeys/{journey_id}/activate",

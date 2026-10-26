@@ -15,10 +15,10 @@ from html import escape
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Form, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Form, HTTPException, Query, Request
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from . import consent_page, unsubscribe
+from . import consent_page, guida_pdf, unsubscribe
 
 router = APIRouter(prefix="/api/public/communication", tags=["public-communication"])
 
@@ -163,3 +163,13 @@ async def consent_page_submit(token: str, request: Request) -> HTMLResponse:
                            on_email_pending=consent_page.enqueue_confirmation)
     codici = {"recorded": 200, "nothing": 200, "limited": 429, "unavailable": 404}
     return _html(consent_page.result_page(esito), codici.get(esito["status"], 409))
+
+
+@router.get(guida_pdf.PERCORSO_RELATIVO)
+def guida_vendere_casa():
+    """V3, email 6: la guida PDF ufficiale. Solo il file approvato e integro;
+    altrimenti 404, mai un file diverso."""
+    if not guida_pdf.disponibile():
+        raise HTTPException(status_code=404, detail="Guida non disponibile")
+    return FileResponse(guida_pdf.FILE, media_type="application/pdf", filename=guida_pdf.NOME_DOWNLOAD,
+                        headers={"Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff"})

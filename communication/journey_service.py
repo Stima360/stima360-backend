@@ -156,18 +156,45 @@ def provision_journey(ctx, *, journey_key: str, version: int, trigger_type: str,
             actor_user_id=actor_user_id, steps=passi, sequence_policy=sequence_policy)
 
 
-def activate_journey(ctx, journey_id: int, *, cur=None) -> dict[str, Any]:
+def activate_journey(ctx, journey_id: int, *, replace_active: bool = False, cur=None) -> dict[str, Any]:
     actor_type, actor_user_id = _attore(ctx)
     with cursore(cur) as (_, c):
         repo.require_schema(c)
         return repo.activate_journey(c, ctx, journey_id, actor_type=actor_type,
-                                     actor_user_id=actor_user_id)
+                                     actor_user_id=actor_user_id, replace_active=replace_active)
 
 
 def retire_journey(ctx, journey_id: int, *, cur=None) -> dict[str, Any]:
     with cursore(cur) as (_, c):
         repo.require_schema(c)
         return repo.retire_journey(c, ctx, journey_id)
+
+
+def overview(ctx, *, cur=None) -> dict[str, Any]:
+    """V3 - il quadro per l'amministratore: le sequenze dell'agenzia e i tre
+    interruttori di sicurezza del follow-up proprietari. Sola lettura."""
+    from . import followup_v3_texts, guida_pdf, test_recipients
+    from .journey_catalog import FOLLOWUP_V3_VERSION, STIMA_LEAD_KEY
+    with cursore(cur) as (_, c):
+        repo.require_schema(c)
+        sequenze = repo.overview(c, ctx)
+    for j in sequenze:
+        prossima = j.get("next_action")
+        if prossima and j["journey_key"] == STIMA_LEAD_KEY and j["version"] == FOLLOWUP_V3_VERSION:
+            n = prossima.get("step_no")
+            if n and 1 <= n <= len(followup_v3_texts.CALENDARIO):
+                giorno, oggetto = followup_v3_texts.CALENDARIO[n - 1]
+                prossima.update({"day": giorno, "subject": oggetto})
+    consentiti = test_recipients.allowed()
+    pronti = sum(1 for n in range(1, len(followup_v3_texts.CALENDARIO) + 1)
+                 if not followup_v3_texts.problemi(n, followup_v3_texts.TESTI.get(n)))
+    return {
+        "journeys": sequenze,
+        "followup_v3": {"texts_ready": pronti, "texts_total": len(followup_v3_texts.CALENDARIO),
+                        "guide_available": guida_pdf.disponibile(), "guide_title": guida_pdf.TITOLO},
+        "test_recipients_limit": {"active": consentiti is not None,
+                                  "allowed_count": len(consentiti) if consentiti is not None else None},
+    }
 
 
 def get_journey(ctx, journey_id: int, *, cur=None) -> dict[str, Any]:

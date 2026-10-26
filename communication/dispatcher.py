@@ -43,7 +43,7 @@ from consent.exceptions import NotFoundError as ConsentNotFoundError
 from consent.guard import can_send_marketing
 from operator_auth.context import SystemAgencyContext
 
-from . import integrations, service
+from . import integrations, service, test_recipients
 from .database import communication_cursor
 from .enums import (CHANNEL_EMAIL, ERROR_OUTCOME_UNKNOWN, ERROR_PROVIDER_REJECTED,
                     ERROR_UNKNOWN, REASON_APPOINTMENT_REMINDER, TYPE_MARKETING)
@@ -258,8 +258,11 @@ def dispatch_batch(ctx_operatore, *, channel: str,
     # ADM-3: il filtro centrale si passa SOLO quando serve, cosi' la chiamata
     # delle agenzie attive resta identica a prima.
     centrale = {"central_continuity": True} if central_continuity else {}
+    # V3 (collaudo TEST): il limite dei destinatari marketing, letto ADESSO.
+    consentiti = test_recipients.allowed()
+    limite = {"marketing_recipients": consentiti} if consentiti is not None else {}
     reclamati = service.claim_due(ctx, provider=provider.NAME, channel=channel,
-                                  limit=limit, **centrale)
+                                  limit=limit, **centrale, **limite)
 
     # Gli stale recuperati entrano in `indeterminate`, che e' lo stato in cui
     # sono finiti, e NON in `claimed`: non sono stati reclamati adesso - il loro
@@ -272,6 +275,14 @@ def dispatch_batch(ctx_operatore, *, channel: str,
     for preso in reclamati:
         message = preso["message"]
         token = message["claim_token"]
+
+        # V3: ricontrollo del limite dei destinatari subito prima dell'invio
+        # (il filtro del claim li esclude gia'; questo copre un cambio di
+        # configurazione a meta' giro). Fuori elenco: non parte, mai.
+        if test_recipients.blocked(message, test_recipients.allowed()):
+            esito = service.finalize_suppressed(ctx, message["id"], token, reason=test_recipients.REASON)
+            conteggi["suppressed" if esito is not None else "lost"] += 1
+            continue
 
         if message.get("enrollment_id"):
             try:

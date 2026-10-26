@@ -414,6 +414,11 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
         "/api/communication/journeys/enrollments/{enrollment_id}/send-current",
         "/api/communication/journeys/enrollments/{enrollment_id}/skip-current",
         "/api/communication/journeys/enrollments/{enrollment_id}/stop",
+        # SENTINELLA AGGIORNATA DA V3: predisposizione in bozza della v3 e il
+        # quadro di sola lettura per l'amministratore, sullo STESSO router e
+        # dietro la stessa ammissione (soglia del dispatch).
+        "/api/communication/journeys/followup-v3/provision",
+        "/api/communication/journeys/overview",
         "/api/communication/journeys/stima-lead/provision",
         "/api/communication/journeys/tick",
         "/api/communication/journeys/{journey_id}/activate",
@@ -430,6 +435,9 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
         "/api/public/communication/consent/informativa",
         "/api/public/communication/consent/informativa.json",
         "/api/public/communication/consent/{token}",
+        # SENTINELLA AGGIORNATA DA V3: la guida PDF dell'email 6 (sola
+        # lettura, solo il file approvato e integro), sul router pubblico.
+        "/api/public/communication/guida-vendere-casa-2026.pdf",
         "/api/public/communication/unsubscribe"], percorsi
 
     # Montata con l'ammissione di livello mount degli altri router di tenant.

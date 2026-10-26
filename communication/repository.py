@@ -392,8 +392,17 @@ CENTRAL_CONTINUITY_FILTER = (
     " AND (m.reason_code = 'stima_pdf' OR m.enrollment_id IS NOT NULL)")
 
 
+#: V3 (collaudo TEST): con il limite dei destinatari attivo, un messaggio di
+#: marketing verso un indirizzo fuori elenco NON e' un candidato: resta in coda
+#: intatto. Vedi `communication.test_recipients`.
+MARKETING_RECIPIENTS_FILTER = """
+           AND (m.communication_type <> 'marketing'
+                OR lower(btrim(m.destination_snapshot)) = ANY(%s))"""
+
+
 def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
-              token_factory, central_continuity: bool = False) -> list[dict[str, Any]]:
+              token_factory, central_continuity: bool = False,
+              marketing_recipients: list[str] | None = None) -> list[dict[str, Any]]:
     """Reclama fino a `limit` messaggi dovuti. Messaggio e tentativo nello stesso commit.
 
     Non apre e non chiude una transazione: quella e' del chiamante, e deve
@@ -450,11 +459,13 @@ def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
                     AND (%s::timestamptz AT TIME ZONE 'Europe/Rome')::time >= TIME '09:00'
                     AND (%s::timestamptz AT TIME ZONE 'Europe/Rome')::time < TIME '19:00'))
 {CENTRAL_CONTINUITY_FILTER if central_continuity else ""}
+{MARKETING_RECIPIENTS_FILTER if marketing_recipients is not None else ""}
          ORDER BY m.scheduled_at ASC, m.id ASC
          LIMIT %s
            FOR UPDATE SKIP LOCKED
         """,
-        scope_params + [INITIAL_STATUS, channel, *([datetime.now(timezone.utc)] * 3), limit],
+        scope_params + [INITIAL_STATUS, channel, *([datetime.now(timezone.utc)] * 3),
+                        *([marketing_recipients] if marketing_recipients is not None else []), limit],
     )
     candidati = [r["id"] for r in cur.fetchall()]
 

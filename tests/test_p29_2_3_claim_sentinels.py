@@ -74,6 +74,11 @@ FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py
                     # di una email di testo. Li scrive chi accoda, li legge
                     # l'adapter: il nucleo non li importa.
                     "email_metadata.py",
+                    # SENTINELLA AGGIORNATA DA V3 (follow-up proprietari): i
+                    # testi approvati della v3, il link della guida PDF e il
+                    # limite dei destinatari marketing del collaudo. Il nucleo
+                    # non li importa (li usano registro, tick e dispatcher).
+                    "followup_v3_texts.py", "guida_pdf.py", "test_recipients.py",
                     # FOLLOW-UP FASE B (108): la platea e le regole della
                     # journey sul contatto. Il nucleo non li importa.
                     "audience.py", "followup_rules.py",

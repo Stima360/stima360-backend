@@ -71,9 +71,12 @@ def test_a1_gli_insiemi_della_journey_sul_contatto():
 
 def test_b1_il_calendario_v3_e_quello_approvato():
     from communication import journey_catalog as c
-    assert c.FOLLOWUP_V3_DAYS == (1, 3, 6, 10, 14, 21, 28, 38, 49, 60, 75, 90, 105, 120, 140, 160, 180)
+    # SENTINELLA AGGIORNATA DA V3 (follow-up proprietari, approvata dal
+    # titolare): 16 email dal giorno 4 al giorno 180, al posto della bozza a 17
+    # passi che non e' mai esistita in un database (senza testi non nasceva).
+    assert c.FOLLOWUP_V3_DAYS == (4, 8, 12, 18, 25, 33, 42, 52, 63, 75, 88, 102, 117, 135, 157, 180)
     passi = c.passi_followup_v3()
-    assert [p["step_no"] for p in passi] == list(range(1, 18))
+    assert [p["step_no"] for p in passi] == list(range(1, 17))
     assert [p["delay_seconds"] // 86400 for p in passi] == list(c.FOLLOWUP_V3_DAYS)
     for p in passi:
         assert p["delay_from"] == "trigger" and p["default_mode"] == "automatic"
@@ -84,10 +87,18 @@ def test_b1_il_calendario_v3_e_quello_approvato():
 
 
 def test_b2_i_template_della_v3_non_esistono_ancora_nessun_invio_in_fase_b():
-    from communication import templates
+    from communication import followup_v3_texts, templates
+    # SENTINELLA AGGIORNATA DA V3: esistono SOLO i template dei corpi
+    # consegnati dal titolare e validi; nessun template oltre la sedicesima.
+    # Esistere non e' inviare: la sequenza nasce in bozza e si attiva solo
+    # con un atto esplicito.
     for i in range(1, 18):
+        if i <= 16 and not followup_v3_texts.problemi(i, followup_v3_texts.TESTI.get(i)):
+            assert templates.get(f"followup_v3_m{i}", 3).version == 3
+            continue
         with pytest.raises(templates.ValidationError):
             templates.get(f"followup_v3_m{i}", 3)
+    assert templates.get("followup_v3_m16", 3).version == 3
     # e le v1/v2 sono dove erano
     assert templates.get("stima_lead_m1", 1).version == 1
     assert templates.get("stima_lead_m10", 2).version == 2
@@ -300,7 +311,10 @@ def test_f2_le_rotte_pubbliche_restano_due_e_la_pagina_dice_l_ambito(monkeypatch
         ("GET", "/api/public/communication/consent/confirm/{token}"),
         ("POST", "/api/public/communication/consent/confirm/{token}"),
         ("GET", "/api/public/communication/consent/{token}"),
-        ("POST", "/api/public/communication/consent/{token}")}
+        ("POST", "/api/public/communication/consent/{token}"),
+        # SENTINELLA AGGIORNATA DA V3: la guida PDF dell'email 6, solo GET,
+        # solo il file approvato e integro (altrimenti 404).
+        ("GET", "/api/public/communication/guida-vendere-casa-2026.pdf")}
     app = FastAPI()
     app.include_router(public_router.router)
     client = TestClient(app)

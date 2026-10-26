@@ -424,7 +424,8 @@ def _token() -> str:
 
 
 def claim_due(ctx, *, provider: str, channel: str, limit: int = DEFAULT_CLAIM_BATCH,
-              cur=None, token_factory=_token, central_continuity: bool = False) -> list[dict[str, Any]]:
+              cur=None, token_factory=_token, central_continuity: bool = False,
+              marketing_recipients: frozenset[str] | None = None) -> list[dict[str, Any]]:
     """Reclama i messaggi dovuti. Messaggio e tentativo nello stesso commit.
 
     La transazione deve restare BREVE: nessuna chiamata di rete puo' starci
@@ -448,9 +449,12 @@ def claim_due(ctx, *, provider: str, channel: str, limit: int = DEFAULT_CLAIM_BA
 
     def _lavora(c):
         centrale = {"central_continuity": True} if central_continuity else {}
+        # V3: il limite dei destinatari marketing del collaudo, solo se attivo.
+        limite = ({"marketing_recipients": sorted(marketing_recipients)}
+                  if marketing_recipients is not None else {})
         return repository.claim_due(c, ctx, limit=limit, provider=provider,
                                     channel=channel, token_factory=token_factory,
-                                    **centrale)
+                                    **centrale, **limite)
 
     if cur is not None:
         return _lavora(cur)

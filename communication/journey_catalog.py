@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from . import followup_v3_texts
 from . import journey_repository as repo
 from . import journey_service
 from .journey_enums import JOURNEY_ACTIVE, TRIGGER_STIMA_PDF_SENT
@@ -145,7 +146,7 @@ def ensure_stima_lead_v2(ctx, *, cur=None) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# 108 (Fase B) - LA v3: il follow-up SUL CONTATTO, 17 email in 180 giorni.
+# 108 (Fase B) - LA v3: il follow-up SUL CONTATTO, 16 email in 180 giorni (V3 approvata).
 #
 # Stessa chiave `stima_lead`, versione 3: attivarla ritira la versione attiva
 # precedente (una sola attiva per chiave) e le iscrizioni gia' aperte
@@ -155,15 +156,18 @@ def ensure_stima_lead_v2(ctx, *, cur=None) -> dict[str, Any]:
 # (`templates.get` solleva), quindi in Fase B non puo' nascere nessun invio.
 # ---------------------------------------------------------------------------
 FOLLOWUP_V3_VERSION = 3
-FOLLOWUP_V3_NAME = "Follow-up contatti 180 giorni"
+#: V3 (approvata dal titolare): 16 email ai PROPRIETARI con consenso Email,
+#: dal giorno 4 al giorno 180, senza ripartenza. La bozza precedente a 17
+#: passi non e' mai esistita in un database: senza i suoi testi il
+#: provisioning la rifiutava sempre.
+FOLLOWUP_V3_NAME = "Follow-up proprietari 180 giorni"
 FOLLOWUP_V3_TEMPLATE_PREFIX = "followup_v3_m"
 #: Il calendario approvato: i giorni dalla data iniziale, uno per passo.
-FOLLOWUP_V3_DAYS: tuple[int, ...] = (1, 3, 6, 10, 14, 21, 28, 38, 49, 60, 75, 90,
-                                     105, 120, 140, 160, 180)
+FOLLOWUP_V3_DAYS: tuple[int, ...] = tuple(giorno for giorno, _ in followup_v3_texts.CALENDARIO)
 
 
 def passi_followup_v3(template_version: int = FOLLOWUP_V3_VERSION) -> list[dict[str, Any]]:
-    """I 17 passi: tutti automatici, tutti misurati dal momento iniziale."""
+    """I 16 passi: tutti automatici, tutti misurati dal momento iniziale."""
     return [
         {"step_no": i, "step_key": f"M{i}", "reason_code": f"m{i}",
          "delay_from": "trigger", "delay_seconds": giorno * _GIORNO,

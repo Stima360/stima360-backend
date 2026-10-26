@@ -37,7 +37,7 @@ from . import journey_tick
 from .dependencies import require_dispatch_context
 from .exceptions import ConflictError, NotFoundError, ValidationError
 from .schemas import (ConsentGrantRequest, ConsentRefusalRequest, DispatchRequest,
-                      JourneyTickRequest, ManualMessageRequest)
+                      JourneyActivateRequest, JourneyTickRequest, ManualMessageRequest)
 
 router = APIRouter(prefix="/api/communication", tags=["communication"])
 
@@ -409,14 +409,37 @@ def provision_stima_lead(
     return {"created": esito["created"], "journey": esito["journey"]}
 
 
+@router.get("/journeys/overview")
+def journeys_overview(
+    ctx: OperatorContext = Depends(require_dispatch_context),
+):
+    """V3: il quadro delle sequenze per l'amministratore (stato, iscritti,
+    prossima email, inviate/bloccate). Sola lettura, nessun dato personale."""
+    return _tradotto(lambda: journey_service.overview(ctx))
+
+
+@router.post("/journeys/followup-v3/provision")
+def provision_followup_v3(
+    ctx: OperatorContext = Depends(require_dispatch_context),
+):
+    """V3: la sequenza «Follow-up proprietari 180 giorni» in BOZZA.
+    Idempotente, non attiva niente. 422 finche' i 16 testi approvati non
+    sono tutti nel registro."""
+    esito = _tradotto(lambda: journey_catalog.ensure_followup_v3(ctx))
+    return {"created": esito["created"], "journey": esito["journey"]}
+
+
 @router.post("/journeys/{journey_id}/activate")
 def journey_activate(
     journey_id: int,
+    payload: JourneyActivateRequest | None = None,
     ctx: OperatorContext = Depends(require_dispatch_context),
 ):
     """Accende una journey. Da questo istante in avanti: le stime spedite
-    PRIMA non producono iscrizioni (P29-3A.1 SS C)."""
-    return _tradotto(lambda: journey_service.activate_journey(ctx, journey_id))
+    PRIMA non producono iscrizioni (P29-3A.1 SS C). Con un'altra versione
+    attiva della stessa chiave serve `replace_active: true` (V3)."""
+    sostituisci = bool(payload and payload.replace_active)
+    return _tradotto(lambda: journey_service.activate_journey(ctx, journey_id, replace_active=sostituisci))
 
 
 @router.post("/journeys/{journey_id}/retire")
