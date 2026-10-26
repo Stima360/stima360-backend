@@ -151,7 +151,9 @@ def test_s01_rotte_e_nessuna_scrittura_nuova():
 
 def test_s02_rete_porta_al_cestino_senza_duplicare():
     rete = _codice(ASSETS / "views" / "rete.js")
-    assert "renderEliminazioni" not in rete and "#/cestino/richieste-edifici" in rete
+    # SENTINELLA AGGIORNATA DA SEMPLIFICA RETE: la Rete non ha piu' la scheda-collegamento
+    # «Eliminazioni edifici»; la gestione resta SOLO nel Cestino, senza duplicati.
+    assert "renderEliminazioni" not in rete and "#/cestino/richieste-edifici" not in rete
     cestino = _codice(CESTINO)
     assert cestino.count("renderEliminazioni(") == 1
     main = _codice(ASSETS / "main.js")

@@ -481,6 +481,8 @@ class OperatorResponse(BaseModel):
     last_login_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    # ELIMINA OPERATORE (migration 113): valorizzato se l'account e' eliminato.
+    deleted_at: datetime | None = None
 
 
 class NetworkOperatorResponse(BaseModel):
@@ -819,6 +821,8 @@ class TerritoryResponse(BaseModel):
     label: str
     created_at: datetime
     updated_at: datetime
+    # ELIMINA TERRITORIO (migration 114): valorizzato se il territorio e' eliminato.
+    deleted_at: datetime | None = None
 
 
 class AssignmentResponse(BaseModel):

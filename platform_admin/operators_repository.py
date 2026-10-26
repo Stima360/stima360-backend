@@ -79,6 +79,11 @@ LIST_OPERATOR_ALIASES = {
 }
 
 _OPERATOR_SELECT = ", ".join(f"u.{c}" for c in OPERATOR_COLUMNS)
+
+# ELIMINA OPERATORE (migration 113): il marcatore dell'eliminazione logica.
+# Letto via `to_jsonb` (stesso idioma di `record_kind`): la query resta valida
+# su un database dove la 113 non e' ancora applicata, e li' vale NULL.
+_DELETED_SELECT = "(to_jsonb(u) ->> 'deleted_at')::timestamptz AS deleted_at"
 _MEMBERSHIP_SELECT = ", ".join(f"m.{c}" for c in MEMBERSHIP_COLUMNS)
 
 
@@ -92,7 +97,7 @@ def _row(row) -> dict[str, Any] | None:
 
 def get_operator(cur, operator_user_id: int) -> dict[str, Any] | None:
     cur.execute(
-        f"SELECT {_OPERATOR_SELECT} FROM operator_users u WHERE u.id = %s",
+        f"SELECT {_OPERATOR_SELECT}, {_DELETED_SELECT} FROM operator_users u WHERE u.id = %s",
         (operator_user_id,),
     )
     return _row(cur.fetchone())
@@ -101,7 +106,7 @@ def get_operator(cur, operator_user_id: int) -> dict[str, Any] | None:
 def lock_operator(cur, operator_user_id: int) -> dict[str, Any] | None:
     """Come `get_operator`, con la riga BLOCCATA fino al commit (ADM-1)."""
     cur.execute(
-        f"SELECT {_OPERATOR_SELECT} FROM operator_users u WHERE u.id = %s FOR UPDATE OF u",
+        f"SELECT {_OPERATOR_SELECT}, {_DELETED_SELECT} FROM operator_users u WHERE u.id = %s FOR UPDATE OF u",
         (operator_user_id,),
     )
     return _row(cur.fetchone())
@@ -116,7 +121,7 @@ def find_operator_by_normalized_email(cur, email_normalized: str) -> dict[str, A
     deterministico il caso "email gia' esistente" nella creazione.
     """
     cur.execute(
-        f"SELECT {_OPERATOR_SELECT} FROM operator_users u WHERE u.email_normalized = %s",
+        f"SELECT {_OPERATOR_SELECT}, {_DELETED_SELECT} FROM operator_users u WHERE u.email_normalized = %s",
         (email_normalized,),
     )
     return _row(cur.fetchone())
@@ -214,7 +219,7 @@ def list_agency_operators(cur, agency_id: int) -> list[dict[str, Any]]:
     )
     cur.execute(
         f"""
-        SELECT {identity}, {_MEMBERSHIP_SELECT}
+        SELECT {identity}, {_DELETED_SELECT}, {_MEMBERSHIP_SELECT}
           FROM agency_memberships m
           JOIN operator_users u ON u.id = m.operator_user_id
          WHERE m.agency_id = %s
@@ -240,7 +245,7 @@ def list_operators(
     """
     cur.execute(
         f"""
-        SELECT {_OPERATOR_SELECT}, m.agency_id AS active_agency_id
+        SELECT {_OPERATOR_SELECT}, {_DELETED_SELECT}, m.agency_id AS active_agency_id
           FROM operator_users u
           LEFT JOIN agency_memberships m
             ON m.operator_user_id = u.id AND m.status = 'active'
@@ -330,6 +335,34 @@ def update_operator(cur, operator_user_id: int, fields: dict[str, Any]):
         RETURNING {", ".join(OPERATOR_COLUMNS)}
         """,
         params + [operator_user_id],
+    )
+    return _row(cur.fetchone())
+
+
+def elimination_mark_supported(cur) -> bool:
+    """ELIMINA OPERATORE: True se la migration 113 e' applicata."""
+    cur.execute(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'operator_users' "
+        "AND column_name = 'deleted_at'"
+    )
+    return cur.fetchone() is not None
+
+
+def set_elimination_mark(cur, operator_user_id: int, *, deleted_by: int | None):
+    """ELIMINA OPERATORE. Con `deleted_by` marca l'account come eliminato,
+    con None lo ripristina (torna `disabled`, non eliminato). Il SOLO punto che
+    scrive `deleted_at`. Non tocca nessun'altra tabella. None se l'id non esiste."""
+    cur.execute(
+        f"""
+        UPDATE operator_users u
+           SET deleted_at = CASE WHEN %(chi)s::bigint IS NULL THEN NULL ELSE NOW() END,
+               deleted_by_user_id = %(chi)s::bigint,
+               updated_at = NOW()
+         WHERE u.id = %(id)s
+        RETURNING {_OPERATOR_SELECT}, u.deleted_at
+        """,
+        {"chi": deleted_by, "id": operator_user_id},
     )
     return _row(cur.fetchone())
 

@@ -166,3 +166,11 @@ class ConsentNoticeNotFound(Exception):
 class ConsentNoticeConflict(Exception):
     """Fase B: stessa versione gia' pubblicata per quella finalita', oppure
     una chiusura su una informativa gia' chiusa."""
+
+
+class OperatorDeleteUnavailable(Exception):
+    """ELIMINA OPERATORE: la migration 113 non e' applicata. 503."""
+
+
+class TerritoryDeleteUnavailable(Exception):
+    """ELIMINA TERRITORIO: la migration 114 non e' applicata. 503."""

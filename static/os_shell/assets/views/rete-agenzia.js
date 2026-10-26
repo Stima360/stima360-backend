@@ -437,6 +437,8 @@ export async function renderReteAgenzia(container, agencyId) {
 
   // --- operatori ------------------------------------------------------------
 
+  let vediEliminati = false; // ELIMINA OPERATORE: la casella «Mostra eliminati»
+
   async function operatori() {
     contentEl.innerHTML = '<p class="muted">Caricamento…</p>';
     let righe;
@@ -451,6 +453,7 @@ export async function renderReteAgenzia(container, agencyId) {
       <div class="list-toolbar">
         <button type="button" class="btn primary" id="op-nuovo">Aggiungi operatore</button>
         <button type="button" class="btn" id="op-titolare">Trasferisci titolare</button>
+        <label class="muted"><input type="checkbox" id="op-mostra-eliminati" ${vediEliminati ? 'checked' : ''}> Mostra eliminati</label>
       </div>
       <div id="operatori-lista" class="rete-operatori"></div>
     `;
@@ -463,18 +466,23 @@ export async function renderReteAgenzia(container, agencyId) {
         },
         { label: 'Email', render: (r) => escapeHtml(r.operator.email) },
         { label: 'Ruolo', render: (r) => escapeHtml(labelOf(ROLE_LABELS, r.membership.role)) },
-        { label: 'Accesso', render: (r) => renderBadge(labelOf(OPERATOR_STATUS_LABELS, r.operator.status), OPERATOR_STATUS_TONE[r.operator.status] || 'gray') },
+        { label: 'Accesso', render: (r) => renderBadge(labelOf(OPERATOR_STATUS_LABELS, r.operator.status), OPERATOR_STATUS_TONE[r.operator.status] || 'gray') + account.badgeEliminato(r.operator) },
         { label: 'Membership', render: (r) => renderBadge(labelOf(MEMBERSHIP_STATUS_LABELS, r.membership.status), MEMBERSHIP_STATUS_TONE[r.membership.status] || 'gray') },
         { label: '', render: (r) => azioniOperatore(r) },
       ],
-      righe,
+      soloOperativi(righe, vediEliminati),
       { emptyMessage: 'Nessun operatore in questa agenzia.' },
     );
+    contentEl.querySelector('#op-mostra-eliminati').addEventListener('change', (e) => {
+      vediEliminati = e.target.checked;
+      operatori();
+    });
 
     listaEl.querySelectorAll('[data-azione]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const riga = righe.find((r) => String(r.operator.id) === String(btn.dataset.operatore));
         if (!riga) return;
+        if (account.gestisciEliminazione(btn.dataset.azione, riga)) return;
         if (btn.dataset.azione === 'disabilita') return cambiaAccesso(riga, 'disabled');
         if (btn.dataset.azione === 'riattiva') return cambiaAccesso(riga, 'active');
         if (btn.dataset.azione === 'membership') return dialogoMembership(riga);
@@ -875,6 +883,15 @@ export async function renderReteAgenzia(container, agencyId) {
 // ELIMINAZIONE BLINDATA: le stesse funzioni servono l'organico di un'agenzia e
 // l'elenco degli account della Rete (anche quelli senza agenzia); chi le usa
 // dice cosa ricaricare (`dopo`) e dove mostrare un errore (`errore`).
+// ELIMINA OPERATORE: l'account del Super Admin generale, mai eliminabile.
+const ACCOUNT_SUPER_ADMIN = 'info@stima360.it';
+
+// ELIMINA OPERATORE: gli eliminati escono dagli elenchi operativi; li mostra
+// solo la casella «Mostra eliminati».
+export function soloOperativi(righe, mostraEliminati) {
+  return mostraEliminati ? righe : righe.filter((r) => !r.operator.deleted_at);
+}
+
 export function nomeAccount(op) {
   const nome = [op.first_name, op.last_name].filter(Boolean).join(' ').trim();
   return nome || op.email;
@@ -890,12 +907,76 @@ export function comandiAccount({ platformMe, hostEl, dopo, errore }) {
     return op.is_platform_admin ? ' ' + renderBadge('Amministratore di piattaforma', 'role') : '';
   }
 
+  // ELIMINA OPERATORE: l'account `info@stima360.it` non si elimina mai (lo
+  // ricontrolla il backend, che risponde 409 anche se il pulsante ci fosse).
+  function eProtetto(op) {
+    // Nessuna normalizzazione nel browser (P27-7): confronto esatto; il backend
+    // ricontrolla sull'email normalizzata e risponde 409 in ogni caso.
+    return eDesignato(op) || op.email === ACCOUNT_SUPER_ADMIN;
+  }
+
   function bottoneAccesso(op) {
     if (eDesignato(op)) return '';
     const id = escapeHtml(op.id);
-    return op.status === 'active'
-      ? `<button type="button" class="btn danger" data-azione="disabilita" data-operatore="${id}">Elimina dalla Rete</button>`
-      : `<button type="button" class="btn" data-azione="riattiva" data-operatore="${id}">Ripristina operatore</button>`;
+    // ELIMINA OPERATORE: un eliminato si ripristina (torna fra gli esclusi).
+    if (op.deleted_at) {
+      return `<button type="button" class="btn" data-azione="ripristina-eliminato" data-operatore="${id}">Ripristina</button>`;
+    }
+    if (op.status === 'active') {
+      return `<button type="button" class="btn danger" data-azione="disabilita" data-operatore="${id}">Elimina dalla Rete</button>`;
+    }
+    const ripristina = `<button type="button" class="btn" data-azione="riattiva" data-operatore="${id}">Ripristina operatore</button>`;
+    // Il pulsante rosso «Elimina» solo per il Super Admin designato (l'unico
+    // che vede la Rete: `platformMe.is_super_admin`), mai sull'account protetto.
+    if (!(platformMe && platformMe.is_super_admin === true) || eProtetto(op) || op.status !== 'disabled') return ripristina;
+    return `${ripristina} <button type="button" class="btn danger" data-azione="elimina-operatore" data-operatore="${id}">Elimina</button>`;
+  }
+
+  function badgeEliminato(op) {
+    return op.deleted_at ? ' ' + renderBadge('Eliminato', 'gray') : '';
+  }
+
+  async function eliminaOperatore(riga) {
+    const email = riga.operator.email;
+    const ok = await confirmAction(hostEl, {
+      titolo: 'Eliminare l’operatore?',
+      testo: `Stai per eliminare l’operatore ${email}. Uscira’ dall’elenco degli operatori, non potra’ accedere al CRM `
+        + 'e non potra’ essere assegnato a nuove attivita’. Nessun dato viene cancellato: contatti, immobili, '
+        + 'incarichi, appuntamenti e storico restano conservati e collegati a lui. Potrai ripristinarlo '
+        + 'da «Mostra eliminati».',
+      conferma: 'Elimina',
+      tono: 'danger',
+    });
+    if (!ok) return;
+    try {
+      await apiPost(`${PLATFORM}/operators/${encodeURIComponent(riga.operator.id)}/delete`, {});
+      await dopo();
+    } catch (error) {
+      errore(errorBox(error, 'operatore-accesso'));
+    }
+  }
+
+  async function ripristinaEliminato(riga) {
+    const ok = await confirmAction(hostEl, {
+      titolo: 'Ripristinare l’operatore eliminato?',
+      testo: `${riga.operator.email} torna nell’elenco degli operatori, ancora escluso dalla Rete: per farlo `
+        + 'accedere di nuovo usa poi «Ripristina operatore».',
+      conferma: 'Ripristina',
+    });
+    if (!ok) return;
+    try {
+      await apiPost(`${PLATFORM}/operators/${encodeURIComponent(riga.operator.id)}/restore`, {});
+      await dopo();
+    } catch (error) {
+      errore(errorBox(error, 'operatore-accesso'));
+    }
+  }
+
+  // I comandi di ELIMINA OPERATORE, per chi collega i pulsanti di un elenco.
+  function gestisciEliminazione(azione, riga) {
+    if (azione === 'elimina-operatore') { eliminaOperatore(riga); return true; }
+    if (azione === 'ripristina-eliminato') { ripristinaEliminato(riga); return true; }
+    return false;
   }
 
   function bottonePiattaforma(op) {
@@ -958,5 +1039,6 @@ export function comandiAccount({ platformMe, hostEl, dopo, errore }) {
 
   return {
     eDesignato, badgePiattaforma, bottoneAccesso, bottonePiattaforma, cambiaRuoloPiattaforma, cambiaAccesso,
+    badgeEliminato, gestisciEliminazione,
   };
 }

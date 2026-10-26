@@ -26,13 +26,12 @@
 //        pagina, e l'elenco delle agenzie di una rete non e' una tabella di
 //        milioni di righe. Il filtro qui e' locale e dichiarato tale.)
 //   POST /api/platform/agencies
-//   GET  /api/platform/territories?kind&agency_id&assignment_status&limit&offset
+//   GET  /api/platform/territories?kind&agency_id&assignment_status&deleted&limit&offset
 //   POST /api/platform/territories
+//   POST /api/platform/territories/{id}/delete | /restore   (ELIMINA TERRITORIO)
 //   GET  /api/platform/operators?without_active_membership&limit&offset
 //        (ELIMINAZIONE BLINDATA: la scheda «Account», anche senza agenzia; i
 //        comandi sono le PATCH dell'operatore gia' usate dalla scheda Operatori)
-//   + la scheda «Eliminazioni edifici» (ELIMINAZIONE-EDIFICIO-1): le sue rotte
-//     /api/platform/building-deletion* le nomina solo building-deletion/building-deletion.js.
 
 import { apiGet, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
@@ -45,6 +44,7 @@ import {
   OPERATOR_STATUS_TONE,
   PLATFORM,
   TERRITORY_KIND_LABELS,
+  confirmAction,
   describeError,
   errorBox,
   escapeHtml,
@@ -56,10 +56,11 @@ import { renderModificheTerritoriali } from './rete-modifiche.js'; // AGENZIE-TE
 import { renderRegistro } from './rete-registro.js'; // ADM-7: il registro delle operazioni (ADM-5A)
 import { renderInformative } from './rete-informative.js'; // Fase B: le informative privacy (solo Super Admin)
 // ELIMINAZIONE BLINDATA: i comandi sull'account sono quelli della scheda Operatori.
-import { comandiAccount, nomeAccount } from './rete-agenzia.js';
-// ELIMINAZIONE-EDIFICIO-1: la terza scheda, «Eliminazioni edifici» (Super Admin).
-// CESTINO-GENERALE-1: la gestione e' SPOSTATA in Cestino › Richieste edifici
-// (stesso codice, `rete-eliminazioni.js`); qui resta solo il collegamento.
+import { comandiAccount, nomeAccount, soloOperativi } from './rete-agenzia.js';
+// ELIMINAZIONE-EDIFICIO-1 / CESTINO-GENERALE-1: le eliminazioni degli edifici
+// si gestiscono in Cestino › Richieste edifici (`rete-eliminazioni.js`). La
+// scheda-collegamento «Eliminazioni edifici» della Rete e' stata tolta
+// (SEMPLIFICA RETE): nessuna funzione e nessun dato cambiano.
 
 const TERRITORI_PAGE = 50;
 
@@ -68,7 +69,6 @@ const TABS = [
   // ELIMINAZIONE BLINDATA: tutti gli account, compresi quelli senza agenzia.
   { key: 'account', label: 'Account' },
   { key: 'territori', label: 'Territori' },
-  { key: 'eliminazioni', label: 'Eliminazioni edifici' },
   // AGENZIE-TERRITORI C2: proposte di modifica dei Supervisori territoriali (approvazione del Super Admin)
   { key: 'modifiche', label: 'Modifiche territoriali' },
   // ADM-7: il registro delle operazioni amministrative, in sola lettura (ADM-5A).
@@ -105,8 +105,8 @@ export async function renderRete(container) {
     tab: 'agenzie',
     agenzie: [],
     agenzieStato: '',
-    territori: { kind: '', assignment_status: '', offset: 0, items: [] },
-    account: { filtro: 'senza', offset: 0 },
+    territori: { kind: '', assignment_status: '', eliminati: false, offset: 0, items: [] },
+    account: { filtro: 'senza', offset: 0, eliminati: false },
   };
 
   container.innerHTML = `
@@ -132,7 +132,6 @@ export async function renderRete(container) {
       btn.classList.toggle('active', btn.dataset.tab === key);
     });
     if (key === 'agenzie') return caricaAgenzie();
-    if (key === 'eliminazioni') return renderCollegamentoEliminazioni(contentEl);
     if (key === 'modifiche') return renderModificheTerritoriali(contentEl);
     if (key === 'registro') return renderRegistro(contentEl);
     if (key === 'informative') return renderInformative(contentEl, hostEl);
@@ -212,6 +211,7 @@ export async function renderRete(container) {
         <select class="input" id="filtro-account" aria-label="Quali account">
           ${selectOptions(FILTRO_ACCOUNT, filtro.filtro)}
         </select>
+        <label class="muted"><input type="checkbox" id="account-mostra-eliminati" ${filtro.eliminati ? 'checked' : ''}> Mostra eliminati</label>
       </div>
       <div id="account-lista" class="rete-operatori"></div>
       <div class="list-pager">
@@ -236,17 +236,22 @@ export async function renderRete(container) {
       [
         { label: 'Account', render: (r) => `<strong>${escapeHtml(nomeAccount(r.operator))}</strong>${comandi.badgePiattaforma(r.operator)}` },
         { label: 'Email', render: (r) => escapeHtml(r.operator.email) },
-        { label: 'Accesso', render: (r) => renderBadge(labelOf(OPERATOR_STATUS_LABELS, r.operator.status), OPERATOR_STATUS_TONE[r.operator.status] || 'gray') },
+        { label: 'Accesso', render: (r) => renderBadge(labelOf(OPERATOR_STATUS_LABELS, r.operator.status), OPERATOR_STATUS_TONE[r.operator.status] || 'gray') + comandi.badgeEliminato(r.operator) },
         { label: 'Agenzia attiva', render: (r) => agenziaDi(r) },
         { label: '', render: (r) => [comandi.bottoneAccesso(r.operator), comandi.bottonePiattaforma(r.operator)].filter(Boolean).join(' ') },
       ],
-      righe,
+      soloOperativi(righe, filtro.eliminati),
       { emptyMessage: filtro.filtro === 'senza' ? 'Nessun account senza agenzia attiva.' : 'Nessun account.' },
     );
+    contentEl.querySelector('#account-mostra-eliminati').addEventListener('change', (e) => {
+      filtro.eliminati = e.target.checked;
+      caricaAccount();
+    });
     listaEl.querySelectorAll('[data-azione]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const riga = righe.find((r) => String(r.operator.id) === String(btn.dataset.operatore));
         if (!riga) return;
+        if (comandi.gestisciEliminazione(btn.dataset.azione, riga)) return;
         if (btn.dataset.azione === 'disabilita') return comandi.cambiaAccesso(riga, 'disabled');
         if (btn.dataset.azione === 'riattiva') return comandi.cambiaAccesso(riga, 'active');
         if (btn.dataset.azione === 'piattaforma-concedi') return comandi.cambiaRuoloPiattaforma(riga, true);
@@ -360,6 +365,10 @@ export async function renderRete(container) {
           <option value="">Assegnati e non</option>
           ${selectOptions(ASSIGNMENT_STATUS_LABELS, state.territori.assignment_status)}
         </select>
+        <select class="input" id="filtro-eliminati" aria-label="Territori operativi o eliminati">
+          <option value="">Territori operativi</option>
+          <option value="eliminati" ${state.territori.eliminati ? 'selected' : ''}>Eliminati</option>
+        </select>
         <button type="button" class="btn primary" id="territorio-nuovo">Nuovo territorio</button>
       </div>
       <div id="territori-lista"><p class="muted">Caricamento…</p></div>
@@ -372,6 +381,11 @@ export async function renderRete(container) {
     });
     contentEl.querySelector('#filtro-assegnazione').addEventListener('change', (e) => {
       state.territori.assignment_status = e.target.value;
+      state.territori.offset = 0;
+      paginaTerritori();
+    });
+    contentEl.querySelector('#filtro-eliminati').addEventListener('change', (e) => {
+      state.territori.eliminati = e.target.value === 'eliminati';
       state.territori.offset = 0;
       paginaTerritori();
     });
@@ -390,6 +404,7 @@ export async function renderRete(container) {
     });
     if (state.territori.kind) params.set('kind', state.territori.kind);
     if (state.territori.assignment_status) params.set('assignment_status', state.territori.assignment_status);
+    if (state.territori.eliminati) params.set('deleted', 'true');
 
     let righe = [];
     try {
@@ -434,12 +449,22 @@ export async function renderRete(container) {
                 : '')
             : '<span class="muted">Nessuna assegnazione attiva</span>'),
         },
-        { label: '', render: () => '<span class="muted">Apri →</span>' },
+        { label: '', render: (t) => `<span class="muted">Apri →</span> ${comandoTerritorio(t)}` },
       ],
       righe,
-      { emptyMessage: 'Nessun territorio con questi filtri.', onRowClick: true },
+      {
+        emptyMessage: state.territori.eliminati ? 'Nessun territorio eliminato.' : 'Nessun territorio con questi filtri.',
+        onRowClick: true,
+      },
     );
     bindTableRowClicks(listaEl, (id) => navigate('rete', ['territori', id]));
+    listaEl.querySelectorAll('[data-territorio-comando]').forEach((btn) => {
+      btn.addEventListener('click', (event) => {
+        event.stopPropagation(); // il clic sul comando non apre la riga
+        const riga = righe.find((t) => String(t.id) === String(btn.dataset.territorio));
+        if (riga) cambiaEliminazioneTerritorio(riga, btn.dataset.territorioComando === 'elimina');
+      });
+    });
 
     pagerEl.innerHTML = `
       <button class="btn" id="terr-prev" ${state.territori.offset === 0 ? 'disabled' : ''}>← Precedenti</button>
@@ -456,6 +481,42 @@ export async function renderRete(container) {
       state.territori.offset += TERRITORI_PAGE;
       paginaTerritori();
     });
+  }
+
+  // ELIMINA TERRITORIO: il comando c'e' solo per il Super Admin designato
+  // (`platformMe.is_super_admin`); il backend ricontrolla e risponde 403/409.
+  function comandoTerritorio(t) {
+    if (!(platformMe && platformMe.is_super_admin === true)) return '';
+    const id = escapeHtml(t.id);
+    return t.deleted_at
+      ? `<button type="button" class="btn" data-territorio-comando="ripristina" data-territorio="${id}">Ripristina</button>`
+      : `<button type="button" class="btn danger" data-territorio-comando="elimina" data-territorio="${id}">Elimina</button>`;
+  }
+
+  async function cambiaEliminazioneTerritorio(t, elimina) {
+    const ok = await confirmAction(hostEl, elimina ? {
+      titolo: 'Eliminare il territorio?',
+      testo: `Stai per eliminare il territorio “${t.label}” (${labelOf(TERRITORY_KIND_LABELS, t.kind)}). `
+        + 'Uscira’ dall’elenco operativo e non potra’ ricevere nuove assegnazioni. Nessun dato viene cancellato: '
+        + 'edifici, immobili, contatti, incarichi, assegnazioni passate e storico restano conservati. '
+        + 'Lo ritrovi con il filtro «Eliminati» e lo puoi ripristinare.',
+      conferma: 'Elimina',
+      tono: 'danger',
+    } : {
+      titolo: 'Ripristinare il territorio?',
+      testo: `“${t.label}” torna nell’elenco operativo, libero: nessuna assegnazione viene riattivata.`,
+      conferma: 'Ripristina',
+    });
+    if (!ok) return;
+    const listaEl = contentEl.querySelector('#territori-lista');
+    try {
+      const id = encodeURIComponent(t.id);
+      if (elimina) await apiPost(`${PLATFORM}/territories/${id}/delete`, {});
+      else await apiPost(`${PLATFORM}/territories/${id}/restore`, {});
+      await paginaTerritori();
+    } catch (error) {
+      if (listaEl) listaEl.insertAdjacentHTML('afterbegin', errorBox(error));
+    }
   }
 
   function dialogoNuovoTerritorio() {
@@ -509,16 +570,4 @@ export async function renderRete(container) {
   }
 
   await mostraTab('agenzie');
-}
-
-/**
- * CESTINO-GENERALE-1: la vecchia scheda «Eliminazioni edifici» porta alla sua
- * nuova posizione, senza duplicarla (esportata per le prove).
- */
-export function renderCollegamentoEliminazioni(contentEl) {
-  contentEl.innerHTML = `
-    <section class="deletion-admin" data-deletion-moved>
-      <p>La gestione delle eliminazioni degli edifici è nel <strong>Cestino</strong>, insieme a tutto ciò che è stato eliminato.</p>
-      <p><a class="btn primary" href="#/cestino/richieste-edifici" data-deletion-moved-link>Apri Cestino › Richieste edifici</a></p>
-    </section>`;
 }

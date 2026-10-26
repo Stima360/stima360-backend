@@ -52,7 +52,11 @@ def test_a_ogni_rotta_della_rete_richiede_il_super_admin_designato():
     # SENTINELLA AGGIORNATA DA FOLLOW-UP FASE B: + 4 rotte delle informative
     # marketing (`/consent-notices`: elenco, dettaglio, creazione, chiusura),
     # tutte dietro `require_super_admin_context`.
-    assert controllate == 34, controllate  # 23 di ADM-1 + 4 anteprime ADM-2 + 1 registro ADM-5A + 1 flag ADM-6 + 1 elenco account (eliminazione blindata) + 4 informative (Fase B)
+    # SENTINELLA AGGIORNATA DA ELIMINA OPERATORE: + 2 rotte (`/operators/{id}/delete`
+    # e `/operators/{id}/restore`), entrambe dietro `require_super_admin_context`.
+    # SENTINELLA AGGIORNATA DA ELIMINA TERRITORIO: + 2 rotte (`/territories/{id}/delete`
+    # e `/territories/{id}/restore`), entrambe dietro `require_super_admin_context`.
+    assert controllate == 38, controllate  # 23 di ADM-1 + 4 anteprime ADM-2 + 1 registro ADM-5A + 1 flag ADM-6 + 1 elenco account (eliminazione blindata) + 4 informative (Fase B) + 2 elimina operatore + 2 elimina territorio
 
 
 @pytest.fixture

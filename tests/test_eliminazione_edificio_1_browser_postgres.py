@@ -148,11 +148,12 @@ def _apri_rete(page, url):
     # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: «Rete › Eliminazioni edifici» e' ora un
     # collegamento a «Cestino › Richieste edifici», dove vive lo STESSO pannello del Super Admin
     # (renderEliminazioni, stesse rotte). Il percorso passa dal collegamento della Rete.
+    # SENTINELLA AGGIORNATA DA SEMPLIFICA RETE: la scheda-collegamento della Rete e' tolta; lo
+    # stesso pannello si apre da «Cestino › Richieste edifici», e la Rete non lo offre piu'.
     _vai(page, url, "#/rete")
-    page.wait_for_selector("[data-tab='eliminazioni']")
-    page.click("[data-tab='eliminazioni']")
-    page.wait_for_selector("[data-deletion-moved-link]")
-    page.click("[data-deletion-moved-link]")
+    page.wait_for_selector("#rete-tabs [data-tab='agenzie']")
+    assert page.query_selector("[data-tab='eliminazioni']") is None
+    _vai(page, url, "#/cestino/richieste-edifici")
     page.wait_for_selector("[data-deletion-admin]")
     page.wait_for_load_state("networkidle")
 

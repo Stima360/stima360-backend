@@ -361,9 +361,12 @@ def service(monkeypatch):
         lambda cur, aid, fields: store.update_assignment(aid, fields),
     )
 
-    def _list_territories(cur, *, kind, agency_id, assignment_status, limit, offset):
+    def _list_territories(cur, *, kind, agency_id, assignment_status, limit, offset, deleted=False):
         rows = []
         for t in store.territories.values():
+            # ELIMINA TERRITORIO: per difetto l'elenco operativo, come il repository vero
+            if bool(t.get("deleted_at")) != bool(deleted):
+                continue
             if kind is not None and t["kind"] != kind:
                 continue
             related = [
@@ -2232,6 +2235,10 @@ def test_j3_the_repository_issues_no_delete_at_all():
             if isinstance(v, ast.Constant) and isinstance(v.value, str)
         ]
         sql = " ".join(pieces).upper()
+        # SENTINELLA AGGIORNATA DA ELIMINA TERRITORIO: l'eliminazione e' LOGICA, un
+        # marcatore su `network_territories` (migration 114). Le sole colonne
+        # `deleted_at`/`deleted_by_user_id` sono ammesse; un DELETE no.
+        sql = re.sub(r"\bDELETED_(AT|BY_USER_ID)\b", "", sql)
         assert "DELETE" not in sql, sql
         assert "TRUNCATE" not in sql, sql
         assert "DROP" not in sql, sql
