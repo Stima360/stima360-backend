@@ -115,10 +115,11 @@ def test_s02_nessuna_regola_di_permesso_nel_client():
 def test_s03_rete_monta_la_scheda_eliminazioni():
     # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: la gestione e' SPOSTATA in Cestino › Richieste edifici
     # (stesso codice, `renderEliminazioni`); in Rete la vecchia scheda e' solo un collegamento, senza duplicati.
+    # SENTINELLA AGGIORNATA DA SEMPLIFICA RETE: la scheda-collegamento e' TOLTA dalla Rete; la
+    # gestione (archiviazione, ripristino, controllo) resta tutta in Cestino › Richieste edifici.
     rete = _codice(ASSETS / "views" / "rete.js")
-    assert "{ key: 'eliminazioni', label: 'Eliminazioni edifici' }" in rete
-    assert "if (key === 'eliminazioni') return renderCollegamentoEliminazioni(contentEl);" in rete
-    assert "renderEliminazioni" not in rete and 'href="#/cestino/richieste-edifici"' in rete
+    assert "key: 'eliminazioni'" not in rete and "Eliminazioni edifici'" not in rete
+    assert "renderCollegamentoEliminazioni" not in rete and "renderEliminazioni" not in rete
     cestino = _codice(ASSETS / "views" / "cestino.js")
     assert "? () => renderEliminazioni(hostRichiesteEdifici)" in cestino
     assert "approveDeletion(id, d.fingerprint, nota())" in _codice(RETE)

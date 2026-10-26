@@ -62,6 +62,11 @@ ASSIGNMENT_COLUMNS = (
 ASSIGNMENT_UPDATABLE_COLUMNS = ("status",)
 
 _SELECT_TERRITORY = ", ".join(TERRITORY_COLUMNS)
+
+# ELIMINA TERRITORIO (migration 114): il marcatore dell'eliminazione logica.
+# Letto via `to_jsonb`: la query resta valida su un database dove la 114 non e'
+# ancora applicata, e li' vale NULL (nessun territorio eliminato).
+_DELETED_T = "(to_jsonb(t) ->> 'deleted_at')::timestamptz AS deleted_at"
 _SELECT_ASSIGNMENT = ", ".join(ASSIGNMENT_COLUMNS)
 
 # Le colonne dell'assegnazione qualificate, per le query che fanno JOIN: senza
@@ -80,7 +85,8 @@ def _row(row) -> dict[str, Any] | None:
 def get_territory(cur, territory_id: int) -> dict[str, Any] | None:
     """Un territorio, o None. Il 404 lo decide il service."""
     cur.execute(
-        f"SELECT {_SELECT_TERRITORY} FROM network_territories WHERE id = %s",
+        f"SELECT {', '.join(f't.{c}' for c in TERRITORY_COLUMNS)}, {_DELETED_T} "
+        "FROM network_territories t WHERE t.id = %s",
         (territory_id,),
     )
     return _row(cur.fetchone())
@@ -138,10 +144,14 @@ def list_territories(
     kind: str | None = None,
     agency_id: int | None = None,
     assignment_status: str | None = None,
+    deleted: bool = False,
     limit: int,
     offset: int,
 ) -> list[dict[str, Any]]:
     """I territori della rete, con l'assegnazione ATTIVA di ciascuno.
+
+    ELIMINA TERRITORIO: per difetto solo l'elenco OPERATIVO (non eliminati);
+    con `deleted=True` solo gli eliminati.
 
     `active_agency_id` e `active_assignment_id` sono NULL per un territorio che
     nessuno presidia. E' la lettura che serve davvero - "chi ha cosa" - e
@@ -166,7 +176,10 @@ def list_territories(
     il posto in cui la paginazione smette di essere applicata il giorno in cui
     qualcuno chiama questa funzione senza passarli.
     """
-    where: list[str] = []
+    where: list[str] = [
+        "(to_jsonb(t) ->> 'deleted_at') IS NOT NULL" if deleted
+        else "(to_jsonb(t) ->> 'deleted_at') IS NULL"
+    ]
     params: list[Any] = []
 
     if kind is not None:
@@ -197,7 +210,7 @@ def list_territories(
 
     cur.execute(
         f"""
-        SELECT {', '.join(f't.{c}' for c in TERRITORY_COLUMNS)},
+        SELECT {', '.join(f't.{c}' for c in TERRITORY_COLUMNS)}, {_DELETED_T},
                a.agency_id AS active_agency_id,
                a.id        AS active_assignment_id
           FROM network_territories t
@@ -211,6 +224,34 @@ def list_territories(
         params + [limit, offset],
     )
     return [dict(row) for row in cur.fetchall()]
+
+
+def elimination_mark_supported(cur) -> bool:
+    """ELIMINA TERRITORIO: True se la migration 114 e' applicata."""
+    cur.execute(
+        "SELECT 1 FROM information_schema.columns "
+        "WHERE table_schema = current_schema() AND table_name = 'network_territories' "
+        "AND column_name = 'deleted_at'"
+    )
+    return cur.fetchone() is not None
+
+
+def set_elimination_mark(cur, territory_id: int, *, by_user_id: int | None) -> dict[str, Any] | None:
+    """ELIMINA TERRITORIO. Con `by_user_id` marca il territorio come eliminato,
+    con None lo ripristina. Il SOLO punto che scrive il marcatore; non tocca
+    nessun'altra tabella. None se l'id non esiste."""
+    cur.execute(
+        f"""
+        UPDATE network_territories t
+           SET deleted_at = CASE WHEN %(chi)s::bigint IS NULL THEN NULL ELSE NOW() END,
+               deleted_by_user_id = %(chi)s::bigint,
+               updated_at = NOW()
+         WHERE t.id = %(id)s
+        RETURNING {', '.join(f't.{c}' for c in TERRITORY_COLUMNS)}, t.deleted_at
+        """,
+        {"chi": by_user_id, "id": territory_id},
+    )
+    return _row(cur.fetchone())
 
 
 # ---------------------------------------------------------------------------

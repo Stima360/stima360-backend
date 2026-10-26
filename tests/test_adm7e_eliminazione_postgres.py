@@ -20,6 +20,11 @@ Il ripristino e' `active`. PostgreSQL usa-e-getta e sessioni vere (`adm2`).
       designato protetti, ripristino
   11  ELIMINA OPERATORE in Chromium (390/1280): conferma con l'email, sparisce
       dall'elenco, «Mostra eliminati», ripristino
+  12  ELIMINA TERRITORIO: eliminazione logica (solo il designato), un territorio
+      presidiato non si elimina, nessuna nuova assegnazione/riattivazione,
+      filtro «Eliminati», ripristino, dati intatti
+  13  ELIMINA TERRITORIO in Chromium (390/1280) e la Rete senza la scheda
+      «Eliminazioni edifici»
   09  ELIMINA AGENZIA: un'agenzia eliminata non riceve nuove operazioni
       (territori, trasferimenti, riattivazioni di assegnazioni, operatori);
       l'agenzia di sistema non si elimina
@@ -550,6 +555,122 @@ def test_11_elimina_operatore_in_chromium(ui, larghezza):
         page.click("#agenzia-tabs [data-tab='operatori']")
         page.wait_for_selector("#operatori-lista table")
         assert page.query_selector(f"[data-operatore='{designato}'][data-azione='elimina-operatore']") is None
+        assert not errori, errori
+        browser.close()
+    assert _impronta(m) == prima
+
+
+
+# ---------------------------------------------------------------------------
+# ELIMINA TERRITORIO - eliminazione logica (migration 114)
+# ---------------------------------------------------------------------------
+
+def _territorio_libero(sa, etichetta):
+    import uuid
+    chiave = f"elimina-{uuid.uuid4().hex[:8]}"
+    r = sa.post("/api/platform/territories",
+                json={"kind": "municipality", "canonical_key": chiave, "label": etichetta})
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+def _ids(sa, **filtri):
+    q = "&".join(f"{k}={v}" for k, v in {"limit": 200, **filtri}.items())
+    return {t["id"] for t in sa.get(f"/api/platform/territories?{q}").json()}
+
+
+def test_12_territorio_eliminato_logicamente(adm7e):
+    m = adm7e
+    sa = m["accedi"]("super")
+    t = _territorio_libero(sa, "Comune da eliminare")
+
+    # presidiato: e' in uso dalla piattaforma (instrada i lead), non si elimina
+    presidiato = m["territorio_quattro"]
+    r = sa.post(f"/api/platform/territories/{presidiato}/delete")
+    assert r.status_code == 409 and "presidiato" in r.text, r.text
+    # solo il Super Admin designato
+    assert m["accedi"]("altro").post(f"/api/platform/territories/{t}/delete").status_code == 403
+    assert m["accedi"]("quattro").post(f"/api/platform/territories/{t}/delete").status_code in (401, 403)
+
+    prima = _impronta(m)
+    r = sa.post(f"/api/platform/territories/{t}/delete")
+    assert r.status_code == 200 and r.json()["deleted_at"], r.text
+    assert sa.post(f"/api/platform/territories/{t}/delete").status_code == 200  # idempotente
+    assert _impronta(m) == prima
+    assert t not in _ids(sa) and t in _ids(sa, deleted="true")
+    assert sa.get(f"/api/platform/territories/{t}").json()["deleted_at"]
+    # nessuna nuova assegnazione
+    r = sa.post("/api/platform/agencies/2/territories", json={"territory_id": t})
+    assert r.status_code == 409 and "eliminato" in r.text, r.text
+    assert not _q(m, "SELECT 1 FROM agency_territory_assignments WHERE territory_id = %s", (t,))
+    azioni = [r[0] for r in _q(m, "SELECT action FROM platform_audit_log WHERE target_id = %s "
+                                  "AND target_type = 'territory' AND result = 'success' ORDER BY id", (str(t),))]
+    assert azioni == ["platform.territory.create", "platform.territory.delete"]
+
+    # ripristino: torna operativo e assegnabile
+    r = sa.post(f"/api/platform/territories/{t}/restore")
+    assert r.status_code == 200 and r.json()["deleted_at"] is None, r.text
+    assert sa.post(f"/api/platform/territories/{t}/restore").status_code == 409
+    assert t in _ids(sa)
+    r = sa.post("/api/platform/agencies/2/territories", json={"territory_id": t})
+    assert r.status_code == 201, r.text
+    assegnazione = r.json()["id"]
+
+    # un'assegnazione SOSPESA non blocca l'eliminazione, ma non si riattiva su un eliminato
+    url = f"/api/platform/agencies/2/territories/{assegnazione}"
+    assert sa.patch(url, json={"status": "suspended"}).status_code == 200
+    assert sa.post(f"/api/platform/territories/{t}/delete").status_code == 200
+    r = sa.patch(url, json={"status": "active"})
+    assert r.status_code == 409 and "eliminato" in r.text, r.text
+    assert _q(m, "SELECT status FROM agency_territory_assignments WHERE id = %s", (assegnazione,))[0][0] == "suspended"
+    assert sa.patch(url, json={"status": "revoked"}).status_code == 200  # chiudere resta possibile
+
+
+@pytest.mark.parametrize("larghezza", [390, 1280])
+def test_13_elimina_territorio_in_chromium(ui, larghezza):
+    import uuid
+    from playwright.sync_api import sync_playwright
+    from tests.test_eliminazione_edificio_1_browser_postgres import _sfora
+    m = ui
+    etichetta = f"Borgo Prova {uuid.uuid4().hex[:5]}"
+    chiave = f"borgo-{uuid.uuid4().hex[:8]}"
+    t = _q(m, "INSERT INTO network_territories (kind, canonical_key, label) VALUES ('municipality', %s, %s) "
+              "RETURNING id", (chiave, etichetta))[0][0]
+    prima = _impronta(m)
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        ctx = browser.new_context(viewport={"width": larghezza, "height": 900})
+        ctx.add_cookies([{"name": m["cookie"], "value": m["token"], "url": m["url"]}])
+        page = ctx.new_page()
+        errori = []
+        page.on("pageerror", lambda e: errori.append(str(e)))
+        page.goto(f"{m['url']}/os/?n={uuid.uuid4().hex[:8]}#/rete")
+        page.wait_for_selector("#rete-tabs [data-tab='territori']")
+        # la scheda «Eliminazioni edifici» non c'e' piu'
+        assert page.query_selector("[data-tab='eliminazioni']") is None
+        assert "Eliminazioni edifici" not in page.inner_text("#rete-tabs")
+        page.click("#rete-tabs [data-tab='territori']")
+        elimina = f"[data-territorio-comando='elimina'][data-territorio='{t}']"
+        page.wait_for_selector(elimina)
+        assert page.inner_text(elimina) == "Elimina" and "danger" in page.get_attribute(elimina, "class")
+        page.click(elimina)
+        page.wait_for_selector("dialog.modal [data-conferma='si']")
+        assert etichetta in page.inner_text("dialog.modal")
+        page.click("dialog.modal [data-conferma='si']")
+        page.wait_for_selector(elimina, state="detached")
+        assert "#/rete/territori/" not in page.url  # il clic sul comando non apre la riga
+        assert etichetta not in page.inner_text("#territori-lista")
+        assert _q(m, "SELECT deleted_at IS NOT NULL FROM network_territories WHERE id = %s", (t,))[0][0] is True
+        assert _sfora(page)["scroll"] <= larghezza + 1
+
+        page.select_option("#filtro-eliminati", "eliminati")
+        ripristina = f"[data-territorio-comando='ripristina'][data-territorio='{t}']"
+        page.wait_for_selector(ripristina)
+        page.click(ripristina)
+        page.wait_for_selector("dialog.modal [data-conferma='si']")
+        page.click("dialog.modal [data-conferma='si']")
+        page.wait_for_selector(ripristina, state="detached")
+        assert _q(m, "SELECT deleted_at FROM network_territories WHERE id = %s", (t,))[0][0] is None
         assert not errori, errori
         browser.close()
     assert _impronta(m) == prima

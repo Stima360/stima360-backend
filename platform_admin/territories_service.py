@@ -52,6 +52,8 @@ from .enums import (
     ACTION_TERRITORY_ASSIGNMENT_CREATE,
     ACTION_TERRITORY_ASSIGNMENT_UPDATE,
     ACTION_TERRITORY_CREATE,
+    ACTION_TERRITORY_DELETE,
+    ACTION_TERRITORY_RESTORE,
     ACTION_TERRITORY_TRANSFER,
     AGENCY_DELETED_NOT_USABLE_MESSAGE,
     AGENCY_NOT_FOUND_MESSAGE,
@@ -64,6 +66,10 @@ from .enums import (
     TARGET_TYPE_TERRITORY,
     TARGET_TYPE_TERRITORY_ASSIGNMENT,
     TERRITORY_ALREADY_ASSIGNED_HERE_MESSAGE,
+    TERRITORY_DELETE_UNAVAILABLE_MESSAGE,
+    TERRITORY_DELETED_MESSAGE,
+    TERRITORY_IN_USE_MESSAGE,
+    TERRITORY_NOT_DELETED_MESSAGE,
     TERRITORY_ASSIGNMENT_RACE_MESSAGE,
     TERRITORY_EXISTS_MESSAGE,
     TERRITORY_NOT_FOUND_MESSAGE,
@@ -75,6 +81,7 @@ from .exceptions import (
     AgencyNotFound,
     PlatformConflict,
     TerritoryAssignmentNotFound,
+    TerritoryDeleteUnavailable,
     TerritoryNotFound,
 )
 from .transaction import audit_then_commit, status_change
@@ -134,6 +141,15 @@ def _require_territory(cur, territory_id: int) -> dict[str, Any]:
     return territory
 
 
+def _require_live_territory(cur, territory_id: int) -> dict[str, Any]:
+    """ELIMINA TERRITORIO: come `_require_territory`, ma un territorio
+    eliminato non riceve un'assegnazione (nuova, trasferita o riattivata)."""
+    territory = _require_territory(cur, territory_id)
+    if territory.get("deleted_at") is not None:
+        raise PlatformConflict(TERRITORY_DELETED_MESSAGE)
+    return territory
+
+
 # ---------------------------------------------------------------------------
 # Letture
 #
@@ -148,6 +164,7 @@ def list_territories(
     kind: str | None = None,
     agency_id: int | None = None,
     assignment_status: str | None = None,
+    deleted: bool = False,
     limit: int,
     offset: int,
 ) -> list[dict[str, Any]]:
@@ -163,6 +180,7 @@ def list_territories(
             kind=kind,
             agency_id=agency_id,
             assignment_status=assignment_status,
+            deleted=deleted,
             limit=limit,
             offset=offset,
         )
@@ -281,7 +299,7 @@ def assign_territory(
     with platform_operation_cursor() as (conn, cur):
         super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_ASSIGNMENT_CREATE)
         _require_usable_agency(cur, agency_id)
-        _require_territory(cur, territory_id)
+        _require_live_territory(cur, territory_id)
 
         active = territories_repository.get_active_assignment(cur, territory_id)
         if active is not None:
@@ -368,6 +386,8 @@ def update_assignment(
             raise TerritoryAssignmentNotFound(ASSIGNMENT_NOT_FOUND_MESSAGE)
 
         _guard_revoked_is_final(assignment, fields)
+        if fields.get("status") == ASSIGNMENT_ACTIVE:
+            _require_live_territory(cur, assignment["territory_id"])  # ELIMINA TERRITORIO
         _guard_reactivation(cur, assignment, fields)
 
         try:
@@ -479,7 +499,7 @@ def transfer_territory(
     with platform_operation_cursor() as (conn, cur):
         super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_TRANSFER)
         _require_usable_agency(cur, agency_id)
-        _require_territory(cur, territory_id)
+        _require_live_territory(cur, territory_id)
 
         current = territories_repository.get_active_assignment(cur, territory_id)
         if current is None:
@@ -523,3 +543,65 @@ def transfer_territory(
             metadata={"changed_fields": ["agency_id"]},
         )
         return {"assignment": assignment, "revoked": revoked}
+
+
+# ---------------------------------------------------------------------------
+# ELIMINA TERRITORIO - eliminazione logica (migration 114)
+# ---------------------------------------------------------------------------
+
+def delete_territory(actor: OperatorContext, territory_id: int) -> dict[str, Any]:
+    """Elimina LOGICAMENTE un territorio che nessuna agenzia presidia.
+
+    Scrive solo il marcatore di `network_territories`, con la sua riga di
+    registro. Assegnazioni (sospese o revocate), alias, edifici, immobili,
+    contatti, incarichi e storico non cambiano. Un territorio con
+    un'assegnazione ATTIVA e' in uso dalla piattaforma - instrada i lead del
+    funnel pubblico - e non si elimina (409): prima si revoca, sospende o
+    trasferisce l'assegnazione. Ripetere il comando non cambia nulla.
+    """
+    with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_DELETE)
+        if not territories_repository.elimination_mark_supported(cur):
+            raise TerritoryDeleteUnavailable(TERRITORY_DELETE_UNAVAILABLE_MESSAGE)
+        territory = _require_territory(cur, territory_id)
+        if territories_repository.get_active_assignment(cur, territory_id) is not None:
+            raise PlatformConflict(TERRITORY_IN_USE_MESSAGE)
+        if territory.get("deleted_at") is not None:
+            return territory
+
+        updated = territories_repository.set_elimination_mark(
+            cur, territory_id, by_user_id=actor.user_id)
+        audit_then_commit(
+            conn,
+            actor,
+            action=ACTION_TERRITORY_DELETE,
+            target_type=TARGET_TYPE_TERRITORY,
+            target_id=territory_id,
+            target_agency_id=None,
+            metadata={"deleted": True},
+        )
+        return updated
+
+
+def restore_territory(actor: OperatorContext, territory_id: int) -> dict[str, Any]:
+    """Annulla l'eliminazione: il territorio torna nell'elenco operativo,
+    libero (nessuna assegnazione viene riattivata da qui)."""
+    with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_TERRITORY_RESTORE)
+        if not territories_repository.elimination_mark_supported(cur):
+            raise TerritoryDeleteUnavailable(TERRITORY_DELETE_UNAVAILABLE_MESSAGE)
+        territory = _require_territory(cur, territory_id)
+        if territory.get("deleted_at") is None:
+            raise PlatformConflict(TERRITORY_NOT_DELETED_MESSAGE)
+
+        updated = territories_repository.set_elimination_mark(cur, territory_id, by_user_id=None)
+        audit_then_commit(
+            conn,
+            actor,
+            action=ACTION_TERRITORY_RESTORE,
+            target_type=TARGET_TYPE_TERRITORY,
+            target_id=territory_id,
+            target_agency_id=None,
+            metadata={"deleted": False},
+        )
+        return updated

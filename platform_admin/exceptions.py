@@ -170,3 +170,7 @@ class ConsentNoticeConflict(Exception):
 
 class OperatorDeleteUnavailable(Exception):
     """ELIMINA OPERATORE: la migration 113 non e' applicata. 503."""
+
+
+class TerritoryDeleteUnavailable(Exception):
+    """ELIMINA TERRITORIO: la migration 114 non e' applicata. 503."""

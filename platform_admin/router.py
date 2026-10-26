@@ -67,6 +67,7 @@ from .exceptions import (
     PlatformAuditUnavailable,
     PlatformConflict,
     TerritoryAssignmentNotFound,
+    TerritoryDeleteUnavailable,
     AliasKindRefused,
     AliasNotFound,
     TerritoryNotFound,
@@ -105,6 +106,7 @@ from .schemas import (
     TerritoryCreateRequest,
     TerritoryDetailResponse,
     TerritoryListItem,
+    TerritoryResponse,
     TerritoryTransferRequest,
     TransferResponse,
 )
@@ -718,6 +720,7 @@ def list_territories(
     kind: str | None = Query(None),
     agency_id: int | None = Query(None),
     assignment_status: str | None = Query(None),
+    deleted: bool = Query(False),
     limit: int = Query(TERRITORY_PAGE_DEFAULT, ge=1, le=TERRITORY_PAGE_MAX),
     offset: int = Query(0, ge=0),
     context: OperatorContext = Depends(require_super_admin_context),
@@ -739,6 +742,7 @@ def list_territories(
             kind=kind,
             agency_id=agency_id,
             assignment_status=assignment_status,
+            deleted=deleted,  # ELIMINA TERRITORIO: per difetto l'elenco operativo
             limit=limit,
             offset=offset,
         )
@@ -881,6 +885,38 @@ def update_assignment(
             status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
         ) from exc
     return AssignmentResponse(**assignment)
+
+
+# ELIMINA TERRITORIO (migration 114): eliminazione logica e suo annullamento.
+# Solo il Super Admin designato (`require_super_admin_context` e, nel service,
+# `lock_super_admin`); le guardie stanno nel service. Nessuna DELETE SQL.
+@router.post("/territories/{territory_id}/delete", response_model=TerritoryResponse)
+def delete_territory(
+    territory_id: int,
+    context: OperatorContext = Depends(require_super_admin_context),
+) -> TerritoryResponse:
+    return _territory_lifecycle(territories_service.delete_territory, context, territory_id)
+
+
+@router.post("/territories/{territory_id}/restore", response_model=TerritoryResponse)
+def restore_territory(
+    territory_id: int,
+    context: OperatorContext = Depends(require_super_admin_context),
+) -> TerritoryResponse:
+    return _territory_lifecycle(territories_service.restore_territory, context, territory_id)
+
+
+def _territory_lifecycle(azione, context: OperatorContext, territory_id: int) -> TerritoryResponse:
+    try:
+        territory = azione(context, territory_id)
+    except TerritoryNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (PlatformAuditUnavailable, TerritoryDeleteUnavailable) as exc:
+        detail = str(exc) if isinstance(exc, TerritoryDeleteUnavailable) else AUDIT_UNAVAILABLE_MESSAGE
+        raise HTTPException(status_code=503, detail=detail) from exc
+    return TerritoryResponse(**territory)
 
 
 @router.post("/territories/{territory_id}/transfer", response_model=TransferResponse)

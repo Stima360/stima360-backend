@@ -144,7 +144,9 @@ def test_01_la_071_e_valida_e_in_coda():
     # impronta della privacy scritti con la richiesta; additiva), con la sua down.
     # SENTINELLA AGGIORNATA DA ELIMINA OPERATORE: 113_operator_logical_delete (marcatore
     # dell'eliminazione logica degli operatori; additiva), con la sua down.
-    assert numeri[numeri.index(76):] == list(range(76, 114))
+    # SENTINELLA AGGIORNATA DA ELIMINA TERRITORIO: 114_territory_logical_delete (marcatore
+    # dell'eliminazione logica dei territori; additiva), con la sua down.
+    assert numeri[numeri.index(76):] == list(range(76, 115))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

@@ -821,6 +821,8 @@ class TerritoryResponse(BaseModel):
     label: str
     created_at: datetime
     updated_at: datetime
+    # ELIMINA TERRITORIO (migration 114): valorizzato se il territorio e' eliminato.
+    deleted_at: datetime | None = None
 
 
 class AssignmentResponse(BaseModel):

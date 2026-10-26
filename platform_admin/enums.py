@@ -352,6 +352,9 @@ ACTION_TERRITORY_CREATE = "platform.territory.create"
 ACTION_TERRITORY_ASSIGNMENT_CREATE = "platform.territory.assignment.create"
 ACTION_TERRITORY_ASSIGNMENT_UPDATE = "platform.territory.assignment.update"
 ACTION_TERRITORY_TRANSFER = "platform.territory.transfer"
+# ELIMINA TERRITORIO (migration 114): eliminazione logica e suo ripristino.
+ACTION_TERRITORY_DELETE = "platform.territory.delete"
+ACTION_TERRITORY_RESTORE = "platform.territory.restore"
 
 # I livelli territoriali, IDENTICI al CHECK `network_territories_kind_chk`
 # della migration 058. Stessa disciplina di sorveglianza degli stati di P27-2:
@@ -710,4 +713,30 @@ OPERATOR_NOT_DELETED_MESSAGE = (
 OPERATOR_DELETE_UNAVAILABLE_MESSAGE = (
     "L'eliminazione degli operatori non e' ancora disponibile su questo database "
     "(migration 113 non applicata). Nessuna modifica e' stata fatta."
+)
+
+
+# ---------------------------------------------------------------------------
+# ELIMINA TERRITORIO - eliminazione logica di un territorio (migration 114)
+# ---------------------------------------------------------------------------
+
+# 409. Un territorio eliminato non riceve assegnazioni (nuove, trasferite o riattivate).
+TERRITORY_DELETED_MESSAGE = (
+    "Il territorio e' eliminato: ripristinalo prima di assegnarlo. "
+    "Nessuna modifica e' stata fatta."
+)
+# 409. Un territorio presidiato instrada i lead del funnel pubblico: e' in uso
+# dalla piattaforma e non si elimina finche' l'assegnazione attiva resta.
+TERRITORY_IN_USE_MESSAGE = (
+    "Il territorio e' presidiato da un'agenzia e riceve i lead: revoca, sospendi "
+    "o trasferisci prima l'assegnazione attiva. Nessuna modifica e' stata fatta."
+)
+# 409. Ripristino di un territorio non eliminato.
+TERRITORY_NOT_DELETED_MESSAGE = (
+    "Il territorio non e' eliminato. Nessuna modifica e' stata fatta."
+)
+# 503. La migration 114 non e' applicata al database.
+TERRITORY_DELETE_UNAVAILABLE_MESSAGE = (
+    "L'eliminazione dei territori non e' ancora disponibile su questo database "
+    "(migration 114 non applicata). Nessuna modifica e' stata fatta."
 )
