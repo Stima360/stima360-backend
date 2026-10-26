@@ -279,13 +279,18 @@ def clear_acting_for_agency(cur, agency_id: int) -> int:
 def membership_exists(cur, agency_id: int, operator_user_id: int) -> bool:
     """True when the operator holds an active membership in that agency.
 
+    ELIMINA OPERATORE: and the account itself is active - an operator excluded
+    or deleted from the network is never a valid assignment target.
+
     Used to validate an assignment target against the agency derived from the
     record being assigned, never against a client-supplied agency.
     """
     cur.execute(
         """
-        SELECT 1 FROM agency_memberships
-         WHERE agency_id = %s AND operator_user_id = %s AND status = 'active'
+        SELECT 1 FROM agency_memberships m
+          JOIN operator_users u ON u.id = m.operator_user_id
+         WHERE m.agency_id = %s AND m.operator_user_id = %s AND m.status = 'active'
+           AND u.status = 'active'
          LIMIT 1
         """,
         (agency_id, operator_user_id),

@@ -57,6 +57,8 @@ from .enums import (
     ACTION_MEMBERSHIP_UPDATE,
     ACTION_OPERATOR_CREATE,
     ACTION_OPERATOR_PLATFORM_ADMIN_UPDATE,
+    ACTION_OPERATOR_DELETE,
+    ACTION_OPERATOR_RESTORE,
     ACTION_OPERATOR_UPDATE,
     ACTION_OWNER_TRANSFER,
     ACTIVE_MEMBERSHIP_ELSEWHERE_MESSAGE,
@@ -70,7 +72,14 @@ from .enums import (
     MEMBERSHIP_EXISTS_MESSAGE,
     MEMBERSHIP_NOT_FOUND_MESSAGE,
     OPERATOR_ACTIVE,
+    OPERATOR_DELETE_NEEDS_DISABLED_MESSAGE,
+    OPERATOR_DELETE_PROTECTED_MESSAGE,
+    OPERATOR_DELETE_UNAVAILABLE_MESSAGE,
+    OPERATOR_DELETED_MESSAGE,
+    OPERATOR_DISABLED,
+    OPERATOR_NOT_DELETED_MESSAGE,
     OPERATOR_NOT_FOUND_MESSAGE,
+    PROTECTED_SUPER_ADMIN_EMAIL,
     OWNER_ALREADY_EXISTS_MESSAGE,
     OWNER_MUST_BE_ACTIVE_MEMBER_MESSAGE,
     OWNER_ROLE_NEEDS_TRANSFER_MESSAGE,
@@ -89,6 +98,7 @@ from .enums import (
 from .exceptions import (
     AgencyNotFound,
     MembershipNotFound,
+    OperatorDeleteUnavailable,
     OperatorNotFound,
     PasswordRequired,
     PlatformConflict,
@@ -256,6 +266,9 @@ def create_agency_operator(
         # Il contratto della credenziale, deciso qui perche' solo qui si sa
         # chi e' quella email. I due rifiuti sono deterministici e non
         # dipendono dall'ordine in cui il client ha messo i campi.
+        if existing is not None and existing.get("deleted_at") is not None:
+            # ELIMINA OPERATORE: un eliminato non entra in un'agenzia.
+            raise PlatformConflict(OPERATOR_DELETED_MESSAGE)
         if existing is not None and password is not None:
             raise PlatformConflict(PASSWORD_ON_EXISTING_IDENTITY_MESSAGE)
         if existing is None and password is None:
@@ -379,6 +392,9 @@ def update_operator(
         if (status_changes and fields["status"] != OPERATOR_ACTIVE
                 and super_admin.is_designated(operator_user_id)):
             raise PlatformConflict(LAST_SUPER_ADMIN_MESSAGE)
+        # ELIMINA OPERATORE: un eliminato non si riattiva senza ripristino.
+        if current.get("deleted_at") is not None and fields.get("status") == OPERATOR_ACTIVE:
+            raise PlatformConflict(OPERATOR_DELETED_MESSAGE)
 
         operator = operators_repository.update_operator(cur, operator_user_id, fields)
         if operator is None:
@@ -396,6 +412,81 @@ def update_operator(
             target_agency_id=None,
             metadata={"changed_fields": sorted(fields),
                       **status_change(current["status"], operator["status"])},
+        )
+        return operator
+
+
+# ---------------------------------------------------------------------------
+# ELIMINA OPERATORE - eliminazione logica (migration 113)
+# ---------------------------------------------------------------------------
+
+def _is_protected_account(operator: dict[str, Any]) -> bool:
+    """Il Super Admin designato e l'account `info@stima360.it` non si eliminano."""
+    return (super_admin.is_designated(operator["id"])
+            or normalize_email(operator.get("email") or "") == PROTECTED_SUPER_ADMIN_EMAIL)
+
+
+def delete_operator(actor: OperatorContext, operator_user_id: int) -> dict[str, Any]:
+    """Elimina LOGICAMENTE un operatore gia' escluso dalla Rete (`disabled`).
+
+    Scrive solo `operator_users.deleted_at`/`deleted_by_user_id` e revoca le
+    sessioni residue, nella stessa transazione e con la sua riga di registro.
+    Membership, contatti, immobili, incarichi, appuntamenti e storico non
+    cambiano: l'eliminato esce dagli elenchi operativi, non accede (e' e resta
+    `disabled`) e non e' assegnabile (le assegnazioni richiedono un account
+    attivo). Ripetere il comando non cambia nulla.
+    """
+    with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_OPERATOR_DELETE)
+        if not operators_repository.elimination_mark_supported(cur):
+            raise OperatorDeleteUnavailable(OPERATOR_DELETE_UNAVAILABLE_MESSAGE)
+        current = operators_repository.lock_operator(cur, operator_user_id)
+        if current is None:
+            raise OperatorNotFound(OPERATOR_NOT_FOUND_MESSAGE)
+        if _is_protected_account(current):
+            raise PlatformConflict(OPERATOR_DELETE_PROTECTED_MESSAGE)
+        if current["status"] != OPERATOR_DISABLED:
+            raise PlatformConflict(OPERATOR_DELETE_NEEDS_DISABLED_MESSAGE)
+        if current.get("deleted_at") is not None:
+            return current
+
+        operator = operators_repository.set_elimination_mark(
+            cur, operator_user_id, deleted_by=actor.user_id)
+        session_repository.revoke_operator_sessions(cur, operator_user_id)
+        audit_then_commit(
+            conn,
+            actor,
+            action=ACTION_OPERATOR_DELETE,
+            target_type=TARGET_TYPE_OPERATOR,
+            target_id=operator_user_id,
+            target_agency_id=None,
+            metadata={"deleted": True},
+        )
+        return operator
+
+
+def restore_deleted_operator(actor: OperatorContext, operator_user_id: int) -> dict[str, Any]:
+    """Annulla l'eliminazione: l'account torna fra gli esclusi (`disabled`).
+    Per farlo accedere di nuovo si usa il «Ripristina operatore» esistente."""
+    with platform_operation_cursor() as (conn, cur):
+        super_admin.lock_super_admin(cur, actor, audit_action=ACTION_OPERATOR_RESTORE)
+        if not operators_repository.elimination_mark_supported(cur):
+            raise OperatorDeleteUnavailable(OPERATOR_DELETE_UNAVAILABLE_MESSAGE)
+        current = operators_repository.lock_operator(cur, operator_user_id)
+        if current is None:
+            raise OperatorNotFound(OPERATOR_NOT_FOUND_MESSAGE)
+        if current.get("deleted_at") is None:
+            raise PlatformConflict(OPERATOR_NOT_DELETED_MESSAGE)
+
+        operator = operators_repository.set_elimination_mark(cur, operator_user_id, deleted_by=None)
+        audit_then_commit(
+            conn,
+            actor,
+            action=ACTION_OPERATOR_RESTORE,
+            target_type=TARGET_TYPE_OPERATOR,
+            target_id=operator_user_id,
+            target_agency_id=None,
+            metadata={"deleted": False},
         )
         return operator
 

@@ -250,8 +250,10 @@ def lookup_stime(cur, agency_id: int, *, search=None, lead_id=None, contact_id=N
 
 def active_membership(cur, agency_id: int, user_id: int) -> bool:
     cur.execute(
-        "SELECT 1 FROM agency_memberships "
-        "WHERE agency_id = %s AND operator_user_id = %s AND status = 'active'",
+        # ELIMINA OPERATORE: anche l'account deve essere attivo.
+        "SELECT 1 FROM agency_memberships m JOIN operator_users u ON u.id = m.operator_user_id "
+        "WHERE m.agency_id = %s AND m.operator_user_id = %s AND m.status = 'active' "
+        "AND u.status = 'active'",
         (agency_id, user_id),
     )
     return cur.fetchone() is not None
@@ -388,14 +390,15 @@ _NOME_OPERATORE = ("NULLIF(BTRIM(CONCAT_WS(' ', {a}.first_name, {a}.last_name)),
 
 
 def agents(cur, agency_id: int) -> list[dict]:
-    """I membri ATTIVI dell'agenzia, per filtro e assegnazione."""
+    """I membri ATTIVI dell'agenzia, per filtro e assegnazione. ELIMINA
+    OPERATORE: solo account attivi (non esclusi ne' eliminati dalla Rete)."""
     cur.execute(
         f"""
         SELECT u.id, m.role,
                COALESCE({_NOME_OPERATORE.format(a='u')}, split_part(u.email, '@', 1)) AS name
           FROM agency_memberships m
           JOIN operator_users u ON u.id = m.operator_user_id
-         WHERE m.agency_id = %s AND m.status = 'active'
+         WHERE m.agency_id = %s AND m.status = 'active' AND u.status = 'active'
          ORDER BY name, u.id
         """,
         (agency_id,),

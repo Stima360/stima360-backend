@@ -142,7 +142,9 @@ def test_01_la_071_e_valida_e_in_coda():
     # del registro della Voce per gli incarichi; additiva), con la sua down.
     # SENTINELLA AGGIORNATA DA C3.5: 112_stime_consenso_marketing_prova (testo della casella e
     # impronta della privacy scritti con la richiesta; additiva), con la sua down.
-    assert numeri[numeri.index(76):] == list(range(76, 113))
+    # SENTINELLA AGGIORNATA DA ELIMINA OPERATORE: 113_operator_logical_delete (marcatore
+    # dell'eliminazione logica degli operatori; additiva), con la sua down.
+    assert numeri[numeri.index(76):] == list(range(76, 114))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

@@ -56,7 +56,7 @@ import { renderModificheTerritoriali } from './rete-modifiche.js'; // AGENZIE-TE
 import { renderRegistro } from './rete-registro.js'; // ADM-7: il registro delle operazioni (ADM-5A)
 import { renderInformative } from './rete-informative.js'; // Fase B: le informative privacy (solo Super Admin)
 // ELIMINAZIONE BLINDATA: i comandi sull'account sono quelli della scheda Operatori.
-import { comandiAccount, nomeAccount } from './rete-agenzia.js';
+import { comandiAccount, nomeAccount, soloOperativi } from './rete-agenzia.js';
 // ELIMINAZIONE-EDIFICIO-1: la terza scheda, «Eliminazioni edifici» (Super Admin).
 // CESTINO-GENERALE-1: la gestione e' SPOSTATA in Cestino › Richieste edifici
 // (stesso codice, `rete-eliminazioni.js`); qui resta solo il collegamento.
@@ -106,7 +106,7 @@ export async function renderRete(container) {
     agenzie: [],
     agenzieStato: '',
     territori: { kind: '', assignment_status: '', offset: 0, items: [] },
-    account: { filtro: 'senza', offset: 0 },
+    account: { filtro: 'senza', offset: 0, eliminati: false },
   };
 
   container.innerHTML = `
@@ -212,6 +212,7 @@ export async function renderRete(container) {
         <select class="input" id="filtro-account" aria-label="Quali account">
           ${selectOptions(FILTRO_ACCOUNT, filtro.filtro)}
         </select>
+        <label class="muted"><input type="checkbox" id="account-mostra-eliminati" ${filtro.eliminati ? 'checked' : ''}> Mostra eliminati</label>
       </div>
       <div id="account-lista" class="rete-operatori"></div>
       <div class="list-pager">
@@ -236,17 +237,22 @@ export async function renderRete(container) {
       [
         { label: 'Account', render: (r) => `<strong>${escapeHtml(nomeAccount(r.operator))}</strong>${comandi.badgePiattaforma(r.operator)}` },
         { label: 'Email', render: (r) => escapeHtml(r.operator.email) },
-        { label: 'Accesso', render: (r) => renderBadge(labelOf(OPERATOR_STATUS_LABELS, r.operator.status), OPERATOR_STATUS_TONE[r.operator.status] || 'gray') },
+        { label: 'Accesso', render: (r) => renderBadge(labelOf(OPERATOR_STATUS_LABELS, r.operator.status), OPERATOR_STATUS_TONE[r.operator.status] || 'gray') + comandi.badgeEliminato(r.operator) },
         { label: 'Agenzia attiva', render: (r) => agenziaDi(r) },
         { label: '', render: (r) => [comandi.bottoneAccesso(r.operator), comandi.bottonePiattaforma(r.operator)].filter(Boolean).join(' ') },
       ],
-      righe,
+      soloOperativi(righe, filtro.eliminati),
       { emptyMessage: filtro.filtro === 'senza' ? 'Nessun account senza agenzia attiva.' : 'Nessun account.' },
     );
+    contentEl.querySelector('#account-mostra-eliminati').addEventListener('change', (e) => {
+      filtro.eliminati = e.target.checked;
+      caricaAccount();
+    });
     listaEl.querySelectorAll('[data-azione]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const riga = righe.find((r) => String(r.operator.id) === String(btn.dataset.operatore));
         if (!riga) return;
+        if (comandi.gestisciEliminazione(btn.dataset.azione, riga)) return;
         if (btn.dataset.azione === 'disabilita') return comandi.cambiaAccesso(riga, 'disabled');
         if (btn.dataset.azione === 'riattiva') return comandi.cambiaAccesso(riga, 'active');
         if (btn.dataset.azione === 'piattaforma-concedi') return comandi.cambiaRuoloPiattaforma(riga, true);

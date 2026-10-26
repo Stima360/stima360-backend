@@ -61,6 +61,7 @@ from .exceptions import (
     AgencyNotFound,
     AgencySlugConflict,
     MembershipNotFound,
+    OperatorDeleteUnavailable,
     OperatorNotFound,
     PasswordRequired,
     PlatformAuditUnavailable,
@@ -383,7 +384,8 @@ def list_operators(
     )
     return [
         NetworkOperatorResponse(
-            operator=OperatorResponse(**{c: row[c] for c in OPERATOR_COLUMNS}),
+            operator=OperatorResponse(**{c: row[c] for c in OPERATOR_COLUMNS},
+                                      deleted_at=row.get("deleted_at")),
             active_agency_id=row["active_agency_id"],
         )
         for row in rows
@@ -475,6 +477,39 @@ def update_operator(
             status_code=503, detail=AUDIT_UNAVAILABLE_MESSAGE
         ) from exc
     return OperatorResponse(**operator)
+
+
+# ELIMINA OPERATORE (migration 113): eliminazione logica e suo annullamento.
+# Solo il Super Admin designato (`require_super_admin_context` e, nel service,
+# `lock_super_admin`); le guardie stanno nel service. Nessuna DELETE SQL.
+@router.post("/operators/{operator_user_id}/delete", response_model=OperatorResponse)
+def delete_operator(
+    operator_user_id: int,
+    context: OperatorContext = Depends(require_super_admin_context),
+) -> OperatorResponse:
+    return _operator_lifecycle(operators_service.delete_operator, context, operator_user_id)
+
+
+@router.post("/operators/{operator_user_id}/restore", response_model=OperatorResponse)
+def restore_deleted_operator(
+    operator_user_id: int,
+    context: OperatorContext = Depends(require_super_admin_context),
+) -> OperatorResponse:
+    return _operator_lifecycle(operators_service.restore_deleted_operator, context, operator_user_id)
+
+
+def _operator_lifecycle(azione, context: OperatorContext, operator_user_id: int) -> OperatorResponse:
+    try:
+        operator = azione(context, operator_user_id)
+    except OperatorNotFound as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except PlatformConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (PlatformAuditUnavailable, OperatorDeleteUnavailable) as exc:
+        detail = str(exc) if isinstance(exc, OperatorDeleteUnavailable) else AUDIT_UNAVAILABLE_MESSAGE
+        raise HTTPException(status_code=503, detail=detail) from exc
+    return OperatorResponse(**{c: operator[c] for c in OPERATOR_COLUMNS},
+                            deleted_at=operator.get("deleted_at"))
 
 
 @router.patch("/operators/{operator_user_id}/platform-admin", response_model=OperatorResponse)
@@ -576,6 +611,7 @@ def _agency_operator(row: dict) -> AgencyOperatorResponse:
         for key in OPERATOR_COLUMNS if key != "id"
     }
     operator["id"] = row["operator_user_id"]
+    operator["deleted_at"] = row.get("deleted_at")
     membership = {key: row[key] for key in MEMBERSHIP_COLUMNS}
     return AgencyOperatorResponse(
         operator=OperatorResponse(**operator),

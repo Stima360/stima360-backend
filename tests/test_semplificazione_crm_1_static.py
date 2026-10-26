@@ -52,12 +52,15 @@ def test_01_la_107_e_valida_additiva_e_l_ultima():
     # della Voce per gli incarichi; additiva, nessun dato), ora l'ultima
     # SENTINELLA AGGIORNATA DA C3.5: poi la sola 112 (la prova del consenso marketing
     # scritta con la richiesta: due colonne nullable di `stime`, nessun backfill), ora l'ultima
-    assert tutte[-1].version == "112_stime_consenso_marketing_prova"
-    assert tutte[-2].version == "111_voice_mandate_intents"
-    assert tutte[-3].version == "110_consent_capture"
-    assert tutte[-4].version == "109_consent_channels"
-    assert tutte[-5].version == "108_followup_contact_journey"
-    ultima = tutte[-6]
+    # SENTINELLA AGGIORNATA DA ELIMINA OPERATORE: poi la sola 113 (eliminazione logica degli
+    # operatori: due colonne nullable di `operator_users`, nessun backfill), ora l'ultima
+    assert tutte[-1].version == "113_operator_logical_delete"
+    assert tutte[-2].version == "112_stime_consenso_marketing_prova"
+    assert tutte[-3].version == "111_voice_mandate_intents"
+    assert tutte[-4].version == "110_consent_capture"
+    assert tutte[-5].version == "109_consent_channels"
+    assert tutte[-6].version == "108_followup_contact_journey"
+    ultima = tutte[-7]
     assert ultima.version == "107_visita_immobile_incarico"
     assert ultima.down_path is not None and not ultima.non_transactional
     assert runner.validate_migration(ultima) == []

@@ -156,6 +156,9 @@ ACTION_OPERATOR_UPDATE = "platform.operator.update"
 # non e' una modifica di routine dell'operatore.
 ACTION_OPERATOR_PLATFORM_ADMIN_UPDATE = "platform.operator.platform_admin.update"
 ACTION_MEMBERSHIP_UPDATE = "platform.membership.update"
+# ELIMINA OPERATORE (migration 113): eliminazione logica e suo ripristino.
+ACTION_OPERATOR_DELETE = "platform.operator.delete"
+ACTION_OPERATOR_RESTORE = "platform.operator.restore"
 ACTION_OWNER_TRANSFER = "platform.owner.transfer"
 
 # I tre ruoli di membership, IDENTICI al CHECK `agency_memberships_role_chk`
@@ -675,3 +678,36 @@ ACTION_CONSENT_NOTICE_CLOSE = "platform.consent_notice.close"
 CONSENT_NOTICE_VERSION_MAX = 60
 CONSENT_NOTICE_CONTEXT_MAX = 200
 CONSENT_NOTICE_PURPOSES = ("marketing", "privacy_terms")
+
+
+# ---------------------------------------------------------------------------
+# ELIMINA OPERATORE - eliminazione logica di un account (migration 113)
+# ---------------------------------------------------------------------------
+
+# L'account del Super Admin generale: non si elimina MAI, qualunque sia la
+# designazione configurata. Confronto sull'email normalizzata.
+PROTECTED_SUPER_ADMIN_EMAIL = "info@stima360.it"
+
+# 409.
+OPERATOR_DELETE_PROTECTED_MESSAGE = (
+    "L'account del Super Admin generale non si elimina. Nessuna modifica e' stata fatta."
+)
+# 409. Si elimina un account gia' escluso dalla Rete (disattivato).
+OPERATOR_DELETE_NEEDS_DISABLED_MESSAGE = (
+    "Un operatore si elimina solo dopo essere stato escluso dalla Rete. "
+    "Nessuna modifica e' stata fatta."
+)
+# 409. Un eliminato non torna attivo, ne' entra in un'agenzia, senza ripristino.
+OPERATOR_DELETED_MESSAGE = (
+    "L'operatore e' eliminato: ripristinalo prima di riattivarlo o di assegnarlo "
+    "a un'agenzia. Nessuna modifica e' stata fatta."
+)
+# 409. Ripristino di un account che non e' eliminato.
+OPERATOR_NOT_DELETED_MESSAGE = (
+    "L'operatore non e' eliminato. Nessuna modifica e' stata fatta."
+)
+# 503. La migration 113 non e' applicata al database.
+OPERATOR_DELETE_UNAVAILABLE_MESSAGE = (
+    "L'eliminazione degli operatori non e' ancora disponibile su questo database "
+    "(migration 113 non applicata). Nessuna modifica e' stata fatta."
+)

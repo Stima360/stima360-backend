@@ -481,6 +481,8 @@ class OperatorResponse(BaseModel):
     last_login_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    # ELIMINA OPERATORE (migration 113): valorizzato se l'account e' eliminato.
+    deleted_at: datetime | None = None
 
 
 class NetworkOperatorResponse(BaseModel):

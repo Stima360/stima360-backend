@@ -26,6 +26,7 @@ nel report.
 from __future__ import annotations
 
 import ast
+import re
 import inspect
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -286,6 +287,10 @@ def test_a8_the_repository_deletes_nothing():
         (ROOT / "platform_admin" / "operators_repository.py").read_text()
     )
     sql = " ".join(_sql_literals(tree)).upper()
+    # SENTINELLA AGGIORNATA DA ELIMINA OPERATORE: l'eliminazione e' LOGICA, un
+    # marcatore su `operator_users` (migration 113). Le sole colonne
+    # `deleted_at`/`deleted_by_user_id` sono ammesse; un DELETE no.
+    sql = re.sub(r"\bDELETED_(AT|BY_USER_ID)\b", "", sql)
     assert "DELETE" not in sql, sql
     assert "TRUNCATE" not in sql, sql
     functions = [
@@ -315,6 +320,11 @@ class ProjectingCursor:
         projection = re.search(r"SELECT (.*?) FROM ", self.sql, re.S).group(1)
         items = []
         for item in (part.strip() for part in projection.split(",")):
+            # ELIMINA OPERATORE: il marcatore della 113, letto via `to_jsonb(u)`.
+            marcatore = re.fullmatch(r"\(to_jsonb\((u)\) ->> '(\w+)'\)::timestamptz AS (\w+)", item, re.I)
+            if marcatore:
+                items.append(marcatore.groups())
+                continue
             found = re.fullmatch(r"(u|m)\.(\w+)(?:\s+AS\s+(\w+))?", item, re.I)
             assert found, f"proiezione inattesa: {item!r}"
             table, column, alias = found.groups()
@@ -322,7 +332,7 @@ class ProjectingCursor:
         rows = []
         for operator, membership in self._pairs:
             source = {"u": operator, "m": membership}
-            rows.append(dict((name, source[table][column]) for table, column, name in items))
+            rows.append(dict((name, source[table].get(column)) for table, column, name in items))
         return rows
 
 
@@ -355,7 +365,9 @@ def test_a9_the_roster_keeps_the_operator_apart_from_its_membership():
     assert response["membership"]["updated_at"] == d
     # stessa forma pubblica di prima: le due proiezioni, con i loro campi
     assert set(response) == {"operator", "membership"}
-    assert set(response["operator"]) == set(operators_repository.OPERATOR_COLUMNS)
+    # + `deleted_at` (ELIMINA OPERATORE, 113): il marcatore, NULL se non eliminato
+    assert set(response["operator"]) == set(operators_repository.OPERATOR_COLUMNS) | {"deleted_at"}
+    assert response["operator"]["deleted_at"] is None
     assert set(response["membership"]) == set(operators_repository.MEMBERSHIP_COLUMNS)
     assert response["operator"]["id"] == operator["id"]
     assert response["membership"]["id"] == membership["id"]
@@ -1505,6 +1517,7 @@ def test_g1_create_returns_201_with_identity_and_membership_separated(client):
     assert set(body["operator"]) == {
         "id", "email", "first_name", "last_name", "status",
         "is_platform_admin", "last_login_at", "created_at", "updated_at",
+        "deleted_at",  # ELIMINA OPERATORE (113): NULL finche' l'account non e' eliminato
     }
     assert set(body["membership"]) == {
         "id", "agency_id", "operator_user_id", "role", "status",
