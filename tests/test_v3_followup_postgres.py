@@ -1,9 +1,9 @@
 """V3 - FOLLOW-UP PROPRIETARI 180 GIORNI, su PostgreSQL usa-e-getta.
 
 Motore (`journey_tick`) e dispatcher VERI, provider finto (`null`): nessuna
-email parte. I testi sono TESTI DI PROVA del test (i testi approvati dal
-titolare non sono ancora nel registro), registrati con lo stesso meccanismo
-del codice (`templates.templates_v3`).
+email parte. I testi sono TESTI DI PROVA del test, registrati con lo stesso
+meccanismo del codice (`templates.templates_v3`); i 16 testi approvati li usa
+la prova generale (`test_v3_collaudo_generale_postgres.py`).
 
   01  solo proprietari/venditori VERIFICATI: ruolo del contatto o immobile
       collegato come owner/seller; fuori acquirenti, richiedenti dal sito
