@@ -346,12 +346,15 @@ def test_g1_la_108_e_valida_con_la_down_ed_e_l_ultima():
     # operatori: due colonne nullable di `operator_users`, nessun backfill)
     # SENTINELLA AGGIORNATA DA ELIMINA TERRITORIO: poi la sola 114 (eliminazione logica dei
     # territori: due colonne nullable di `network_territories`, nessun backfill), ora l'ultima
-    assert tutte[-1].version == "114_territory_logical_delete"
-    assert tutte[-2].version == "113_operator_logical_delete"
-    assert tutte[-3].version == "112_stime_consenso_marketing_prova"
-    assert tutte[-4].version == "111_voice_mandate_intents"
-    assert tutte[-5].version == "110_consent_capture" and tutte[-6].version == "109_consent_channels"
-    assert tutte[-7] is ultima
+    # SENTINELLA AGGIORNATA DA BLOCCO-1B: poi la sola 115 (il logo dell'agenzia: una tabella
+    # nuova `agency_logos`, nessun backfill, down che rifiuta di perdere loghi), ora l'ultima
+    assert tutte[-1].version == "115_agency_logos"
+    assert tutte[-2].version == "114_territory_logical_delete"
+    assert tutte[-3].version == "113_operator_logical_delete"
+    assert tutte[-4].version == "112_stime_consenso_marketing_prova"
+    assert tutte[-5].version == "111_voice_mandate_intents"
+    assert tutte[-6].version == "110_consent_capture" and tutte[-7].version == "109_consent_channels"
+    assert tutte[-8] is ultima
     assert ultima.down_available
     assert runner.validate_migration(ultima) == []
     su = (ROOT / "migrations" / "108_followup_contact_journey.sql").read_text(encoding="utf-8")

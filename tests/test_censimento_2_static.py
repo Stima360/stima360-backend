@@ -54,22 +54,25 @@ def test_m01_la_100_e_valida_per_il_runner_e_l_ultima():
     # operatori: due colonne nullable di `operator_users`, nessun backfill)
     # SENTINELLA AGGIORNATA DA ELIMINA TERRITORIO: poi la sola 114 (eliminazione logica dei
     # territori: due colonne nullable di `network_territories`, nessun backfill), ora l'ultima
-    assert tutte[-1].version == "114_territory_logical_delete"
-    assert tutte[-2].version == "113_operator_logical_delete"
-    assert tutte[-3].version == "112_stime_consenso_marketing_prova"
-    assert tutte[-4].version == "111_voice_mandate_intents"
-    assert tutte[-5].version == "110_consent_capture"
-    assert tutte[-6].version == "109_consent_channels"
-    assert tutte[-7].version == "108_followup_contact_journey"
-    assert tutte[-8].version == "107_visita_immobile_incarico"
-    assert tutte[-9].version == "106_sale_appointments"
-    assert tutte[-10].version == "105_adm_d15_no_delete_admin_entities"
-    assert tutte[-11].version == "104_agenzie_c2_territorial_change_requests"
-    assert tutte[-12].version == "103_zona_3_property_position_verification"
-    assert tutte[-13].version == "102_territorio_4_position_verification"
-    assert tutte[-14].version == "101_eliminazione_edificio_1"
-    m100 = tutte[-15]
-    assert m100.version == VERSIONE and tutte[-16].version == "099_voice_undo"
+    # SENTINELLA AGGIORNATA DA BLOCCO-1B: poi la sola 115 (il logo dell'agenzia: una tabella
+    # nuova `agency_logos`, nessun backfill, down che rifiuta di perdere loghi), ora l'ultima
+    assert tutte[-1].version == "115_agency_logos"
+    assert tutte[-2].version == "114_territory_logical_delete"
+    assert tutte[-3].version == "113_operator_logical_delete"
+    assert tutte[-4].version == "112_stime_consenso_marketing_prova"
+    assert tutte[-5].version == "111_voice_mandate_intents"
+    assert tutte[-6].version == "110_consent_capture"
+    assert tutte[-7].version == "109_consent_channels"
+    assert tutte[-8].version == "108_followup_contact_journey"
+    assert tutte[-9].version == "107_visita_immobile_incarico"
+    assert tutte[-10].version == "106_sale_appointments"
+    assert tutte[-11].version == "105_adm_d15_no_delete_admin_entities"
+    assert tutte[-12].version == "104_agenzie_c2_territorial_change_requests"
+    assert tutte[-13].version == "103_zona_3_property_position_verification"
+    assert tutte[-14].version == "102_territorio_4_position_verification"
+    assert tutte[-15].version == "101_eliminazione_edificio_1"
+    m100 = tutte[-16]
+    assert m100.version == VERSIONE and tutte[-17].version == "099_voice_undo"
     assert m100.down_available and not m100.non_transactional
     assert runner.validate_migration(m100) == []
     assert not re.search(r"^\s*(BEGIN|COMMIT)\s*;", _eseguibile(SU), re.M)

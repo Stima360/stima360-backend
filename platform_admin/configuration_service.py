@@ -162,7 +162,11 @@ def update_configuration(
     """
     with platform_operation_cursor() as (conn, cur):
         super_admin.lock_super_admin(cur, actor, audit_action=ACTION_AGENCY_CONFIGURATION_UPDATE)
-        agency = agencies_repository.get_agency(cur, agency_id)
+        # BLOCCO-1B: la riga e' BLOCCATA. `settings` ha un secondo scrittore
+        # (`agency_profile`, chiave `report_profile`), che blocca la stessa
+        # riga: senza il lock un merge letto prima della sua scrittura la
+        # cancellerebbe al commit.
+        agency = agencies_repository.lock_agency(cur, agency_id)
         if agency is None:
             raise AgencyNotFound(AGENCY_NOT_FOUND_MESSAGE)
 

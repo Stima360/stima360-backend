@@ -281,6 +281,9 @@ ACTION_AGENCY_CONFIGURATION_UPDATE = "platform.agency.configuration.update"
 
 # I campi che la configurazione possiede. Tutto cio' che sta in `settings` e
 # non e' qui dentro e' roba legacy: non viene esposta, non viene cancellata.
+# BLOCCO-1B: unica eccezione nota, `report_profile` - i dati dell'agenzia per i
+# report - ha il suo contratto in `agency_profile.schemas` e il suo scrittore in
+# `agency_profile.service`; qui resta fuori dalla risposta e intatta nel merge.
 CONFIGURATION_FIELDS = ("timezone", "locale")
 
 # Il fuso orario, come identificatore IANA. Validato con `zoneinfo`, che e'

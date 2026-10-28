@@ -337,6 +337,11 @@ TENANT_PREFIXES = (
     # sessione (`require_operator` su ogni rotta, mai dal client) - quindi
     # dichiara il cookie e SOLO il cookie, come verifica il test 6.
     "/api/trash",
+    # SENTINELLA AGGIORNATA DA BLOCCO-1B: dati dell'agenzia e logo. Superficie
+    # operatore come le altre - l'agenzia viene dalla sessione (`require_operator`
+    # su ogni rotta, corpo chiuso senza agency_id) - quindi dichiara il cookie e
+    # SOLO il cookie, come verifica il test 6.
+    "/api/agency-profile",
 )
 
 

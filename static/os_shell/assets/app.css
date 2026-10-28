@@ -1577,3 +1577,27 @@ a.census-unit-main { text-decoration: none; }
   .comm-badge { margin-left: 36px; }
   .comm-actions .btn { flex: 1 1 100%; }
 }
+
+/* BLOCCO-1B: «Dati agenzia e logo» (#/agenzia). Il logo non si deforma mai:
+   larghezza e altezza seguono le proporzioni del file entro un riquadro. */
+.agency-profile-page { display: grid; gap: 16px; max-width: 880px; }
+.agency-profile-page .card { padding: 16px; }
+.agency-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.agency-preview-label { font-size: 13px; color: var(--muted); margin: 8px 0 6px; }
+.agency-preview { border: 1px dashed var(--border); border-radius: var(--radius); padding: 12px; background: #fff; }
+.agency-preview-draft { border-color: #e0b54a; }
+.agency-preview-note { font-size: 13px; margin: 6px 0 0; }
+.agency-header { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.agency-header-logo, .agency-logo-preview {
+  display: block; width: auto; height: auto; max-width: 220px; max-height: 72px; object-fit: contain; flex: 0 0 auto;
+}
+.agency-logo-preview { max-height: 120px; max-width: 280px; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; background: #fff; }
+.agency-header-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.agency-header-name { font-size: 17px; }
+.agency-header-line { font-size: 13px; color: var(--muted); }
+.agency-logo-current { margin-bottom: 10px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.user-menu-actions .user-menu-link { display: block; width: 100%; margin-bottom: 8px; text-align: center; }
+@media (max-width: 767px) {
+  .agency-header { flex-direction: column; align-items: flex-start; }
+}

@@ -51,6 +51,8 @@ import { renderIncaricoDettaglio } from './views/incarico-dettaglio.js';
 import { renderCestino } from './views/cestino.js';
 // STIMA Voice Fase 6: la pagina «Voce», nascosta finche' il server non la abilita.
 import { renderVoce } from './views/voce.js';
+// BLOCCO-1B: «Dati agenzia e logo», aperta dal menu utente (nessuna voce in sidebar).
+import { renderAgenziaDati } from './views/agenzia-dati.js';
 import { voiceStatus } from './voice/voice-api.js';
 
 const SECTIONS = [
@@ -110,6 +112,10 @@ const SEZIONE_RETE = { name: 'rete', label: 'Rete' };
 // voce. La rotta e' registrata sempre: la vista stessa chiede lo stato e, da
 // spenta, mostra solo un avviso, senza pulsanti.
 const SEZIONE_VOCE = { name: 'voce', label: 'Voce' };
+
+// BLOCCO-1B - «Dati agenzia e logo», che NON sta in SECTIONS: si apre dal menu
+// utente. Qui solo per il titolo della pagina.
+const SEZIONE_AGENZIA = { name: 'agenzia', label: 'Dati agenzia e logo' };
 
 // P28 - dove finisce un tenant rimandato indietro dalla Rete.
 //
@@ -223,6 +229,9 @@ registerRoute('cestino', (container) => {
 });
 // STIMA Voice Fase 6: `#/voce` (vedi SEZIONE_VOCE).
 registerRoute('voce', (container) => renderVoce(container));
+// BLOCCO-1B: `#/agenzia`. Rotta di tenant come le altre (la guardia sotto rimanda
+// alla Rete chi non opera in un'agenzia); i permessi li decide il server.
+registerRoute('agenzia', (container) => renderAgenziaDati(container));
 
 initRouter(contentEl, {
   // P26-4: il router butta un risultato che arriva dopo un cambio di sessione.
@@ -258,7 +267,7 @@ initRouter(contentEl, {
   onNavigate(name, params = []) {
     // ZONA: la mappa (#/edifici/mappa e le sue pagine) evidenzia «Zona», non «Edifici»
     const nome = name === 'edifici' && params[0] === 'mappa' ? 'zona' : name;
-    const active = [...SECTIONS, SEZIONE_RETE, SEZIONE_VOCE].find((s) => s.name === nome);
+    const active = [...SECTIONS, SEZIONE_RETE, SEZIONE_VOCE, SEZIONE_AGENZIA].find((s) => s.name === nome);
     pageTitle.textContent = active ? active.label : 'Pagina non trovata';
     for (const btn of navEl.querySelectorAll('[data-route]')) {
       btn.classList.toggle('active', btn.dataset.route === nome);

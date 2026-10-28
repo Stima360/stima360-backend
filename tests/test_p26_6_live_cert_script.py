@@ -2096,6 +2096,42 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 404, b'{"detail":"Elemento non trovato nel Cestino","code":"NOT_FOUND"}')
         return self._reply(method, path, 404, b'{"detail":"Not Found"}')
 
+    def _agency_profile(self, method, path, agency, payload):
+        """BLOCCO-1B. Il doppio e' `/api/agency-profile`: l'agenzia dalla sessione
+        (la query `agency_id` e' ignorata come fa FastAPI), il corpo chiuso
+        (`extra=forbid` del modello VERO). L'agenzia 1 ha un logo, la 2 no.
+        Rotto `isolation`: profilo e logo sono quelli dell'altra agenzia.
+        Rotto `logo`: il profilo e' giusto, il logo e' quello dell'altra."""
+        import hashlib
+        import json as _json
+
+        from agency_profile.schemas import AgencyProfile
+
+        loghi = {1: b"logo-agenzia-1"}
+        rotto = self._broken("isolation", "agency_profile")
+        vista = (3 - agency) if rotto and agency in (1, 2) else agency
+        percorso = path.split("?")[0]
+        if percorso == "/api/agency-profile" and method == "GET":
+            logo = loghi.get(vista)
+            return self._reply(method, path, 200, _json.dumps({
+                "agency_id": vista, "agency_name": f"Agenzia {vista}", "configured": False,
+                "profile": {}, "updated_at": None, "can_edit": True,
+                "logo": None if logo is None else {"sha256": hashlib.sha256(logo).hexdigest()},
+            }).encode())
+        if percorso == "/api/agency-profile" and method == "PUT":
+            try:
+                AgencyProfile(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            return self._reply(method, path, 200, b"{}")
+        if percorso == "/api/agency-profile/logo" and method == "GET":
+            if self._broken("logo", "agency_profile") and agency in (1, 2):
+                vista = 3 - agency
+            if vista in loghi:
+                return self._reply(method, path, 200, loghi[vista])
+            return self._reply(method, path, 404, b'{"detail":"Nessun logo caricato."}')
+        return self._reply(method, path, 403, b'{"detail":"non consentito"}')
+
     def _calendar_sync(self, method, path, agency, payload):
         """A30-9B. Il doppio riproduce il CONTENIMENTO, mai un consenso Google.
 
@@ -2419,6 +2455,10 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1
         if path.startswith("/api/trash"):
             return self._trash(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-1B
+        if path.startswith("/api/agency-profile"):
+            return self._agency_profile(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3292,6 +3332,41 @@ def test_13c_voice_is_certified_rejection_only(monkeypatch):
     assert sum(1 for k, _ in voce if k == cert.PASS) >= 13 + 13 + 3 * 2, voce
     assert {i for _, i in voce} >= {"VOICE-status-A", "VOICE-status-B", "VOICE-corpo-chiuso-A-B",
                                     "VOICE-corpo-chiuso-B-A", "VOICE-comando-altrui-A", "VOICE-comando-altrui-B"}
+
+
+def test_13g_agency_profile_is_certified_reads_and_rejections_only(monkeypatch):
+    """BLOCCO-1B: la sezione AGENCY_PROFILE gira davvero nella matrice e ogni sua
+    prova e' un PASS sull'app com'e': 4 rotte anonime + 4 Basic + 3 domande per
+    ciascuna agenzia + la guardia sui profili invariati."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("AGENCY_PROFILE-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 4 + 4 + 3 * 2 + 1, righe
+    assert not any("DELETE" in i for _, i in righe), righe
+    assert {i for _, i in righe} >= {"AGENCY_PROFILE-lettura-A-non-vede-B", "AGENCY_PROFILE-corpo-chiuso-B-A",
+                                     "AGENCY_PROFILE-logo-A-non-vede-B", "AGENCY_PROFILE-logo-B-non-vede-A"}
+
+
+def test_13h_agency_profile_leaking_the_other_agency_fails_the_matrix(monkeypatch):
+    """La contropartita: un'app che mostra profilo o logo dell'altra agenzia fa
+    fallire la matrice, proprio sulle prove AGENCY_PROFILE."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="agency_profile"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("AGENCY_PROFILE-lettura") for i in falliti), falliti
+
+
+def test_13i_agency_profile_serving_the_other_logo_fails_the_matrix(monkeypatch):
+    """Profilo giusto, logo dell'altra agenzia (o un logo di ripiego dove non ce
+    n'e'): la matrice fallisce sulla prova del logo."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"logo"}, only="agency_profile"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("AGENCY_PROFILE-logo") for i in falliti), falliti
 
 
 def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):
@@ -6073,6 +6148,16 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("property_territorial_change_requests", "decided_by_user_id", "operator_users", "SET NULL"),
     ("property_territorial_change_events", "actor_agency_id", "agencies", "RESTRICT"),
     ("property_territorial_change_events", "actor_user_id", "operator_users", "SET NULL"),
+    # SENTINELLA AGGIORNATA DA BLOCCO-1B, migration 115 (il logo dell'agenzia): UN
+    # riferimento non-CASCADE nuovo. ESAMINATO.
+    #
+    #   agency_logos.agency_id  -> agencies  NO ACTION
+    #
+    # Un logo per agenzia, il tenant e' la chiave. CONSEGUENZA PER IL CLEANUP,
+    # dichiarata: lo scrive solo agency_profile/service.py (PUT /logo), che la
+    # matrice non percorre (solo rifiuti e letture); se un'agenzia di prova ne
+    # avesse uno, il preflight lo incontra come RIFIUTO, non come cancellazione.
+    ("agency_logos", "agency_id", "agencies", "NO ACTION"),
 })
 
 

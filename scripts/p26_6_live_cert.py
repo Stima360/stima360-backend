@@ -671,6 +671,19 @@ DOMAINS = (
              "Admin e un cookie proprio; vede solo gli immobili concessi",
     ),
     Domain(
+        "AGENCY_PROFILE", "/api/agency-profile",
+        # BLOCCO-1B. SOLO RIFIUTI E LETTURE, come TRASH: la matrice non scrive i
+        # dati ne' il logo di un'agenzia di TEST. L'agenzia viene SOLO dalla
+        # sessione: la prova cross-tenant e' che ogni sessione legge il profilo
+        # e il logo della propria agenzia anche con l'altra nella query, e che
+        # un `agency_id` nel corpo viene rifiutato (422) prima di ogni scrittura.
+        certifier="agency_profile",
+        api_delete=False,
+        note="quattro rotte sondate (la DELETE no): anonimo e Basic -> 401, profilo e logo solo "
+             "della propria agenzia (agency_id nella query ignorato), agency_id "
+             "nel corpo -> 422, profili di A e B invariati",
+    ),
+    Domain(
         "LEGACY_ADMIN", "/api/admin",
         listing="/api/admin/stime?day=oggi",
         note="le sette route /api/admin che toccano dati di tenant, migrate "
@@ -7169,6 +7182,89 @@ def certify_trash(report, http, cert, domain, jars, owned, context) -> None:
         "TRASH-contatori-invariati",
         None not in prima.values() and dopo == prima,
         f"contatori del Cestino prima e dopo la sezione: {prima} -> {dopo} (attesi identici)",
+    )
+
+
+#: `DELETE /logo` non viene sondata nemmeno da anonimo: fuori dal cleanup la
+#: matrice non invia mai una DELETE (lo verificano le prove 86m e a30_01).
+AGENCY_PROFILE_OPERAZIONI = (("GET", ""), ("PUT", ""), ("GET", "/logo"), ("PUT", "/logo"))
+
+
+def certify_agency_profile(report, http, cert, domain, jars, owned, context) -> None:
+    """AGENCY_PROFILE (BLOCCO-1B): nessuna scrittura riuscita tentata.
+
+        anonimo, Basic            -> 401 su GET/PUT profilo e GET/PUT logo (mount;
+                                     la DELETE non si sonda: niente DELETE fuori dal cleanup)
+        GET ?agency_id= dell'altra -> 200, agency_id della PROPRIA agenzia
+        PUT con agency_id nel corpo -> 422 (corpo chiuso, nessuna scrittura)
+        GET /logo                 -> il PROPRIO logo (impronta del proprio
+                                     profilo) o 404: mai quello dell'altra
+        profili di A e B prima e dopo la sezione -> identici
+    """
+    import hashlib
+
+    base = domain.prefix
+
+    def agenzia_id(etichetta):
+        valore = (context.get("agencies") or {}).get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in AGENCY_PROFILE_OPERAZIONI:
+        percorso = base + suffisso
+        risposta = http.request(metodo, percorso)
+        report.check(f"AGENCY_PROFILE-anonimo-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"AGENCY_PROFILE-basic-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+
+    def profilo(etichetta, query=""):
+        risposta = http.request("GET", f"{base}{query}", jar=jars[etichetta])
+        return risposta, (risposta.json() if risposta.status == 200 else None)
+
+    prima = {e: profilo(e)[1] for e in ("A", "B")}
+
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        mia, sua = agenzia_id(etichetta), agenzia_id(altro)
+        risposta, corpo = profilo(etichetta, f"?agency_id={sua}")
+        report.check(
+            f"AGENCY_PROFILE-lettura-{etichetta}-non-vede-{altro}",
+            risposta.status == 200 and isinstance(corpo, dict) and corpo.get("agency_id") == mia,
+            f"{etichetta}: GET {base}?agency_id=<{altro}> -> {risposta.status}, agenzia "
+            f"{corpo.get('agency_id') if isinstance(corpo, dict) else None} (attesa la propria: {mia})",
+        )
+        risposta = http.request("PUT", base, jar=jars[etichetta],
+                                payload={"display_name": "matrice ostile", "agency_id": sua})
+        report.check(
+            f"AGENCY_PROFILE-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+            f"{etichetta}: PUT {base} con agency_id dell'altra agenzia nel corpo -> "
+            f"{risposta.status} (atteso 422: nessuna scrittura)",
+        )
+        # L'impronta attesa viene SOLO da un profilo verificato come proprio:
+        # un profilo dell'altra agenzia renderebbe "atteso" il logo sbagliato.
+        letto = prima[etichetta] if isinstance(prima[etichetta], dict) else {}
+        attendibile = letto.get("agency_id") == mia
+        proprio = letto.get("logo") if attendibile else None
+        risposta = http.request("GET", f"{base}/logo?agency_id={sua}", jar=jars[etichetta])
+        if not attendibile:
+            esito, atteso = False, "un profilo della propria agenzia da cui ricavare il logo"
+        elif proprio:
+            impronta = hashlib.sha256(risposta.body or b"").hexdigest()
+            esito = risposta.status == 200 and impronta == proprio.get("sha256")
+            atteso = "il proprio logo"
+        else:
+            esito, atteso = risposta.status == 404, "404: nessun logo di ripiego"
+        report.check(
+            f"AGENCY_PROFILE-logo-{etichetta}-non-vede-{altro}", esito,
+            f"{etichetta}: GET {base}/logo?agency_id=<{altro}> -> {risposta.status} (atteso {atteso})",
+        )
+
+    dopo = {e: profilo(e)[1] for e in ("A", "B")}
+    report.check(
+        "AGENCY_PROFILE-invariato",
+        None not in prima.values() and dopo == prima,
+        "profili di A e B prima e dopo la sezione (attesi identici: la matrice non scrive)",
     )
 
 
