@@ -684,6 +684,20 @@ DOMAINS = (
              "nel corpo -> 422, profili di A e B invariati",
     ),
     Domain(
+        "PROPERTY_VALUATIONS", "/api/property-valuations",
+        # BLOCCO-2A. SOLO RIFIUTI E LETTURE: la matrice non crea, non modifica e
+        # non approva valutazioni di TEST. L'agenzia viene SOLO dalla sessione:
+        # la prova cross-tenant e' che l'immobile dell'altra agenzia non e'
+        # raggiungibile (404, o 503 se la 116 non e' applicata) ne' in lettura
+        # ne' come destinazione di una bozza, e che un `agency_id` nel corpo e'
+        # rifiutato (422) prima di ogni scrittura.
+        certifier="property_valuations",
+        depends_on="PROPERTY",
+        api_delete=False,
+        note="sei rotte sondate (nessuna DELETE esiste): anonimo e Basic -> 401, "
+             "immobile altrui mai raggiungibile, agency_id nel corpo -> 422",
+    ),
+    Domain(
         "LEGACY_ADMIN", "/api/admin",
         listing="/api/admin/stime?day=oggi",
         note="le sette route /api/admin che toccano dati di tenant, migrate "
@@ -7266,6 +7280,74 @@ def certify_agency_profile(report, http, cert, domain, jars, owned, context) -> 
         None not in prima.values() and dopo == prima,
         "profili di A e B prima e dopo la sezione (attesi identici: la matrice non scrive)",
     )
+
+
+PROPERTY_VALUATIONS_OPERAZIONI = (("GET", "?property_id=1"), ("POST", ""), ("GET", "/1"), ("PUT", "/1"),
+                                  ("POST", "/1/approve"), ("POST", "/1/new-version"))
+
+
+def certify_property_valuations(report, http, cert, domain, jars, owned, context) -> None:
+    """PROPERTY_VALUATIONS (BLOCCO-2A): nessuna scrittura riuscita tentata.
+
+        anonimo, Basic                        -> 401 su tutte le rotte (mount)
+        GET ?property_id=<immobile altrui>    -> 404 (503 se la 116 manca): mai la lista altrui
+        GET ?property_id=<immobile proprio>   -> 200 con sole righe della propria agenzia
+                                                 (503 se la 116 manca)
+        POST con agency_id nel corpo          -> 422 (corpo chiuso)
+        POST su un immobile altrui            -> 404 (503 se la 116 manca): nessuna bozza
+    """
+    base = domain.prefix
+
+    def agenzia_id(etichetta):
+        valore = (context.get("agencies") or {}).get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in PROPERTY_VALUATIONS_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = {"row_version": 1} if suffisso.endswith("/approve") else ({} if metodo != "GET" else None)
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"PROPERTY_VALUATIONS-anonimo-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo,
+                                headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"PROPERTY_VALUATIONS-basic-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        mio = (owned.get(etichetta) or {}).get("PROPERTY")
+        suo = (owned.get(altro) or {}).get("PROPERTY")
+        if suo is not None:
+            risposta = http.request("GET", f"{base}?property_id={suo}", jar=jars[etichetta])
+            report.check(
+                f"PROPERTY_VALUATIONS-lista-{etichetta}-non-vede-{altro}", risposta.status in (404, 503),
+                f"{etichetta}: GET {base}?property_id=<immobile di {altro}> -> {risposta.status} "
+                "(atteso 404, o 503 se la 116 non e' applicata)")
+            risposta = http.request("POST", base, jar=jars[etichetta],
+                                    payload={"property_id": suo, "content": {}})
+            report.check(
+                f"PROPERTY_VALUATIONS-bozza-{etichetta}-su-{altro}", risposta.status in (404, 503),
+                f"{etichetta}: POST {base} sull'immobile di {altro} -> {risposta.status} "
+                "(atteso 404, o 503: nessuna bozza su un immobile altrui)")
+        else:
+            report.note(f"PROPERTY_VALUATIONS-lista-{etichetta}-non-vede-{altro}",
+                        f"nessun immobile di {altro} fra le risorse della matrice: prova non applicabile")
+        if mio is not None:
+            risposta = http.request("GET", f"{base}?property_id={mio}", jar=jars[etichetta])
+            corpo = risposta.json() if risposta.status == 200 else None
+            righe = corpo.get("items") if isinstance(corpo, dict) else None
+            estranee = [r for r in (righe or []) if not isinstance(r, dict) or r.get("agency_id") != agenzia_id(etichetta)]
+            report.check(
+                f"PROPERTY_VALUATIONS-lista-propria-{etichetta}",
+                risposta.status == 503 or (risposta.status == 200 and isinstance(righe, list) and estranee == []),
+                f"{etichetta}: GET {base}?property_id=<immobile proprio> -> {risposta.status}, "
+                f"{len(estranee)} righe non della propria agenzia (attese 0)")
+            risposta = http.request("POST", base, jar=jars[etichetta],
+                                    payload={"property_id": mio, "content": {}, "agency_id": agenzia_id(altro)})
+            report.check(
+                f"PROPERTY_VALUATIONS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                f"{etichetta}: POST {base} con agency_id dell'altra agenzia nel corpo -> "
+                f"{risposta.status} (atteso 422: nessuna scrittura)")
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:

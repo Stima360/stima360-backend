@@ -148,7 +148,9 @@ def test_01_la_071_e_valida_e_in_coda():
     # dell'eliminazione logica dei territori; additiva), con la sua down.
     # SENTINELLA AGGIORNATA DA BLOCCO-1B: 115_agency_logos (il logo dell'agenzia; additiva),
     # con la sua down.
-    assert numeri[numeri.index(76):] == list(range(76, 116))
+    # SENTINELLA AGGIORNATA DA BLOCCO-2A: 116_property_valuations (valutazioni dell'agente;
+    # additiva), con la sua down.
+    assert numeri[numeri.index(76):] == list(range(76, 117))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

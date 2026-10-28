@@ -1601,3 +1601,25 @@ a.census-unit-main { text-decoration: none; }
 @media (max-width: 767px) {
   .agency-header { flex-direction: column; align-items: flex-start; }
 }
+
+/* BLOCCO-2A: scheda «Valutazioni» dell'immobile. */
+.valuations-tab { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.valuation-detail, .valuation-list { min-width: 0; }
+.valuation-notice { font-size: 13px; border-left: 3px solid var(--primary); padding-left: 8px; }
+.valuation-view { display: grid; gap: 12px; margin-top: 8px; }
+.valuation-view-head { display: flex; align-items: center; gap: 10px; }
+.valuation-section h4 { margin: 0 0 6px; font-size: 14px; }
+.valuation-facts { display: grid; gap: 4px; margin: 0; }
+.valuation-fact { display: grid; grid-template-columns: minmax(140px, 260px) 1fr; gap: 8px; }
+.valuation-fact dt { color: var(--muted); font-size: 13px; }
+.valuation-fact dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.valuation-comparables { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+.valuation-issues { border: 1px solid #f1d38a; background: #fdf8e8; border-radius: var(--radius); padding: 10px 12px; }
+.valuation-issues ul { margin: 6px 0 0; padding-left: 18px; }
+.valuation-fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin: 0 0 12px; }
+.valuation-fieldset legend { font-weight: 600; padding: 0 4px; }
+.valuation-hint { font-size: 12px; margin: 4px 0 0; }
+.valuation-comparable { margin-bottom: 10px; }
+@media (max-width: 767px) {
+  .valuation-fact { grid-template-columns: 1fr; }
+}

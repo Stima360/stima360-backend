@@ -342,6 +342,11 @@ TENANT_PREFIXES = (
     # su ogni rotta, corpo chiuso senza agency_id) - quindi dichiara il cookie e
     # SOLO il cookie, come verifica il test 6.
     "/api/agency-profile",
+    # SENTINELLA AGGIORNATA DA BLOCCO-2A: valutazioni dell'agente. Superficie
+    # operatore come le altre - agenzia, autore e approvatore dalla sessione
+    # (`require_operator` su ogni rotta, corpi chiusi) - quindi dichiara il
+    # cookie e SOLO il cookie, come verifica il test 6.
+    "/api/property-valuations",
 )
 
 

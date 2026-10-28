@@ -2096,6 +2096,40 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 404, b'{"detail":"Elemento non trovato nel Cestino","code":"NOT_FOUND"}')
         return self._reply(method, path, 404, b'{"detail":"Not Found"}')
 
+    def _property_valuations(self, method, path, agency, payload):
+        """BLOCCO-2A. Il doppio di `/api/property-valuations`: corpo chiuso
+        (modello VERO `CreateRequest`), immobile cercato nella PROPRIA agenzia
+        (le righe `/api/property` del doppio). Rotto `isolation`: la lista e la
+        creazione accettano l'immobile di un'altra agenzia."""
+        import json as _json
+        import re as _re
+
+        from property_valuations.schemas import CreateRequest
+
+        rotto = self._broken("isolation", "property_valuations")
+
+        def immobile_visibile(pid):
+            riga = self.rows.get(pid)
+            return bool(riga) and riga["prefix"] == "/api/property" and (riga["agency"] == agency or rotto)
+
+        percorso, _, query = path.partition("?")
+        if percorso == "/api/property-valuations" and method == "GET":
+            trovato = _re.search(r"property_id=(\d+)", query)
+            pid = int(trovato.group(1)) if trovato else None
+            if pid is None or not immobile_visibile(pid):
+                return self._reply(method, path, 404, b'{"detail":{"code":"PROPERTY_NOT_FOUND"}}')
+            return self._reply(method, path, 200, _json.dumps(
+                {"property_id": pid, "items": [], "has_draft": False, "can_create": True}).encode())
+        if percorso == "/api/property-valuations" and method == "POST":
+            try:
+                corpo = CreateRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            if not immobile_visibile(corpo.property_id):
+                return self._reply(method, path, 404, b'{"detail":{"code":"PROPERTY_NOT_FOUND"}}')
+            return self._reply(method, path, 201, b'{"id": 1, "status": "draft"}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"VALUATION_NOT_FOUND"}}')
+
     def _agency_profile(self, method, path, agency, payload):
         """BLOCCO-1B. Il doppio e' `/api/agency-profile`: l'agenzia dalla sessione
         (la query `agency_id` e' ignorata come fa FastAPI), il corpo chiuso
@@ -2459,6 +2493,10 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA BLOCCO-1B
         if path.startswith("/api/agency-profile"):
             return self._agency_profile(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-2A
+        if path.startswith("/api/property-valuations"):
+            return self._property_valuations(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3367,6 +3405,27 @@ def test_13i_agency_profile_serving_the_other_logo_fails_the_matrix(monkeypatch)
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("AGENCY_PROFILE-logo") for i in falliti), falliti
+
+
+def test_13j_property_valuations_are_certified_rejections_and_reads_only(monkeypatch):
+    """BLOCCO-2A: la sezione PROPERTY_VALUATIONS gira nella matrice e ogni sua
+    prova e' un PASS: 6 rotte anonime + 6 Basic + 4 domande per agenzia."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("PROPERTY_VALUATIONS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 6 + 6 + 4 * 2, righe
+    assert {i for _, i in righe} >= {"PROPERTY_VALUATIONS-lista-A-non-vede-B", "PROPERTY_VALUATIONS-bozza-B-su-A",
+                                     "PROPERTY_VALUATIONS-corpo-chiuso-A-B", "PROPERTY_VALUATIONS-lista-propria-B"}
+
+
+def test_13k_property_valuations_reaching_the_other_agency_fail_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="property_valuations"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("PROPERTY_VALUATIONS-lista") for i in falliti), falliti
 
 
 def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):
@@ -6158,6 +6217,28 @@ FK_NON_CASCADE_ATTESE = frozenset({
     # matrice non percorre (solo rifiuti e letture); se un'agenzia di prova ne
     # avesse uno, il preflight lo incontra come RIFIUTO, non come cancellazione.
     ("agency_logos", "agency_id", "agencies", "NO ACTION"),
+    # SENTINELLA AGGIORNATA DA BLOCCO-2A, migration 116 (valutazioni dell'agente):
+    # riferimenti non-CASCADE nuovi. ESAMINATI.
+    #
+    #   property_valuations.agency_id                  -> agencies        NO ACTION
+    #   property_valuations.property_id                -> properties      NO ACTION
+    #   property_valuations.created_by_user_id         -> operator_users  NO ACTION
+    #   property_valuations.updated_by_user_id         -> operator_users  NO ACTION
+    #   property_valuations.approved_by_user_id        -> operator_users  NO ACTION
+    #   property_valuations.previous_valuation_id      -> property_valuations  NO ACTION
+    #   property_valuations.superseded_by_valuation_id -> property_valuations  NO ACTION
+    #
+    # Storico (le approvate non si cancellano, trigger della 116). CONSEGUENZA
+    # PER IL CLEANUP, dichiarata: le scrive solo property_valuations/service.py,
+    # che la matrice non percorre in scrittura (solo rifiuti e letture); se un
+    # immobile di prova ne avesse, il preflight lo incontra come RIFIUTO.
+    ("property_valuations", "agency_id", "agencies", "NO ACTION"),
+    ("property_valuations", "property_id", "properties", "NO ACTION"),
+    ("property_valuations", "created_by_user_id", "operator_users", "NO ACTION"),
+    ("property_valuations", "updated_by_user_id", "operator_users", "NO ACTION"),
+    ("property_valuations", "approved_by_user_id", "operator_users", "NO ACTION"),
+    ("property_valuations", "previous_valuation_id", "property_valuations", "NO ACTION"),
+    ("property_valuations", "superseded_by_valuation_id", "property_valuations", "NO ACTION"),
 })
 
 

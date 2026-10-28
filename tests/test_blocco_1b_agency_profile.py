@@ -685,8 +685,8 @@ def test_k_migration_115_is_additive_and_has_a_refusing_down():
 
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    ultima = tutte[-1]
-    assert ultima.version == "115_agency_logos"
+    # BLOCCO-2A: la 116 segue; la 115 resta valida e additiva.
+    ultima = next(m for m in tutte if m.version == "115_agency_logos")
     assert runner.validate_migration(ultima) == []
     up = (ROOT / "migrations" / "115_agency_logos.sql").read_text(encoding="utf-8")
     eseguibile = "\n".join(r for r in up.splitlines() if not r.lstrip().startswith("--"))
