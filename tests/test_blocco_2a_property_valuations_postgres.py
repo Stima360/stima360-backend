@@ -112,7 +112,9 @@ def _q(db, sql, params=(), *, commit=False):
     conn = psycopg2.connect(db["dsn"], cursor_factory=RealDictCursor)
     try:
         with conn.cursor() as cur:
-            cur.execute(sql, params)
+            # Senza parametri lo SQL va al server cosi' com'e': i `%` dei RAISE delle
+            # migrazioni non sono segnaposto (con `()` psycopg2 li interpreterebbe).
+            cur.execute(sql, params or None)
             rows = cur.fetchall() if cur.description else []
         if commit:
             conn.commit()

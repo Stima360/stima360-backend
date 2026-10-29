@@ -115,7 +115,9 @@ def _q(db, sql, params=(), *, commit=False):
     conn = psycopg2.connect(db["dsn"], cursor_factory=RealDictCursor)
     try:
         with conn.cursor() as cur:
-            cur.execute(sql, params)
+            # Senza parametri lo SQL va al server cosi' com'e': i `%` dei RAISE delle
+            # migrazioni non sono segnaposto (con `()` psycopg2 li interpreterebbe).
+            cur.execute(sql, params or None)
             rows = cur.fetchall() if cur.description else []
         if commit:
             conn.commit()
@@ -208,8 +210,10 @@ def test_m_migration_is_valid_for_the_runner():
     import p26_migrate as runner
 
     tutte = runner.discover_migrations()
-    assert tutte[-1].version == VERSIONE
-    assert runner.validate_migration(tutte[-1]) == []
+    runner.verify_contiguous(tutte)
+    # SENTINELLA AGGIORNATA DA BLOCCO-2C: dopo la 115 vengono la 116 e la 117.
+    m115 = next(m for m in tutte if m.version == VERSIONE)
+    assert runner.validate_migration(m115) == []
 
 
 def test_m_table_and_constraints_exist(db):

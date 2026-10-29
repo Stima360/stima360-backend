@@ -9,7 +9,7 @@ Solo **TEST** (`stima360_db_test`, servizio Render TEST). PROD esclusa.
 | Migrazioni su `stima360_db_test` | da verificare al passo 1 (la **115** di BLOCCO-1B e la **116** di BLOCCO-2A potrebbero essere ancora pendenti) |
 | **117** (`property_valuation_pdfs`) | **preparata, non applicata** |
 | Codice BLOCCO-2B | **commit locale**, nessun push |
-| Prove PostgreSQL `tests/test_blocco_2b_valuation_pdfs_postgres.py` | **preparate, non eseguite** |
+| Prove PostgreSQL `tests/test_blocco_2b_valuation_pdfs_postgres.py` | **eseguite su un cluster PostgreSQL 16 locale usa-e-getta** (BLOCCO-2C): 9 passati; sul cluster TEST non eseguite |
 | Funzione online | **NON pronta**: dipende dalle tabelle `property_valuations` (116) e `property_valuation_pdfs` (117), che non esistono ancora |
 
 ## L'ordine: migrazioni PRIMA dell'attivazione
@@ -35,6 +35,17 @@ P29_TEST_DSN="postgresql://<utente>@<host>/<database di servizio>" BLOCCO_2B_TES
 ```
 
 **Atteso:** 9 passati, 0 saltati.
+
+### Collaudo integrato (BLOCCO-2C)
+
+`tests/test_blocco_2c_integrated_postgres.py` ricostruisce su un cluster **locale** (rifiuta host non locali) lo schema completo come e' nato il TEST (tabelle legacy, 001-025, runner fino alla 114), inserisce dati sintetici, applica col runner **115 → 116 → 117** e percorre con l'app vera e il login vero dati/logo, immobile, valutazioni, PDF, permessi, sola lettura e concorrenza. Crea e poi elimina un database locale chiamato `stima360_db_test` (lo pretendono 010/011): se sul cluster ne esiste gia' uno si ferma. Mai contro il cluster di Render.
+
+```bash
+P29_TEST_DSN="postgresql://<utente>@127.0.0.1:<porta>/postgres" BLOCCO_2C_TEST_CLUSTER_VERIFIED=1 \
+  python -m pytest -q tests/test_blocco_2c_integrated_postgres.py
+```
+
+**Esito su cluster locale (BLOCCO-2C):** 7 passati.
 
 ## 1. Fotografia prima (sola lettura)
 
