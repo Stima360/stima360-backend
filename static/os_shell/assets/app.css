@@ -1628,3 +1628,24 @@ a.census-unit-main { text-decoration: none; }
 .valuation-pdf h4 { margin: 0; font-size: 14px; }
 .valuation-pdf p { margin: 0; overflow-wrap: anywhere; }
 .valuation-pdf-historical { border-left: 3px solid #9ca3af; padding-left: 8px; font-size: 13px; }
+
+/* REPORT-PROPRIETARIO-1: scheda «Report proprietario» dell'immobile. */
+.owner-report-tab { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.owner-report-notice { font-size: 13px; border-left: 3px solid var(--primary); padding-left: 8px; }
+.owner-report-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; align-items: end; }
+.owner-report-wide { grid-column: 1 / -1; }
+.owner-report-field { display: grid; gap: 4px; min-width: 0; }
+.owner-report-field textarea { width: 100%; box-sizing: border-box; }
+.owner-report-counter { font-size: 12px; justify-self: end; }
+.owner-report-preview { display: grid; gap: 10px; min-width: 0; }
+.owner-report-preview h4 { margin: 8px 0 0; font-size: 14px; }
+.owner-report-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.owner-report-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; display: grid; gap: 2px; }
+.owner-report-card strong { font-size: 22px; }
+.owner-report-facts { display: grid; gap: 4px; margin: 0; }
+.owner-report-fact { display: grid; grid-template-columns: minmax(140px, 240px) 1fr; gap: 8px; }
+.owner-report-fact dt { color: var(--muted); font-size: 13px; }
+.owner-report-fact dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 767px) {
+  .owner-report-fact { grid-template-columns: 1fr; }
+}

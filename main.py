@@ -77,6 +77,8 @@ from trash.router import router as trash_router
 from agency_profile.router import router as agency_profile_router
 # BLOCCO-2A: valutazioni dell'agente sugli immobili (`/api/property-valuations`).
 from property_valuations.router import router as property_valuations_router
+# REPORT-PROPRIETARIO-1: report attivita' dell'immobile per il proprietario (`/api/owner-reports`).
+from owner_report.router import router as owner_report_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
@@ -195,6 +197,9 @@ app.include_router(agency_profile_router, dependencies=[Depends(require_authenti
 # BLOCCO-2A: solo il mount, come l'Agenda: ogni rotta prende lo scope da
 # `require_operator`; i permessi li decide `property_valuations.service`.
 app.include_router(property_valuations_router, dependencies=[Depends(require_authenticated_operator)])
+# REPORT-PROPRIETARIO-1: stesso montaggio; scope da `require_operator`, permessi in
+# `owner_report.service` (chi puo' gestire l'immobile). Sola lettura: nessuna scrittura.
+app.include_router(owner_report_router, dependencies=[Depends(require_authenticated_operator)])
 # P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.

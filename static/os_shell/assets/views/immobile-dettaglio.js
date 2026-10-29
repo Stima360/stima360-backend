@@ -89,6 +89,8 @@ import { loadFormOptions, openPropertyDialog, propertyDisplayName, propertyTypeL
 import { mountPropertyInteractions } from '../components/property-interactions.js';
 // BLOCCO-2A: la scheda «Valutazioni» (valutazioni dell'agente, versioni e approvazione).
 import { mountPropertyValuations } from '../components/property-valuations.js';
+// REPORT-PROPRIETARIO-1: la scheda «Report proprietario» (anteprima e PDF da condividere).
+import { mountOwnerReport } from '../components/owner-report.js';
 import { propertyTypeText } from '../components/property-label.js';
 import { COMPATIBILITY_STATUS_LABELS, MATCH_CLASS_LABELS, MATCH_COMMERCIAL_STATUS_LABELS } from '../components/match-labels.js';
 // CENSIMENTO-1 Fase 4: la tab «Censimento» della scheda (palazzina, pertinenze
@@ -251,6 +253,8 @@ const TABS = [
   { key: 'proposte', label: 'Proposte' },
   // BLOCCO-2A: valutazioni dell'agente (vendita e locazione), con le loro versioni.
   { key: 'valutazioni', label: 'Valutazioni' },
+  // REPORT-PROPRIETARIO-1: report attivita' per il proprietario, in PDF.
+  { key: 'report-proprietario', label: 'Report proprietario' },
   { key: 'attivita', label: 'Storico interazioni' },
 ];
 
@@ -532,6 +536,7 @@ export async function renderImmobileDettaglio(container, params = []) {
         }
         case 'censimento': await renderCensimentoTab(contentEl); break;
         case 'valutazioni': await mountPropertyValuations(contentEl, { propertyId: property.id, loadAgents: getAgents }); break;
+        case 'report-proprietario': await mountOwnerReport(contentEl, { propertyId: property.id }); break;
         case 'attivita':
           contentEl.innerHTML = '<div id="property-interactions"></div>';
           await mountPropertyInteractions(contentEl.querySelector('#property-interactions'), {

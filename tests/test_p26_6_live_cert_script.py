@@ -2130,6 +2130,33 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 201, b'{"id": 1, "status": "draft"}')
         return self._reply(method, path, 404, b'{"detail":{"code":"VALUATION_NOT_FOUND"}}')
 
+    def _owner_reports(self, method, path, agency, payload):
+        """REPORT-PROPRIETARIO-1. Il doppio di `/api/owner-reports`: immobile
+        cercato nella PROPRIA agenzia, corpo del PDF chiuso (modello VERO).
+        Rotto `isolation`: l'anteprima e il PDF dell'immobile altrui rispondono."""
+        import json as _json
+        import re as _re
+
+        from owner_report.router import PdfRequest
+
+        rotto = self._broken("isolation", "owner_reports")
+        trovato = _re.match(r"^/api/owner-reports/(\d+)(/pdf)?$", path)
+        if not trovato:
+            return self._reply(method, path, 404, b'{"detail":"Not Found"}')
+        pid, pdf = int(trovato.group(1)), bool(trovato.group(2))
+        riga = self.rows.get(pid)
+        visibile = bool(riga) and riga["prefix"] == "/api/property" and (riga["agency"] == agency or rotto)
+        if pdf and method == "POST":
+            try:
+                PdfRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+        if not visibile:
+            return self._reply(method, path, 404, b'{"detail":{"code":"PROPERTY_NOT_FOUND"}}')
+        if pdf:
+            return self._reply(method, path, 200, b"%PDF-1.4 doppio")
+        return self._reply(method, path, 200, _json.dumps({"property": {"id": pid}}).encode())
+
     def _agency_profile(self, method, path, agency, payload):
         """BLOCCO-1B. Il doppio e' `/api/agency-profile`: l'agenzia dalla sessione
         (la query `agency_id` e' ignorata come fa FastAPI), il corpo chiuso
@@ -2497,6 +2524,10 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA BLOCCO-2A
         if path.startswith("/api/property-valuations"):
             return self._property_valuations(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA REPORT-PROPRIETARIO-1
+        if path.startswith("/api/owner-reports"):
+            return self._owner_reports(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3426,6 +3457,27 @@ def test_13k_property_valuations_reaching_the_other_agency_fail_the_matrix(monke
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("PROPERTY_VALUATIONS-lista") for i in falliti), falliti
+
+
+def test_13l_owner_reports_are_certified_rejections_and_reads_only(monkeypatch):
+    """REPORT-PROPRIETARIO-1: la sezione OWNER_REPORTS gira nella matrice e ogni
+    sua prova e' un PASS: 2 rotte anonime + 2 Basic + 4 domande per agenzia."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("OWNER_REPORTS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 2 + 2 + 4 * 2, righe
+    assert {i for _, i in righe} >= {"OWNER_REPORTS-anteprima-A-non-vede-B", "OWNER_REPORTS-pdf-B-non-vede-A",
+                                     "OWNER_REPORTS-corpo-chiuso-A-B", "OWNER_REPORTS-anteprima-propria-B"}
+
+
+def test_13m_owner_reports_reaching_the_other_agency_fail_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="owner_reports"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("OWNER_REPORTS-anteprima") for i in falliti), falliti
 
 
 def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):

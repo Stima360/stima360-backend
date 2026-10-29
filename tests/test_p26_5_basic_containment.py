@@ -347,6 +347,11 @@ TENANT_PREFIXES = (
     # (`require_operator` su ogni rotta, corpi chiusi) - quindi dichiara il
     # cookie e SOLO il cookie, come verifica il test 6.
     "/api/property-valuations",
+    # SENTINELLA AGGIORNATA DA REPORT-PROPRIETARIO-1: il report attivita' per il
+    # proprietario. Superficie operatore come le altre - agenzia dalla sessione
+    # (`require_operator` su ogni rotta, corpo chiuso) - quindi dichiara il
+    # cookie e SOLO il cookie, come verifica il test 6.
+    "/api/owner-reports",
 )
 
 

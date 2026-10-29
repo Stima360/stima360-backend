@@ -698,6 +698,18 @@ DOMAINS = (
              "immobile altrui mai raggiungibile, agency_id nel corpo -> 422",
     ),
     Domain(
+        "OWNER_REPORTS", "/api/owner-reports",
+        # REPORT-PROPRIETARIO-1. SOLA LETTURA: il report non scrive nulla e la
+        # matrice non chiede nemmeno un PDF riuscito. L'agenzia viene SOLO dalla
+        # sessione: l'immobile dell'altra agenzia non e' raggiungibile (404) ne'
+        # in anteprima ne' in PDF, e un `agency_id` nel corpo e' rifiutato (422).
+        certifier="owner_reports",
+        depends_on="PROPERTY",
+        api_delete=False,
+        note="due rotte sondate: anonimo e Basic -> 401, immobile altrui mai "
+             "raggiungibile, agency_id nel corpo -> 422",
+    ),
+    Domain(
         "LEGACY_ADMIN", "/api/admin",
         listing="/api/admin/stime?day=oggi",
         note="le sette route /api/admin che toccano dati di tenant, migrate "
@@ -7350,6 +7362,61 @@ def certify_property_valuations(report, http, cert, domain, jars, owned, context
                 f"PROPERTY_VALUATIONS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
                 f"{etichetta}: POST {base} con agency_id dell'altra agenzia nel corpo -> "
                 f"{risposta.status} (atteso 422: nessuna scrittura)")
+
+
+OWNER_REPORTS_OPERAZIONI = (("GET", "/1"), ("POST", "/1/pdf"))
+
+
+def certify_owner_reports(report, http, cert, domain, jars, owned, context) -> None:
+    """OWNER_REPORTS (REPORT-PROPRIETARIO-1): nessuna scrittura, nessun PDF chiesto.
+
+        anonimo, Basic                       -> 401 su tutte le rotte (mount)
+        GET /<immobile altrui>               -> 404: mai il report di un'altra agenzia
+        POST /<immobile altrui>/pdf          -> 404: mai il PDF di un'altra agenzia
+        GET /<immobile proprio>              -> 200 con l'immobile richiesto
+        POST /<immobile proprio>/pdf con agency_id nel corpo -> 422 (corpo chiuso)
+    """
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in OWNER_REPORTS_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = {} if metodo != "GET" else None
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"OWNER_REPORTS-anonimo-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"OWNER_REPORTS-basic-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+
+    def agenzia_id(etichetta):
+        valore = (context.get("agencies") or {}).get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        mio = (owned.get(etichetta) or {}).get("PROPERTY")
+        suo = (owned.get(altro) or {}).get("PROPERTY")
+        if suo is not None:
+            risposta = http.request("GET", f"{base}/{suo}", jar=jars[etichetta])
+            report.check(f"OWNER_REPORTS-anteprima-{etichetta}-non-vede-{altro}", risposta.status == 404,
+                         f"{etichetta}: GET {base}/<immobile di {altro}> -> {risposta.status} (atteso 404)")
+            risposta = http.request("POST", f"{base}/{suo}/pdf", jar=jars[etichetta], payload={})
+            report.check(f"OWNER_REPORTS-pdf-{etichetta}-non-vede-{altro}", risposta.status == 404,
+                         f"{etichetta}: POST {base}/<immobile di {altro}>/pdf -> {risposta.status} (atteso 404)")
+        else:
+            report.note(f"OWNER_REPORTS-anteprima-{etichetta}-non-vede-{altro}",
+                        f"nessun immobile di {altro} fra le risorse della matrice: prova non applicabile")
+        if mio is not None:
+            risposta = http.request("GET", f"{base}/{mio}", jar=jars[etichetta])
+            corpo = risposta.json() if risposta.status == 200 else None
+            immobile = (corpo or {}).get("property") if isinstance(corpo, dict) else None
+            report.check(f"OWNER_REPORTS-anteprima-propria-{etichetta}",
+                         risposta.status == 200 and isinstance(immobile, dict) and immobile.get("id") == mio,
+                         f"{etichetta}: GET {base}/<immobile proprio> -> {risposta.status}")
+            risposta = http.request("POST", f"{base}/{mio}/pdf", jar=jars[etichetta],
+                                    payload={"agency_id": agenzia_id(altro)})
+            report.check(f"OWNER_REPORTS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                         f"{etichetta}: POST {base}/<immobile proprio>/pdf con agency_id -> {risposta.status} "
+                         "(atteso 422)")
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:
