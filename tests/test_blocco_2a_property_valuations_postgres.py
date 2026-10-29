@@ -198,8 +198,10 @@ def test_m_migration_is_valid_for_the_runner():
     import p26_migrate as runner
 
     tutte = runner.discover_migrations()
-    assert tutte[-1].version == "116_property_valuations"
-    assert runner.validate_migration(tutte[-1]) == []
+    # SENTINELLA AGGIORNATA DA BLOCCO-2B: la 117 segue la 116.
+    assert tutte[-1].version == "117_property_valuation_pdfs"
+    m116 = next(m for m in tutte if m.version == "116_property_valuations")
+    assert runner.validate_migration(m116) == []
 
 
 def test_m_partial_unique_indexes_exist(db):

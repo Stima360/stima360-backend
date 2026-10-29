@@ -75,3 +75,15 @@ SOURCE_NOT_APPROVED_MESSAGE = "Una nuova versione si crea da una valutazione app
 INCOMPLETE_MESSAGE = "La valutazione non e' completa: correggi i punti indicati prima di approvarla."
 VALUATIONS_UNAVAILABLE_MESSAGE = ("Le valutazioni non sono ancora attive su questo ambiente: "
                                   "la migrazione 116 non e' stata applicata.")
+
+# --- BLOCCO-2B: PDF della valutazione approvata ------------------------------
+
+PDF_UNAVAILABLE_MESSAGE = ("Il PDF delle valutazioni non e' ancora attivo su questo ambiente: "
+                           "la migrazione 117 non e' stata applicata.")
+PDF_NOT_APPROVED_MESSAGE = "Il PDF si genera solo da una valutazione approvata."
+PDF_SUPERSEDED_MESSAGE = ("Questa versione e' stata superata senza un PDF: il documento si genera solo "
+                          "dalla versione approvata in corso.")
+PDF_NOT_FOUND_MESSAGE = "Per questa versione non e' ancora stato generato un PDF."
+PDF_LOGO_UNREADABLE_MESSAGE = ("Il logo dell'agenzia non e' leggibile: il PDF non e' stato generato. "
+                               "Ricarica il logo dalla pagina «Dati agenzia e logo».")
+PDF_INTEGRITY_MESSAGE = "Il PDF salvato non corrisponde alla sua impronta: contattare l'assistenza."

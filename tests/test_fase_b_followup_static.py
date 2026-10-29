@@ -350,14 +350,18 @@ def test_g1_la_108_e_valida_con_la_down_ed_e_l_ultima():
     # nuova `agency_logos`, nessun backfill, down che rifiuta di perdere loghi), ora l'ultima
     # SENTINELLA AGGIORNATA DA BLOCCO-2A: poi la sola 116 (le valutazioni dell'agente: una tabella
     # nuova `property_valuations` con guardia d'immutabilita', nessun backfill), ora l'ultima
-    assert tutte[-1].version == "116_property_valuations"
-    assert tutte[-2].version == "115_agency_logos"
-    assert tutte[-3].version == "114_territory_logical_delete"
-    assert tutte[-4].version == "113_operator_logical_delete"
-    assert tutte[-5].version == "112_stime_consenso_marketing_prova"
-    assert tutte[-6].version == "111_voice_mandate_intents"
-    assert tutte[-7].version == "110_consent_capture" and tutte[-8].version == "109_consent_channels"
-    assert tutte[-9] is ultima
+    # SENTINELLA AGGIORNATA DA BLOCCO-2B: poi la sola 117 (i PDF delle valutazioni approvate: una
+    # tabella nuova `property_valuation_pdfs` immutabile, nessun backfill, down che rifiuta di
+    # perdere documenti), ora l'ultima
+    assert tutte[-1].version == "117_property_valuation_pdfs"
+    assert tutte[-2].version == "116_property_valuations"
+    assert tutte[-3].version == "115_agency_logos"
+    assert tutte[-4].version == "114_territory_logical_delete"
+    assert tutte[-5].version == "113_operator_logical_delete"
+    assert tutte[-6].version == "112_stime_consenso_marketing_prova"
+    assert tutte[-7].version == "111_voice_mandate_intents"
+    assert tutte[-8].version == "110_consent_capture" and tutte[-9].version == "109_consent_channels"
+    assert tutte[-10] is ultima
     assert ultima.down_available
     assert runner.validate_migration(ultima) == []
     su = (ROOT / "migrations" / "108_followup_contact_journey.sql").read_text(encoding="utf-8")

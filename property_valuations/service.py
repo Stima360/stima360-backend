@@ -168,7 +168,25 @@ def _may_edit_draft(ctx, row, prop) -> bool:
     return _sees_all(ctx) or row["created_by_user_id"] == getattr(ctx, "user_id", None)
 
 
-def serialize(ctx, row, prop) -> dict:
+def _pdf_metadata(row) -> dict | None:
+    """BLOCCO-2B: i metadati dell'artefatto PDF (senza byte)."""
+    if not row:
+        return None
+    generated = row.get("generated_at")
+    return {"sha256": row["sha256"], "size_bytes": int(row["size_bytes"]),
+            "template_version": row["template_version"], "generated_by_user_id": row["generated_by_user_id"],
+            "generated_at": generated.isoformat() if hasattr(generated, "isoformat") else generated}
+
+
+def _pdfs_by_valuation(cur, agency_id: int, property_id: int) -> tuple[bool, dict]:
+    """(installato, {valuation_id: metadati}): senza la 117 le valutazioni restano utilizzabili."""
+    if not repository.pdfs_installed(cur):
+        return False, {}
+    return True, {r["valuation_id"]: _pdf_metadata(r)
+                  for r in repository.pdf_metadata_for_property(cur, agency_id, property_id)}
+
+
+def serialize(ctx, row, prop, *, pdf=None, pdf_available=False) -> dict:
     content = _content(row)
     out = {key: _json_value(value) for key, value in row.items() if key != "content"}
     out["content"] = content.model_dump(mode="json")
@@ -179,6 +197,12 @@ def serialize(ctx, row, prop) -> dict:
     out["can_edit"] = _may_edit_draft(ctx, row, prop)
     out["can_approve"] = row["status"] == STATUS_DRAFT and _sees_all(ctx) and not in_trash(prop)
     out["can_create_version"] = (row["status"] != STATUS_DRAFT and not in_trash(prop) and may_manage(ctx, prop))
+    # BLOCCO-2B: il PDF si genera solo dalla versione approvata; quelli gia'
+    # generati restano scaricabili anche quando la versione e' superata.
+    out["pdf_available"] = pdf_available
+    out["pdf"] = pdf
+    out["can_generate_pdf"] = (pdf_available and pdf is None and row["status"] == STATUS_APPROVED
+                               and not in_trash(prop) and may_manage(ctx, prop))
     return out
 
 
@@ -192,7 +216,8 @@ def list_valuations(ctx, property_id: int) -> dict:
         _require_installed(cur)
         prop = _property(cur, agency_id, property_id)
         rows = repository.list_for_property(cur, agency_id, property_id)
-    items = [serialize(ctx, dict(r), prop) for r in rows]
+        pdf_available, pdfs = _pdfs_by_valuation(cur, agency_id, property_id)
+    items = [serialize(ctx, dict(r), prop, pdf=pdfs.get(r["id"]), pdf_available=pdf_available) for r in rows]
     return {
         "property_id": property_id,
         "method_label": METHOD_LABEL,
@@ -209,7 +234,8 @@ def get_valuation(ctx, valuation_id: int) -> dict:
         _require_installed(cur)
         row = _valuation(cur, agency_id, valuation_id)
         prop = _property(cur, agency_id, row["property_id"])
-    return serialize(ctx, row, prop)
+        pdf_available, pdfs = _pdfs_by_valuation(cur, agency_id, row["property_id"])
+    return serialize(ctx, row, prop, pdf=pdfs.get(valuation_id), pdf_available=pdf_available)
 
 
 # ---------------------------------------------------------------------------

@@ -35,7 +35,7 @@ from psycopg2 import errors
 
 from operator_auth.context import OperatorContext
 from property_valuations import router as valuations_router
-from property_valuations import service
+from property_valuations import pdf_service, service
 from property_valuations.schemas import ValuationContent, approval_issues
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -73,6 +73,12 @@ class FakeDB:
         self.locks = []
         self.on_lock = None          # funzione(state, sql, params) chiamata a ogni FOR UPDATE su una valutazione
         self.opened_for_write = 0
+        # BLOCCO-2B: artefatti PDF (migrazione 117) e nomi degli operatori
+        self.pdfs = {}
+        self.pdfs_installed = True
+        self.on_pdf_insert = None    # funzione(state) chiamata prima di ogni INSERT di un PDF
+        self.operators = {OWNER_ID: ("Giulia", "Rossi"), ADMIN_ID: ("Marco", "Bianchi"),
+                          AGENT_ID: ("Luca", "Verdi")}
 
 
 class FakeCursor:
@@ -90,11 +96,20 @@ class FakeCursor:
         P, V = self.st["properties"], self.st["valuations"]
         if q.startswith("SELECT to_regclass('property_valuations')"):
             return self._set([{"installed": self.db.installed}])
+        if q.startswith("SELECT to_regclass('property_valuation_pdfs')"):
+            return self._set([{"installed": self.db.pdfs_installed}])
+        if "property_valuation_pdfs" in q:
+            return self._pdf_statement(q, params)
+        if q.startswith("SELECT first_name, last_name FROM operator_users WHERE id = %s"):
+            name = self.db.operators.get(params[0])
+            return self._set([{"first_name": name[0], "last_name": name[1]}] if name else [])
         if "property_valuations" in q and not self.db.installed:
             raise RuntimeError('relation "property_valuations" does not exist')
         if q.startswith("SELECT * FROM properties WHERE id = %s AND agency_id = %s"):
             if q.endswith("FOR UPDATE"):
                 self.db.locks.append(("property", params[0]))
+            if q.endswith("FOR SHARE"):
+                self.db.locks.append(("property_share", params[0]))
             p = P.get(params[0])
             return self._set([p] if p and p["agency_id"] == params[1] else [])
         if q.startswith("SELECT * FROM property_valuations WHERE agency_id = %s AND property_id = %s ORDER BY"):
@@ -105,6 +120,8 @@ class FakeCursor:
                 self.db.locks.append(("valuation", params[0]))
                 if self.db.on_lock:
                     self.db.on_lock(self.st, params[0])
+            if q.endswith("FOR SHARE"):
+                self.db.locks.append(("valuation_share", params[0]))
             v = V.get(params[0])
             return self._set([v] if v and v["agency_id"] == params[1] else [])
         if q.startswith("SELECT 1 FROM property_valuations WHERE agency_id = %s AND property_id = %s AND status = %s"):
@@ -161,6 +178,43 @@ class FakeCursor:
             return self._set([v])
         raise AssertionError(f"statement inattesa: {q}")
 
+    def _pdf_statement(self, q, params):
+        """BLOCCO-2B: le statement della 117, con il trigger che esige la
+        versione approvata e vieta UPDATE/DELETE."""
+        if not self.db.pdfs_installed:
+            raise RuntimeError('relation "property_valuation_pdfs" does not exist')
+        D, V = self.st["pdfs"], self.st["valuations"]
+
+        def meta(row, with_bytes=False):
+            out = {k: v for k, v in row.items() if k != "pdf_bytes"}
+            out["size_bytes"] = len(row["pdf_bytes"])
+            if with_bytes:
+                out["pdf_bytes"] = bytearray(row["pdf_bytes"])   # psycopg2 da' un buffer, non bytes
+            return out
+
+        if q.startswith("SELECT valuation_id,") and q.endswith("WHERE agency_id = %s AND property_id = %s"):
+            return self._set([meta(r) for r in D.values() if r["agency_id"] == params[0]
+                              and r["property_id"] == params[1]])
+        if q.startswith("SELECT valuation_id,") and q.endswith("WHERE valuation_id = %s AND agency_id = %s"):
+            r = D.get(params[0])
+            return self._set([meta(r, "pdf_bytes" in q)] if r and r["agency_id"] == params[1] else [])
+        if q.startswith("INSERT INTO property_valuation_pdfs"):
+            if self.db.on_pdf_insert:
+                self.db.on_pdf_insert(self.st)
+            vid, agency_id, property_id, version, template, header, data, sha, user, generated_at = params
+            v = V.get(vid)
+            if not (v and v["agency_id"] == agency_id and v["property_id"] == property_id
+                    and v["version"] == version and v["status"] == "approved"):
+                raise RuntimeError("trigger 117: only an approved valuation of the same agency")
+            if vid in D:
+                return self._set([])
+            D[vid] = {"valuation_id": vid, "agency_id": agency_id, "property_id": property_id,
+                      "valuation_version": version, "template_version": template,
+                      "header_snapshot": copy.deepcopy(header.adapted), "pdf_bytes": bytes(data), "sha256": sha,
+                      "generated_by_user_id": user, "generated_at": generated_at}
+            return self._set([meta(D[vid])])
+        raise AssertionError(f"statement inattesa: {q}")
+
     def fetchone(self):
         return self._one
 
@@ -175,12 +229,14 @@ def db(monkeypatch):
     @contextmanager
     def _core_cursor(*, commit=False):
         fake.opened_for_write += bool(commit)
-        st = {"properties": copy.deepcopy(fake.properties), "valuations": copy.deepcopy(fake.valuations)}
+        st = {"properties": copy.deepcopy(fake.properties), "valuations": copy.deepcopy(fake.valuations),
+              "pdfs": copy.deepcopy(fake.pdfs)}
         yield None, FakeCursor(fake, st)
         if commit:
-            fake.properties, fake.valuations = st["properties"], st["valuations"]
+            fake.properties, fake.valuations, fake.pdfs = st["properties"], st["valuations"], st["pdfs"]
 
     monkeypatch.setattr(service, "core_cursor", _core_cursor)
+    monkeypatch.setattr(pdf_service, "core_cursor", _core_cursor)
     return fake
 
 
@@ -627,8 +683,10 @@ def test_h_migration_116_is_valid_for_the_runner_and_additive():
 
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    assert tutte[-1].version == "116_property_valuations"
-    assert runner.validate_migration(tutte[-1]) == []
+    # SENTINELLA AGGIORNATA DA BLOCCO-2B: la 117 segue la 116.
+    m116 = next(m for m in tutte if m.version == "116_property_valuations")
+    assert tutte[-1].version == "117_property_valuation_pdfs"
+    assert runner.validate_migration(m116) == []
     up = (ROOT / "migrations" / "116_property_valuations.sql").read_text(encoding="utf-8")
     eseguibile = "\n".join(r for r in up.splitlines() if not r.lstrip().startswith("--"))
     assert not re.search(r"\b(ALTER|DROP|DELETE|INSERT)\s", eseguibile.replace("TG_OP = 'DELETE'", "").replace(

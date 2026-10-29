@@ -10,16 +10,20 @@ scope da `require_operator` (solo sessione). Nessuna rotta accetta
     PUT  /api/property-valuations/{id}            modifica una bozza (row_version)
     POST /api/property-valuations/{id}/approve    approva (owner/admin)
     POST /api/property-valuations/{id}/new-version  bozza da una versione approvata
+    POST /api/property-valuations/{id}/pdf        genera (una volta) il PDF della versione approvata
+    GET  /api/property-valuations/{id}/pdf        scarica il PDF salvato (stessi byte, sempre)
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import require_operator
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 
-from . import service
+from agency_profile import service as agency_profile_service
+
+from . import pdf_service, service
 from .schemas import ApproveRequest, CreateRequest, UpdateRequest
 
 router = APIRouter(prefix="/api/property-valuations", tags=["property-valuations"])
@@ -33,6 +37,9 @@ def _call(fn, *args):
     except service.ValuationError as exc:
         raise HTTPException(status_code=exc.status,
                             detail={"code": exc.code, "message": str(exc), **exc.extra}) from exc
+    except agency_profile_service.ProfileCorrupted as exc:
+        # BLOCCO-2B: l'intestazione salvata non e' leggibile: nessun PDF parziale.
+        raise HTTPException(status_code=500, detail={"code": "AGENCY_PROFILE_CORRUPTED", "message": str(exc)}) from exc
 
 
 @router.get("")
@@ -63,3 +70,22 @@ def approve_valuation(valuation_id: int, body: ApproveRequest, ctx: OperatorCont
 @router.post("/{valuation_id}/new-version", status_code=201)
 def new_version(valuation_id: int, ctx: OperatorContext = Depends(require_operator)):
     return _call(service.create_version, ctx, valuation_id)
+
+
+@router.post("/{valuation_id}/pdf")
+def generate_pdf(valuation_id: int, response: Response, ctx: OperatorContext = Depends(require_operator)):
+    result = _call(pdf_service.generate_pdf, ctx, valuation_id)
+    response.status_code = 201 if result["created"] else 200
+    return result
+
+
+@router.get("/{valuation_id}/pdf")
+def download_pdf(valuation_id: int, ctx: OperatorContext = Depends(require_operator)):
+    pdf = _call(pdf_service.download_pdf, ctx, valuation_id)
+    return Response(content=pdf["data"], media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{pdf["filename"]}"',
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "ETag": f'"{pdf["sha256"]}"',
+    })

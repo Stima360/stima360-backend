@@ -7283,7 +7283,9 @@ def certify_agency_profile(report, http, cert, domain, jars, owned, context) -> 
 
 
 PROPERTY_VALUATIONS_OPERAZIONI = (("GET", "?property_id=1"), ("POST", ""), ("GET", "/1"), ("PUT", "/1"),
-                                  ("POST", "/1/approve"), ("POST", "/1/new-version"))
+                                  ("POST", "/1/approve"), ("POST", "/1/new-version"),
+                                  # BLOCCO-2B: il PDF (generazione e download), anch'esso dietro sessione
+                                  ("POST", "/1/pdf"), ("GET", "/1/pdf"))
 
 
 def certify_property_valuations(report, http, cert, domain, jars, owned, context) -> None:

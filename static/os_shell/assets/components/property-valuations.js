@@ -10,8 +10,14 @@
 // completezza li decide il server (`can_edit`, `can_approve`,
 // `can_create_version`, `approval_issues`): la pagina non offre i comandi a
 // chi riceverebbe 403. Tutto il testo passa da `textContent`.
+//
+// BLOCCO-2B: il PDF della versione approvata. «Genera PDF» compare solo se il
+// server dice `can_generate_pdf`; «Scarica PDF» quando l'artefatto esiste
+// (`pdf`), anche per una versione superata, segnalata come documento storico.
+// Il download passa dalla sessione (cookie): nessun link pubblico.
 
 import { apiGet, apiPost, apiPut } from '../core/api-client.js';
+import { sessionExpired } from '../core/auth.js';
 
 const API = '/api/property-valuations';
 
@@ -487,7 +493,7 @@ export async function mountPropertyValuations(container, { propertyId, loadAgent
     }
     const table = el('table', 'st-table');
     const head = el('tr');
-    for (const h of ['Versione', 'Stato', 'Data', 'Vendita', 'Locazione']) head.appendChild(el('th', null, h));
+    for (const h of ['Versione', 'Stato', 'Data', 'Vendita', 'Locazione', 'PDF']) head.appendChild(el('th', null, h));
     const thead = el('thead');
     thead.appendChild(head);
     const tbody = el('tbody');
@@ -498,7 +504,8 @@ export async function mountPropertyValuations(container, { propertyId, loadAgent
       const tdStato = el('td');
       tdStato.appendChild(badge);
       tr.append(el('td', null, `v${v.version}`), tdStato, el('td', null, dateText(v.approved_at || v.updated_at)),
-        el('td', null, rangeText(v.content && v.content.sale)), el('td', null, rangeText(v.content && v.content.rent, '/mese')));
+        el('td', null, rangeText(v.content && v.content.sale)), el('td', null, rangeText(v.content && v.content.rent, '/mese')),
+        el('td', null, v.pdf ? 'Generato' : '—'));
       tr.addEventListener('click', () => showDetail(v));
       tbody.appendChild(tr);
     }
@@ -529,6 +536,104 @@ export async function mountPropertyValuations(container, { propertyId, loadAgent
       actions.appendChild(nv);
     }
     if (actions.childNodes.length) detail.appendChild(actions);
+    const pdf = pdfBlock(v);
+    if (pdf) detail.appendChild(pdf);
+  }
+
+  // BLOCCO-2B ----------------------------------------------------------------
+
+  function pdfBlock(v) {
+    if (v.status === 'draft') return null;
+    const box = el('div', 'valuation-pdf');
+    box.setAttribute('data-valuation-pdf', String(v.id));
+    box.appendChild(el('h4', null, `PDF della valutazione · versione ${v.version}`));
+    const status = el('p', 'muted');
+    status.setAttribute('role', 'status');
+    status.setAttribute('data-valuation-pdf-status', '');
+    const actions = el('div', 'agency-actions');
+    if (v.pdf) {
+      box.appendChild(el('p', null, `Documento generato il ${dateText(v.pdf.generated_at)}${names[v.pdf.generated_by_user_id] ? ` da ${names[v.pdf.generated_by_user_id]}` : ''}: ogni download restituisce lo stesso file.`));
+      if (v.status === 'superseded') {
+        const note = el('p', 'valuation-pdf-historical', 'Documento storico: versione superata da una successiva. Il PDF resta com’era quando è stato generato.');
+        note.setAttribute('data-valuation-pdf-historical', '');
+        box.appendChild(note);
+      }
+      const dl = button('Scarica PDF', 'primary', 'data-valuation-pdf-download');
+      dl.addEventListener('click', () => downloadPdf(v, dl, status));
+      actions.appendChild(dl);
+    } else if (v.can_generate_pdf) {
+      box.appendChild(el('p', 'muted', 'Il PDF si genera una sola volta per versione, con i dati e il logo attuali dell’agenzia, e poi non cambia più.'));
+      const gen = button('Genera PDF', 'primary', 'data-valuation-pdf-generate');
+      gen.addEventListener('click', () => generatePdf(v, gen, status));
+      actions.appendChild(gen);
+    } else if (v.status === 'approved' && v.pdf_available === false) {
+      box.appendChild(el('p', 'muted', 'Il PDF delle valutazioni non è ancora attivo su questo ambiente.'));
+    } else if (v.status === 'approved') {
+      box.appendChild(el('p', 'muted', 'Il PDF di questa versione non è ancora stato generato.'));
+    } else {
+      box.appendChild(el('p', 'muted', 'Per questa versione superata non è stato generato un PDF.'));
+    }
+    if (actions.childNodes.length) box.appendChild(actions);
+    box.appendChild(status);
+    return box;
+  }
+
+  async function generatePdf(v, btn, status) {
+    btn.disabled = true;
+    btn.textContent = 'Generazione in corso…';
+    status.textContent = '';
+    try {
+      await apiPost(`${API}/${v.id}/pdf`, {});
+      say(`PDF della versione ${v.version} generato.`, 'ok');
+      await load(v.id);
+    } catch (error) {
+      status.textContent = `PDF non generato. ${errorDetails(error).message}`;
+      status.className = 'error-box';
+      btn.disabled = false;
+      btn.textContent = 'Genera PDF';
+    }
+  }
+
+  async function downloadPdf(v, btn, status) {
+    btn.disabled = true;
+    btn.textContent = 'Download in corso…';
+    status.textContent = '';
+    status.className = 'muted';
+    try {
+      let response;
+      try {
+        response = await fetch(`${API}/${v.id}/pdf`, { method: 'GET', credentials: 'include' });
+      } catch (_networkError) {
+        throw new Error('Impossibile contattare il server. Verifica la connessione.');
+      }
+      if (response.status === 401) {
+        sessionExpired();
+        throw new Error('Sessione scaduta. Effettua di nuovo il login.');
+      }
+      if (!response.ok) {
+        let data = null;
+        try { data = await response.json(); } catch (_e) { data = null; }
+        const error = new Error(`Errore ${response.status}`);
+        error.data = data;
+        throw error;
+      }
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `valutazione-immobile-${v.property_id}-v${v.version}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      status.textContent = 'PDF scaricato.';
+    } catch (error) {
+      status.textContent = `PDF non scaricato. ${errorDetails(error).message}`;
+      status.className = 'error-box';
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'Scarica PDF';
+    }
   }
 
   function openEditor(v) {

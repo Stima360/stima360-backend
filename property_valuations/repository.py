@@ -98,3 +98,65 @@ def approve(cur, *, agency_id: int, valuation_id: int, user_id: int, snapshot: d
         (STATUS_APPROVED, user_id, Json(snapshot), valuation_id, agency_id, STATUS_DRAFT),
     )
     return cur.fetchone()
+
+
+# ---------------------------------------------------------------------------
+# BLOCCO-2B - PDF delle valutazioni approvate (migrazione 117)
+# ---------------------------------------------------------------------------
+
+_PDF_METADATA = ("valuation_id, agency_id, property_id, valuation_version, template_version, header_snapshot, "
+                 "octet_length(pdf_bytes) AS size_bytes, sha256, generated_by_user_id, generated_at")
+
+
+def pdfs_installed(cur) -> bool:
+    cur.execute("SELECT to_regclass('property_valuation_pdfs') IS NOT NULL AS installed")
+    row = cur.fetchone()
+    return bool(row and row["installed"])
+
+
+def pdf_metadata_for_property(cur, agency_id: int, property_id: int):
+    cur.execute(f"SELECT {_PDF_METADATA} FROM property_valuation_pdfs WHERE agency_id = %s AND property_id = %s",
+                (agency_id, property_id))
+    return cur.fetchall()
+
+
+def get_pdf(cur, agency_id: int, valuation_id: int, *, with_bytes: bool = False):
+    columns = _PDF_METADATA + (", pdf_bytes" if with_bytes else "")
+    cur.execute(f"SELECT {columns} FROM property_valuation_pdfs WHERE valuation_id = %s AND agency_id = %s",
+                (valuation_id, agency_id))
+    return cur.fetchone()
+
+
+def share_lock_property(cur, agency_id: int, property_id: int):
+    """Lettura con lock condiviso: l'immobile non cambia sotto il salvataggio
+    del PDF (stesso primo lock, immobile -> valutazione, delle approvazioni)."""
+    cur.execute("SELECT * FROM properties WHERE id = %s AND agency_id = %s FOR SHARE", (property_id, agency_id))
+    return cur.fetchone()
+
+
+def share_lock_valuation(cur, agency_id: int, valuation_id: int):
+    cur.execute("SELECT * FROM property_valuations WHERE id = %s AND agency_id = %s FOR SHARE",
+                (valuation_id, agency_id))
+    return cur.fetchone()
+
+
+def insert_pdf(cur, *, valuation_id: int, agency_id: int, property_id: int, valuation_version: int,
+               template_version: str, header_snapshot: dict, pdf_bytes: bytes, sha256: str, user_id: int,
+               generated_at):
+    """Una sola volta per versione: se un'altra richiesta ha gia' salvato il
+    suo PDF, nessuna riga (e il chiamante restituisce quello). `generated_at`
+    e' la data stampata nel documento: la riga dice la stessa."""
+    cur.execute(
+        "INSERT INTO property_valuation_pdfs (valuation_id, agency_id, property_id, valuation_version, "
+        "template_version, header_snapshot, pdf_bytes, sha256, generated_by_user_id, generated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT (valuation_id) DO NOTHING "
+        f"RETURNING {_PDF_METADATA}",
+        (valuation_id, agency_id, property_id, valuation_version, template_version, Json(header_snapshot),
+         pdf_bytes, sha256, user_id, generated_at),
+    )
+    return cur.fetchone()
+
+
+def operator_name(cur, user_id: int):
+    cur.execute("SELECT first_name, last_name FROM operator_users WHERE id = %s", (user_id,))
+    return cur.fetchone()

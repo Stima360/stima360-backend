@@ -6239,6 +6239,22 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("property_valuations", "approved_by_user_id", "operator_users", "NO ACTION"),
     ("property_valuations", "previous_valuation_id", "property_valuations", "NO ACTION"),
     ("property_valuations", "superseded_by_valuation_id", "property_valuations", "NO ACTION"),
+    # SENTINELLA AGGIORNATA DA BLOCCO-2B, migration 117 (PDF delle valutazioni
+    # approvate): riferimenti non-CASCADE nuovi verso tabelle che il cleanup
+    # cancella. ESAMINATI.
+    #
+    #   property_valuation_pdfs.agency_id             -> agencies        NO ACTION
+    #   property_valuation_pdfs.property_id           -> properties      NO ACTION
+    #   property_valuation_pdfs.generated_by_user_id  -> operator_users  NO ACTION
+    #
+    # (`valuation_id -> property_valuations` punta a una tabella che il cleanup
+    # non cancella.) Documenti immutabili (trigger della 117). CONSEGUENZA PER IL
+    # CLEANUP, dichiarata: li scrive solo property_valuations/pdf_service.py
+    # (POST /pdf), che la matrice non percorre in scrittura; se un immobile di
+    # prova ne avesse, il preflight lo incontra come RIFIUTO.
+    ("property_valuation_pdfs", "agency_id", "agencies", "NO ACTION"),
+    ("property_valuation_pdfs", "property_id", "properties", "NO ACTION"),
+    ("property_valuation_pdfs", "generated_by_user_id", "operator_users", "NO ACTION"),
 })
 
 
