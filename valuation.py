@@ -25,6 +25,12 @@ BASE_MQ = {
         "Villarosa": 1400,
         "Alto":      1150,
     },
+    "Giulianova": {
+        "Giulianova Sud": 2070,
+        "Giulianova Centro": 2205,
+        "Giulianova Nord": 2610,
+        "Giulianova Alta": 1305,
+    },
 
     # =========================
     # 🔥 NUOVI COMUNI
