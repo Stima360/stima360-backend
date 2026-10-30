@@ -603,7 +603,7 @@ def valore_pertinenze(flags: Dict[str, Any], base_mq: float, posizioneMare: str)
         except:
             mq_g = 0.0
 
-        euro += mq_g * (base_mq / 5.0)
+       euro += min(mq_g, 100.0) * (base_mq / 5.0)
 
     # Extra da testo generico pertinenze (es. Piscina, posto moto, bici)
     text = (flags.get("pertinenze_text") or "").strip().lower()
