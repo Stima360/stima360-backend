@@ -1,9 +1,12 @@
 """REPORT-PROPRIETARIO-1 - il report attivita' di un immobile per il suo proprietario.
 
 Riusa i dati gia' nel CRM, in sola lettura: immobile, incarico
-(`core.property_mandate`), richieste (`property_leads` come interessati),
-visite (`appointments` buyer_visit completati, piu' le visite storiche),
-proposte di acquisto, storico prezzi e stati. Non scrive nulla e non salva
+(`core.property_mandate`), contatti interessati (`property_leads`, data del
+collegamento), visite (`appointments` buyer_visit completati, piu' le visite
+storiche non doppie), visite gia' fissate nei prossimi giorni, proposte di
+acquisto (situazione attuale: nessuna data di invio registrata), storico del
+prezzo richiesto e degli stati. Le «richieste ricevute» non hanno ancora una
+fonte attendibile: il report le dichiara non disponibili, mai zero. Non scrive nulla e non salva
 il PDF: ogni download lo rigenera dai dati di quel momento, e il documento
 dice quando e' stato generato.
 
@@ -40,6 +43,7 @@ from .enums import (
     PERIOD_TOO_LONG_MESSAGE,
     PROPERTY_NOT_FOUND_MESSAGE,
     PROPOSAL_STATUS_LABELS,
+    UPCOMING_DAYS,
 )
 
 ROME = ZoneInfo("Europe/Rome")
@@ -97,8 +101,8 @@ def _months(date_from: date, date_to: date) -> "OrderedDict[str, dict]":
     out: OrderedDict[str, dict] = OrderedDict()
     year, month = date_from.year, date_from.month
     while (year, month) <= (date_to.year, date_to.month):
-        out[f"{year:04d}-{month:02d}"] = {"month": f"{year:04d}-{month:02d}",
-                                          "label": f"{MONTHS[month - 1]} {year}", "inquiries": 0, "visits": 0}
+        out[f"{year:04d}-{month:02d}"] = {"month": f"{year:04d}-{month:02d}", "label": f"{MONTHS[month - 1]} {year}",
+                                          "interested_contacts": 0, "visits": 0}
         year, month = (year + 1, 1) if month == 12 else (year, month + 1)
     return out
 
@@ -137,16 +141,18 @@ def build_report(ctx, property_id: int, date_from: date | None = None, date_to: 
         prop = _property(cur, ctx, property_id)
         start_day, end_day = resolve_period(prop, date_from, date_to)
         start, end = _rome_midnight(start_day), _rome_midnight(end_day + timedelta(days=1))
-        inquiries = repository.inquiries(cur, agency_id, property_id, start, end)
+        interested = repository.interested_contacts(cur, agency_id, property_id, start, end)
         visits = repository.completed_visits(cur, agency_id, property_id, start, end)
-        upcoming = repository.upcoming_visits(cur, agency_id, property_id, datetime.now(timezone.utc))
-        proposals = repository.proposals_by_status(cur, agency_id, property_id, start, end)
+        now = datetime.now(timezone.utc)
+        upcoming_end = now + timedelta(days=UPCOMING_DAYS)
+        upcoming = repository.upcoming_visits(cur, agency_id, property_id, now, upcoming_end)
+        proposals = repository.proposals_by_status(cur, agency_id, property_id)
         prices = repository.price_history(cur, property_id, start, end)
         statuses = repository.status_history(cur, property_id, start, end)
 
     months = _months(start_day, end_day)
-    for at in inquiries:
-        months[_month_key(at)]["inquiries"] += 1
+    for at in interested:
+        months[_month_key(at)]["interested_contacts"] += 1
     for at in visits:
         months[_month_key(at)]["visits"] += 1
     real = is_real_mandate(prop)
@@ -169,10 +175,13 @@ def build_report(ctx, property_id: int, date_from: date | None = None, date_to: 
         },
         "period": {"from": start_day.isoformat(), "to": end_day.isoformat(),
                    "days": (end_day - start_day).days + 1},
-        "inquiries": {"total": len(inquiries)},
-        "visits": {"completed": len(visits), "upcoming": upcoming},
+        "interested_contacts": {"total": len(interested)},
+        # Nessuna fonte attendibile: mai uno zero al posto del dato mancante.
+        "requests": {"available": False, "total": None},
+        "visits": {"completed": len(visits),
+                   "upcoming": {"count": upcoming, "from": _day(now), "to": _day(upcoming_end)}},
         "monthly": list(months.values()),
-        "proposals": {"total": sum(proposals.values()),
+        "proposals": {"scope": "current", "total": sum(proposals.values()),
                       "by_status": [{"status": s, "label": label, "count": proposals.get(s, 0)}
                                     for s, label in PROPOSAL_STATUS_LABELS.items() if proposals.get(s)]},
         "price_history": [{"date": _day(p["created_at"]), "old_price": _money(p["old_price"]),

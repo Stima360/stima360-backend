@@ -18,8 +18,9 @@ def get_property(cur, agency_id: int, property_id: int):
     return row
 
 
-def inquiries(cur, agency_id: int, property_id: int, start, end) -> list:
-    """Date delle richieste: contatti collegati come interessati all'acquisto."""
+def interested_contacts(cur, agency_id: int, property_id: int, start, end) -> list:
+    """Date dei contatti interessati: la data del COLLEGAMENTO all'immobile
+    (`property_leads.created_at`), mai quella di creazione del contatto."""
     cur.execute(
         "SELECT pl.created_at AS at FROM property_leads pl JOIN leads l ON l.id = pl.lead_id "
         "WHERE pl.property_id = %s AND l.agency_id = %s AND pl.relation_type = 'buyer_interest' "
@@ -29,8 +30,12 @@ def inquiries(cur, agency_id: int, property_id: int, start, end) -> list:
 
 
 def completed_visits(cur, agency_id: int, property_id: int, start, end) -> list:
-    """Date delle visite svolte: gli appuntamenti `buyer_visit` completati e le
-    visite storiche registrate prima del calendario (senza appuntamento)."""
+    """Date delle visite svolte: gli appuntamenti `buyer_visit` completati
+    (data di svolgimento) e le visite storiche registrate prima dell'agenda
+    (`appointment_id` nullo, migrazione 078 senza backfill). Una visita storica
+    che coincide con un appuntamento completato dello stesso immobile, nello
+    stesso giorno (e con lo stesso contatto, se entrambi lo indicano) e' lo
+    stesso evento registrato due volte: conta una volta sola."""
     cur.execute(
         "SELECT completed_at AS at FROM appointments WHERE agency_id = %s AND property_id = %s "
         "AND appointment_type = 'buyer_visit' AND status = 'completed' "
@@ -39,27 +44,32 @@ def completed_visits(cur, agency_id: int, property_id: int, start, end) -> list:
         "SELECT pv.scheduled_at AS at FROM property_visits pv JOIN properties p ON p.id = pv.property_id "
         "WHERE pv.property_id = %s AND p.agency_id = %s AND pv.appointment_id IS NULL "
         "AND pv.status = 'completed' AND pv.scheduled_at >= %s AND pv.scheduled_at < %s "
+        "AND NOT EXISTS (SELECT 1 FROM appointments a WHERE a.agency_id = p.agency_id "
+        "AND a.property_id = pv.property_id AND a.appointment_type = 'buyer_visit' AND a.status = 'completed' "
+        "AND (a.start_at AT TIME ZONE 'Europe/Rome')::date = (pv.scheduled_at AT TIME ZONE 'Europe/Rome')::date "
+        "AND (pv.contact_id IS NULL OR a.contact_id IS NULL OR a.contact_id = pv.contact_id)) "
         "ORDER BY at",
         (agency_id, property_id, start, end, property_id, agency_id, start, end))
     return [r["at"] for r in cur.fetchall()]
 
 
-def upcoming_visits(cur, agency_id: int, property_id: int, now) -> int:
+def upcoming_visits(cur, agency_id: int, property_id: int, start, end) -> int:
+    """Visite gia' fissate o confermate nell'intervallo futuro [start, end)."""
     cur.execute(
         "SELECT count(*) AS n FROM appointments WHERE agency_id = %s AND property_id = %s "
-        "AND appointment_type = 'buyer_visit' AND status IN ('requested', 'scheduled', 'confirmed') "
-        "AND start_at >= %s", (agency_id, property_id, now))
+        "AND appointment_type = 'buyer_visit' AND status IN ('scheduled', 'confirmed') "
+        "AND start_at >= %s AND start_at < %s", (agency_id, property_id, start, end))
     return int(cur.fetchone()["n"])
 
 
-def proposals_by_status(cur, agency_id: int, property_id: int, start, end) -> dict:
-    """Proposte di acquisto inviate nel periodo, per stato (mai le bozze)."""
+def proposals_by_status(cur, agency_id: int, property_id: int) -> dict:
+    """Proposte di acquisto inviate, per stato attuale (mai le bozze). Senza
+    periodo: la tabella non registra la data di invio."""
     cur.execute(
         "SELECT pp.status, count(*) AS n FROM property_proposals pp "
         "JOIN matches m ON m.id = pp.match_id JOIN buy_requests br ON br.id = m.buy_request_id "
-        "WHERE m.property_id = %s AND br.agency_id = %s AND pp.status <> 'draft' "
-        "AND pp.created_at >= %s AND pp.created_at < %s GROUP BY pp.status",
-        (property_id, agency_id, start, end))
+        "WHERE m.property_id = %s AND br.agency_id = %s AND pp.status <> 'draft' GROUP BY pp.status",
+        (property_id, agency_id))
     return {r["status"]: int(r["n"]) for r in cur.fetchall()}
 
 

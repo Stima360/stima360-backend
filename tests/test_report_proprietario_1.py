@@ -48,6 +48,12 @@ def test_default_period_is_ninety_days_without_a_mandate_or_with_partial_data():
         assert service.resolve_period(prop, None, None) == (TODAY - timedelta(days=90), TODAY)
 
 
+def test_a_mandate_starting_in_the_future_never_inverts_the_default_period():
+    prop = {"mandate_type": "esclusiva", "mandate_start": TODAY + timedelta(days=15)}
+    start, end = service.resolve_period(prop, None, None)
+    assert (start, end) == (TODAY - timedelta(days=90), TODAY) and start <= end
+
+
 def test_a_mandate_starting_after_the_period_end_falls_back_to_ninety_days():
     prop = {"mandate_type": "esclusiva", "mandate_start": date(2026, 10, 1)}
     end = date(2026, 9, 1)
@@ -82,9 +88,11 @@ def _report(**over):
         "mandate": {"exists": True, "type": "esclusiva", "start": "2026-06-01", "end": "2026-12-01",
                     "state": "active", "state_label": "In corso"},
         "period": {"from": "2026-06-01", "to": "2026-10-29", "days": 151},
-        "inquiries": {"total": 3}, "visits": {"completed": 2, "upcoming": 1},
-        "monthly": [{"month": "2026-06", "label": "giugno 2026", "inquiries": 1, "visits": 0}],
-        "proposals": {"total": 1, "by_status": [{"status": "submitted", "label": "In attesa di risposta", "count": 1}]},
+        "interested_contacts": {"total": 3}, "requests": {"available": False, "total": None},
+        "visits": {"completed": 2, "upcoming": {"count": 1, "from": "2026-10-29", "to": "2026-11-28"}},
+        "monthly": [{"month": "2026-06", "label": "giugno 2026", "interested_contacts": 1, "visits": 0}],
+        "proposals": {"scope": "current", "total": 1,
+                      "by_status": [{"status": "submitted", "label": "In attesa di risposta", "count": 1}]},
         "price_history": [{"date": "2026-07-01", "old_price": "250000.00", "new_price": "239000.00"}],
         "status_history": [{"date": "2026-07-02", "old_label": "Attivo", "new_label": "Sotto offerta"}],
         "definitions": ["Definizione di prova."],
@@ -119,6 +127,40 @@ def test_pdf_is_deterministic_with_and_without_logo():
         assert (b"/Subtype /Image" in a) is (logo is not None)
 
 
+def test_pdf_states_what_is_counted_and_never_turns_missing_data_into_zero(monkeypatch):
+    from reportlab.platypus import SimpleDocTemplate
+
+    seen = []
+    original = SimpleDocTemplate.build
+
+    def walk(item):
+        if isinstance(item, (list, tuple)):
+            for x in item:
+                walk(x)
+        elif hasattr(item, "getPlainText"):
+            seen.append(item.getPlainText())
+        elif hasattr(item, "_cellvalues"):
+            walk(item._cellvalues)
+        elif hasattr(item, "_content"):
+            walk(item._content)
+
+    def build(self, flowables, *args, **kwargs):
+        walk(list(flowables))
+        return original(self, flowables, *args, **kwargs)
+
+    monkeypatch.setattr(SimpleDocTemplate, "build", build)
+    rep = _report(definitions=list(service.DEFINITIONS))
+    render_owner_report_pdf(rep, _identity(), agent_notes=None, generated_at="2026-10-29T09:00:00+00:00")
+    text = "\n".join(seen)
+    assert "Contatti interessati registrati\n3" in text
+    assert "Richieste ricevute\nDato non disponibile" in text
+    assert "Visite in programma dal 29/10/2026 al 28/11/2026\n1" in text
+    assert "Proposte di acquisto (situazione attuale)" in text and "non è riferito al periodo" in text
+    assert "Storico del prezzo richiesto" in text and "non rappresentano l'andamento del valore di mercato" in text
+    assert "fotografa i dati del CRM al momento della generazione" in text
+    assert "data del collegamento all'immobile (non con la data di creazione del contatto)" in text
+
+
 def test_an_undecodable_logo_is_an_error():
     with pytest.raises(PdfLogoError):
         render_owner_report_pdf(_report(), _identity(b"GIF89a-rotto"), agent_notes=None,
@@ -126,7 +168,7 @@ def test_an_undecodable_logo_is_an_error():
 
 
 def test_long_tables_and_notes_span_pages():
-    months = [{"month": f"m{i}", "label": f"mese {i}", "inquiries": i, "visits": i} for i in range(25)]
+    months = [{"month": f"m{i}", "label": f"mese {i}", "interested_contacts": i, "visits": i} for i in range(25)]
     prices = [{"date": "2026-07-01", "old_price": "1", "new_price": "2"}] * 40
     data = render_owner_report_pdf(_report(monthly=months, price_history=prices), _identity(),
                                    agent_notes="Testo lungo. " * 250, generated_at="2026-10-29T09:00:00+00:00")
@@ -205,6 +247,8 @@ def test_component_uses_safe_dom_and_session_only_download():
     js = (APP / "components" / "owner-report.js").read_text(encoding="utf-8")
     assert "innerHTML" not in js and "textContent" in js
     assert "credentials: 'include'" in js and "sessionExpired()" in js
-    for needle in ("Scarica PDF", "Indicazioni dell’agente", "maxLength = NOTES_MAX", "/pdf"):
+    for needle in ("Scarica PDF", "Indicazioni dell’agente", "maxLength = NOTES_MAX", "/pdf", "Dato non disponibile",
+                   "fotografa i dati del CRM al momento della generazione", "non viene conservato",
+                   "Contatti interessati registrati"):
         assert needle in js, needle
     assert "mailto:" not in js and "wa.me" not in js and "whatsapp" not in js.lower()

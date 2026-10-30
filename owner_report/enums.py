@@ -24,11 +24,25 @@ PROPOSAL_STATUS_LABELS = {
     "expired": "Scadute", "withdrawn": "Ritirate",
 }
 
-#: Come si contano le voci: stampato nel PDF, nessun dato ricavato in altro modo.
+#: Visite future: solo quelle gia' fissate o confermate, in un intervallo esplicito.
+UPCOMING_DAYS = 30
+NOT_AVAILABLE = "Dato non disponibile"
+
+#: Che cosa si conta e con quale data: stampato nel PDF e mostrato in anteprima.
 DEFINITIONS = (
-    "Richieste ricevute: contatti collegati all'immobile come interessati all'acquisto, per data di collegamento.",
-    "Visite effettuate: visite all'immobile segnate come svolte, per data di svolgimento.",
-    "Proposte di acquisto: proposte registrate e inviate (mai le bozze), per data di registrazione.",
+    "Contatti interessati registrati: contatti collegati all'immobile come interessati all'acquisto, "
+    "attribuiti al periodo con la data del collegamento all'immobile (non con la data di creazione del contatto).",
+    "Richieste ricevute: dato non disponibile. Il CRM non registra ancora le richieste in arrivo per immobile "
+    "con data e provenienza; contatti, abbinamenti automatici e messaggi non vengono contati come richieste.",
+    "Visite effettuate: visite all'immobile segnate come svolte in agenda, per data di svolgimento, più le "
+    "visite registrate prima dell'agenda; una visita registrata due volte (scheda e agenda, stesso giorno) "
+    "conta una sola volta.",
+    f"Visite in programma: visite già fissate o confermate nei {UPCOMING_DAYS} giorni successivi alla "
+    "generazione del documento; le richieste di visita non ancora fissate non sono contate.",
+    "Proposte di acquisto: situazione attuale delle proposte inviate (mai le bozze); la data di invio non è "
+    "registrata, quindi non sono attribuite al periodo.",
+    "Prezzo richiesto: variazioni del prezzo di annuncio registrate nella scheda; non è una stima del valore "
+    "di mercato.",
 )
 
 PROPERTY_NOT_FOUND_MESSAGE = "Immobile non trovato."

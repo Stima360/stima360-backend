@@ -1637,6 +1637,8 @@ a.census-unit-main { text-decoration: none; }
 .owner-report-field { display: grid; gap: 4px; min-width: 0; }
 .owner-report-field textarea { width: 100%; box-sizing: border-box; }
 .owner-report-counter { font-size: 12px; justify-self: end; }
+.owner-report-hint { font-size: 12px; margin: 0; }
+.owner-report-definitions { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
 .owner-report-preview { display: grid; gap: 10px; min-width: 0; }
 .owner-report-preview h4 { margin: 8px 0 0; font-size: 14px; }
 .owner-report-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }

@@ -22,7 +22,7 @@ from property_valuations.pdf_render import (
     plain_text,
 )
 
-from .enums import AGENT_NOTES_MAX, TITLE
+from .enums import AGENT_NOTES_MAX, NOT_AVAILABLE, TITLE
 
 
 def _table(rows, styles, widths):
@@ -87,6 +87,8 @@ def render_owner_report_pdf(report: dict, identity: dict, *, agent_notes: str | 
     story.append(Paragraph(clean_text(reference), styles["subtitle"]))
     story.append(Paragraph(clean_text(f"Periodo {_period_text(period)} · documento generato il "
                                       f"{italian_datetime(generated_at)}"), styles["note"]))
+    story.append(Paragraph(clean_text("Il report fotografa i dati del CRM al momento della generazione; non viene "
+                                      "aggiornato in seguito."), styles["note"]))
     story.append(Spacer(1, 6))
 
     story.append(Paragraph("Immobile e incarico", styles["h2"]))
@@ -102,22 +104,33 @@ def render_owner_report_pdf(report: dict, identity: dict, *, agent_notes: str | 
     ], styles, width))
 
     story.append(Paragraph("Attività nel periodo", styles["h2"]))
-    proposals = report["proposals"]
-    summary = [
-        ("Richieste ricevute", str(report["inquiries"]["total"])),
+    upcoming = report["visits"]["upcoming"]
+    requests = report["requests"]
+    story.append(_kv_table([(k, clean_text(v)) for k, v in (
+        ("Contatti interessati registrati", str(report["interested_contacts"]["total"])),
+        ("Richieste ricevute", str(requests["total"]) if requests["available"] else NOT_AVAILABLE),
         ("Visite effettuate", str(report["visits"]["completed"])),
-        ("Visite già in programma", str(report["visits"]["upcoming"])),
-        ("Proposte di acquisto", str(proposals["total"])),
-    ]
-    summary += [(f"  di cui {p['label'].lower()}", str(p["count"])) for p in proposals["by_status"]]
-    story.append(_kv_table([(k, clean_text(v)) for k, v in summary], styles, width))
+        (f"Visite in programma dal {italian_date(upcoming['from'])} al {italian_date(upcoming['to'])}",
+         str(upcoming["count"])),
+    )], styles, width))
 
     story.append(Paragraph("Andamento mese per mese", styles["h2"]))
-    rows = [("Mese", "Richieste ricevute", "Visite effettuate")]
-    rows += [(m["label"], str(m["inquiries"]), str(m["visits"])) for m in report["monthly"]]
-    story.append(_table(rows, styles, [width * 0.5, width * 0.25, width * 0.25]))
+    rows = [("Mese", "Contatti interessati registrati", "Visite effettuate")]
+    rows += [(m["label"], str(m["interested_contacts"]), str(m["visits"])) for m in report["monthly"]]
+    story.append(_table(rows, styles, [width * 0.4, width * 0.35, width * 0.25]))
 
-    story.append(Paragraph("Prezzo richiesto", styles["h2"]))
+    story.append(Paragraph("Proposte di acquisto (situazione attuale)", styles["h2"]))
+    proposals = report["proposals"]
+    if proposals["total"]:
+        story.append(_kv_table([("Proposte inviate", clean_text(str(proposals["total"])))]
+                               + [(f"di cui {p['label'].lower()}", clean_text(str(p["count"])))
+                                  for p in proposals["by_status"]], styles, width))
+    else:
+        story.append(Paragraph(clean_text("Nessuna proposta di acquisto inviata."), styles["body"]))
+    story.append(Paragraph(clean_text("La data di invio delle proposte non è registrata: il dato non è riferito "
+                                      "al periodo del report."), styles["note"]))
+
+    story.append(Paragraph("Storico del prezzo richiesto", styles["h2"]))
     if report["price_history"]:
         rows = [("Data", "Prezzo precedente", "Nuovo prezzo")]
         rows += [(italian_date(p["date"]), euro(p["old_price"]) or "—", euro(p["new_price"]) or "—")
@@ -125,6 +138,8 @@ def render_owner_report_pdf(report: dict, identity: dict, *, agent_notes: str | 
         story.append(_table(rows, styles, [width * 0.3, width * 0.35, width * 0.35]))
     else:
         story.append(Paragraph(clean_text("Nessuna variazione del prezzo richiesto nel periodo."), styles["body"]))
+    story.append(Paragraph(clean_text("Variazioni del prezzo di annuncio registrate nella scheda dell'immobile: "
+                                      "non rappresentano l'andamento del valore di mercato."), styles["note"]))
 
     story.append(Paragraph("Stato commerciale", styles["h2"]))
     if report["status_history"]:

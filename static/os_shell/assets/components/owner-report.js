@@ -13,6 +13,7 @@ import { sessionExpired } from '../core/auth.js';
 
 const API = '/api/owner-reports';
 const NOTES_MAX = 3000;
+const NOT_AVAILABLE = 'Dato non disponibile';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -91,26 +92,40 @@ export function renderPreview(r) {
   ]));
   root.appendChild(el('h4', null, `Attività dal ${dayText(r.period.from)} al ${dayText(r.period.to)}`));
   const cards = el('div', 'owner-report-cards');
+  const up = r.visits.upcoming;
   for (const [label, value, attr] of [
-    ['Richieste ricevute', r.inquiries.total, 'inquiries'], ['Visite effettuate', r.visits.completed, 'visits'],
-    ['Visite in programma', r.visits.upcoming, 'upcoming'], ['Proposte di acquisto', r.proposals.total, 'proposals'],
+    ['Contatti interessati registrati', String(r.interested_contacts.total), 'interested'],
+    ['Richieste ricevute', r.requests.available ? String(r.requests.total) : NOT_AVAILABLE, 'requests'],
+    ['Visite effettuate', String(r.visits.completed), 'visits'],
+    [`Visite in programma dal ${dayText(up.from)} al ${dayText(up.to)}`, String(up.count), 'upcoming'],
   ]) {
     const card = el('div', 'owner-report-card');
     card.setAttribute('data-owner-report-count', attr);
-    card.append(el('strong', null, String(value)), el('span', 'muted', label));
+    card.append(el('strong', null, value), el('span', 'muted', label));
     cards.appendChild(card);
   }
   root.appendChild(cards);
   root.appendChild(el('h4', null, 'Andamento mese per mese'));
-  root.appendChild(table(['Mese', 'Richieste', 'Visite'], r.monthly.map((x) => [x.label, String(x.inquiries), String(x.visits)])));
-  root.appendChild(el('h4', null, 'Prezzo richiesto'));
+  root.appendChild(table(['Mese', 'Contatti interessati', 'Visite'], r.monthly.map((x) => [x.label, String(x.interested_contacts), String(x.visits)])));
+  root.appendChild(el('h4', null, 'Proposte di acquisto (situazione attuale)'));
+  root.appendChild(r.proposals.total
+    ? facts([['Proposte inviate', String(r.proposals.total)], ...r.proposals.by_status.map((x) => [`di cui ${x.label.toLowerCase()}`, String(x.count)])])
+    : el('p', 'muted', 'Nessuna proposta di acquisto inviata.'));
+  root.appendChild(el('p', 'muted owner-report-hint', 'La data di invio delle proposte non è registrata: il dato non è riferito al periodo.'));
+  root.appendChild(el('h4', null, 'Storico del prezzo richiesto'));
   root.appendChild(r.price_history.length
     ? table(['Data', 'Prezzo precedente', 'Nuovo prezzo'], r.price_history.map((x) => [dayText(x.date), money(x.old_price) || '—', money(x.new_price) || '—']))
     : el('p', 'muted', 'Nessuna variazione del prezzo richiesto nel periodo.'));
+  root.appendChild(el('p', 'muted owner-report-hint', 'Variazioni del prezzo di annuncio: non rappresentano l’andamento del valore di mercato.'));
   root.appendChild(el('h4', null, 'Stato commerciale'));
   root.appendChild(r.status_history.length
     ? table(['Data', 'Da', 'A'], r.status_history.map((x) => [dayText(x.date), x.old_label || '—', x.new_label || '—']))
     : el('p', 'muted', 'Nessun cambio di stato commerciale nel periodo.'));
+  root.appendChild(el('h4', null, 'Come sono contati i dati'));
+  const defs = el('ul', 'owner-report-definitions');
+  defs.setAttribute('data-owner-report-definitions', '');
+  for (const d of r.definitions) defs.appendChild(el('li', null, d));
+  root.appendChild(defs);
   return root;
 }
 
@@ -119,7 +134,7 @@ export async function mountOwnerReport(container, { propertyId }) {
   root.setAttribute('data-owner-report', '');
   root.appendChild(el('h3', 'section-title', 'Report attività per il proprietario'));
   root.appendChild(el('p', 'muted owner-report-notice',
-    'Il report riassume richieste, visite, prezzo e stato dell’immobile. Il PDF non viene inviato: scaricalo e condividilo tu con il proprietario. Note interne, dati degli acquirenti e importi delle proposte non vengono mai inclusi.'));
+    'Il report fotografa i dati del CRM al momento della generazione e non si aggiorna dopo. Il PDF non viene salvato né inviato: scaricalo e condividilo tu con il proprietario. Note interne, dati degli acquirenti e importi delle proposte non vengono mai inclusi.'));
   const notice = el('div');
   notice.setAttribute('role', 'status');
   notice.setAttribute('data-owner-report-notice', '');
@@ -129,12 +144,14 @@ export async function mountOwnerReport(container, { propertyId }) {
   const to = el('input'); to.type = 'date'; to.name = 'date_to';
   const notes = el('textarea'); notes.name = 'agent_notes'; notes.rows = 5; notes.maxLength = NOTES_MAX;
   const counter = el('span', 'muted owner-report-counter', `0/${NOTES_MAX}`);
+  const notesHint = el('span', 'muted owner-report-hint', 'Il testo entra solo nel PDF che scarichi: non viene conservato.');
+  notesHint.setAttribute('data-owner-report-notes-hint', '');
   notes.addEventListener('input', () => { counter.textContent = `${notes.value.length}/${NOTES_MAX}`; });
-  const field = (label, input, extra, wide) => {
+  const field = (label, input, extras = [], wide = false) => {
     const wrap = el('label', wide ? 'owner-report-field owner-report-wide' : 'owner-report-field');
     wrap.appendChild(el('span', null, label));
     wrap.appendChild(input);
-    if (extra) wrap.appendChild(extra);
+    for (const extra of extras) wrap.appendChild(extra);
     return wrap;
   };
   const refresh = button('Aggiorna anteprima', 'ghost', 'data-owner-report-refresh');
@@ -142,7 +159,7 @@ export async function mountOwnerReport(container, { propertyId }) {
   const actions = el('div', 'agency-actions owner-report-wide');
   actions.append(refresh, download);
   form.append(field('Dal', from), field('Al', to),
-    field('Indicazioni dell’agente per il proprietario (facoltative)', notes, counter, true), actions);
+    field('Indicazioni dell’agente per il proprietario (facoltative)', notes, [notesHint, counter], true), actions);
   const previewBox = el('div', 'owner-report-preview-box');
   root.append(notice, form, previewBox);
   container.replaceChildren(root);

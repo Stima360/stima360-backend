@@ -60,9 +60,32 @@ def _inquiry(b, agency_id, property_id, days_ago):
        (property_id, lead, _ts(days_ago)))
 
 
-def _legacy_visit(b, property_id, days_ago, status="completed"):
-    _q(b, "INSERT INTO property_visits (property_id, scheduled_at, status) VALUES (%s, %s, %s)",
-       (property_id, _ts(days_ago), status))
+def _legacy_visit(b, property_id, days_ago, status="completed", contact_id=None):
+    _q(b, "INSERT INTO property_visits (property_id, contact_id, scheduled_at, status) VALUES (%s, %s, %s, %s)",
+       (property_id, contact_id, _ts(days_ago), status))
+
+
+def _operator(b, agency_id):
+    """Un operatore sintetico per scenario: il calendario vieta appuntamenti
+    sovrapposti dello stesso operatore, e il banco e' condiviso fra i test."""
+    email = f"b2c.report.{uuid.uuid4().hex[:8]}@example.test"
+    uid = _q(b, "INSERT INTO operator_users (email, email_normalized, password_hash, first_name, status) "
+                "VALUES (%s, %s, 'pbkdf2_sha256$1$x$y', 'Calendario', 'active') RETURNING id", (email, email))[0][0]
+    _q(b, "INSERT INTO agency_memberships (agency_id, operator_user_id, role, status) VALUES (%s, %s, 'agent', 'active')",
+       (agency_id, uid))
+    return uid
+
+
+def _visit(b, agency_id, agent_id, property_id, contact_id, days_from_now, status):
+    """Un appuntamento `buyer_visit` (giorni negativi = passato)."""
+    start = datetime.now(timezone.utc) + timedelta(days=days_from_now)
+    stamps = {"completed": "completed_at", "confirmed": "confirmed_at"}
+    column = stamps.get(status)
+    _q(b, "INSERT INTO appointments (agency_id, assigned_user_id, appointment_type, status, start_at, end_at, "
+          "contact_id, property_id" + (f", {column}" if column else "") + ") VALUES "
+          "(%s, %s, 'buyer_visit', %s, %s, %s, %s, %s" + (", %s" if column else "") + ")",
+       (agency_id, agent_id, status, start, start + timedelta(hours=1), contact_id, property_id)
+       + ((start + timedelta(hours=1),) if column else ()))
 
 
 def _buy_request(b, agency_id):
@@ -99,11 +122,18 @@ def mondo(app):
     for days in (50, 20, 3):
         _inquiry(b, ids["a"], pid, days)
     _inquiry(b, ids["a"], pid, 200)                    # fuori dal periodo predefinito (90 giorni)
+    buyer = _contact(b, ids["a"], "Visitatore")
+    agenda = _operator(b, ids["a"])
     _legacy_visit(b, pid, 40)
-    _legacy_visit(b, pid, 10)
+    _legacy_visit(b, pid, 10, contact_id=buyer)       # la stessa visita registrata anche in agenda...
+    _visit(b, ids["a"], agenda, pid, buyer, -10, "completed")   # ...conta una volta sola
     _legacy_visit(b, pid, 5, status="cancelled")      # non svolta
+    _visit(b, ids["a"], agenda, pid, buyer, 10, "scheduled")    # in programma nei 30 giorni
+    _visit(b, ids["a"], agenda, pid, buyer, 12, "confirmed")    # in programma nei 30 giorni
+    _visit(b, ids["a"], agenda, pid, buyer, 45, "scheduled")    # oltre l'intervallo futuro
+    _visit(b, ids["a"], agenda, pid, buyer, 6, "requested")     # richiesta non ancora fissata
     _proposal(b, ids["a"], pid, "submitted", 4, amount="231111")
-    _proposal(b, ids["a"], pid, "rejected", 15, amount="222222")
+    _proposal(b, ids["a"], pid, "rejected", 200, amount="222222")         # fuori periodo: conta (stato attuale)
     _proposal(b, ids["a"], pid, "draft", 2, amount="233333")     # bozza interna: mai contata
     return {"pid": pid, "owner": owner}
 
@@ -116,11 +146,16 @@ def test_r_counts_and_monthly_trend_over_the_default_period(app, mondo):
     assert rep["period"]["from"] == (date.today() - timedelta(days=90)).isoformat()
     assert rep["mandate"] == {"exists": False, "type": None, "start": None, "end": None, "state": None,
                               "state_label": None}
-    assert rep["inquiries"]["total"] == 3
-    assert rep["visits"]["completed"] == 2 and rep["visits"]["upcoming"] == 0
-    assert rep["proposals"]["total"] == 2
+    assert rep["interested_contacts"]["total"] == 3
+    assert rep["requests"] == {"available": False, "total": None}            # mai zero al posto del dato
+    assert rep["visits"]["completed"] == 2                                     # 40 giorni fa + quella di 10 (una)
+    up = rep["visits"]["upcoming"]
+    assert up["count"] == 2 and up["from"] == date.today().isoformat()
+    assert up["to"] == (date.today() + timedelta(days=30)).isoformat()
+    assert rep["proposals"]["scope"] == "current" and rep["proposals"]["total"] == 2
     assert {p["status"]: p["count"] for p in rep["proposals"]["by_status"]} == {"submitted": 1, "rejected": 1}
-    assert sum(m["inquiries"] for m in rep["monthly"]) == 3 and sum(m["visits"] for m in rep["monthly"]) == 2
+    assert sum(m["interested_contacts"] for m in rep["monthly"]) == 3
+    assert sum(m["visits"] for m in rep["monthly"]) == 2
     assert rep["property"]["asking_price"] == "239000.00"
     assert rep["property"]["commercial_status_label"] == "Sotto offerta"
 
@@ -136,9 +171,9 @@ def test_p_explicit_and_invalid_periods(app, mondo):
     c, pid = mondo["owner"], mondo["pid"]
     today = date.today()
     rep = c.get(f"{API}/{pid}", params={"date_from": (today - timedelta(days=7)).isoformat()}).json()
-    assert rep["inquiries"]["total"] == 1 and rep["visits"]["completed"] == 0
+    assert rep["interested_contacts"]["total"] == 1 and rep["visits"]["completed"] == 0
     rep = c.get(f"{API}/{pid}", params={"date_from": (today - timedelta(days=300)).isoformat()}).json()
-    assert rep["inquiries"]["total"] == 4
+    assert rep["interested_contacts"]["total"] == 4
     for params in ({"date_from": today.isoformat(), "date_to": (today - timedelta(days=1)).isoformat()},
                    {"date_to": (today + timedelta(days=1)).isoformat()},
                    {"date_from": (today - timedelta(days=900)).isoformat()}):
@@ -148,7 +183,8 @@ def test_p_explicit_and_invalid_periods(app, mondo):
 
 def test_d_no_internal_data_leaks_into_the_report(app, mondo):
     text = mondo["owner"].get(f"{API}/{mondo['pid']}").text
-    for secret in ("NOTA-INTERNA-RISERVATA", "210000", "231111", "222222", "233333", "Interessato", "Acquirente"):
+    for secret in ("NOTA-INTERNA-RISERVATA", "210000", "231111", "222222", "233333", "Interessato", "Acquirente",
+                   "Visitatore"):
         assert secret not in text, secret
 
 
@@ -212,3 +248,5 @@ def test_f_pdf_has_the_agency_logo_and_the_agent_notes(app, mondo, monkeypatch):
     assert "Alfa Report" in text and "Report attività per il proprietario" in text
     assert "Consiglio di mantenere il prezzo <b>fino a fine mese</b> & più visite." in text
     assert "NOTA-INTERNA-RISERVATA" not in text and "231111" not in text
+    assert "Richieste ricevute\nDato non disponibile" in text and "Contatti interessati registrati\n3" in text
+    assert "non rappresentano l'andamento del valore di mercato" in text
