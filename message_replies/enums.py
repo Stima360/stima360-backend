@@ -41,6 +41,8 @@ WINDOW_CLOSED_MESSAGE = ("Sono passate più di 24 ore dall'ultimo messaggio del 
                          "messaggi modello approvati, non ancora disponibili qui.")
 EMPTY_TEXT_MESSAGE = "Scrivi il testo della risposta."
 CONFIRM_REQUIRED_MESSAGE = "Conferma l'invio prima di procedere."
+NOT_RESUMABLE_MESSAGE = ("Questa risposta non può essere ripresa: è già stata presa in carico, ha un esito "
+                         "o non l'hai scritta tu. Un invio con esito incerto non viene mai ritentato.")
 GRAPH_VERSION_MISSING_MESSAGE = ("La versione dell'API WhatsApp non è configurata o non è valida "
                                  "(WHATSAPP_GRAPH_VERSION): l'invio resta bloccato.")
 STOP_NOTICE = ("Il cliente ha scritto STOP: ha rinunciato alle comunicazioni promozionali su WhatsApp di questa "

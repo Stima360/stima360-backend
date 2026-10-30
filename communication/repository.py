@@ -366,6 +366,7 @@ INITIAL_STATUS = INITIAL_STATUS
 # ===========================================================================
 
 from .enums import (  # noqa: E402  (import in coda: il modulo e' cresciuto per fasi)
+    CHANNEL_WHATSAPP,
     CLAIMED_STATUS,
     FAILURE_DEFINITE,
     FAILURE_INDETERMINATE,
@@ -373,6 +374,7 @@ from .enums import (  # noqa: E402  (import in coda: il modulo e' cresciuto per 
     OUTCOME_ACCEPTED,
     OUTCOME_INDETERMINATE,
     OUTCOME_REJECTED,
+    REASON_OPERATOR_REPLY,
     STATUS_FAILED,
     STATUS_INDETERMINATE,
     STATUS_SENT,
@@ -398,6 +400,15 @@ CENTRAL_CONTINUITY_FILTER = (
 MARKETING_RECIPIENTS_FILTER = """
            AND (m.communication_type <> 'marketing'
                 OR lower(btrim(m.destination_snapshot)) = ANY(%s))"""
+
+
+#: BLOCCO-4B: le risposte manuali WhatsApp (`message_replies`) non sono mai
+#: candidate del claim generico, qualunque sia il loro `scheduled_at`. Le
+#: prende solo `claim_message`, dal percorso che le ricontrolla (finestra,
+#: numero, operatore) subito prima dell'invio. Ogni altro messaggio, anche
+#: WhatsApp con un altro motivo, resta candidato come prima.
+MANUAL_REPLY_EXCLUSION = """
+           AND NOT (m.channel = %s AND m.reason_code = %s)"""
 
 
 def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
@@ -453,6 +464,7 @@ def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
           FROM {source}
            AND m.status = %s
            AND m.channel = %s
+{MANUAL_REPLY_EXCLUSION}
            AND m.scheduled_at <= NOW()
            AND (NOT COALESCE((to_jsonb(m)->>'tappa6_cycle')::boolean, FALSE)
                 OR (EXTRACT(ISODOW FROM %s::timestamptz AT TIME ZONE 'Europe/Rome') BETWEEN 1 AND 6
@@ -464,7 +476,8 @@ def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
          LIMIT %s
            FOR UPDATE SKIP LOCKED
         """,
-        scope_params + [INITIAL_STATUS, channel, *([datetime.now(timezone.utc)] * 3),
+        scope_params + [INITIAL_STATUS, channel, CHANNEL_WHATSAPP, REASON_OPERATOR_REPLY,
+                        *([datetime.now(timezone.utc)] * 3),
                         *([marketing_recipients] if marketing_recipients is not None else []), limit],
     )
     candidati = [r["id"] for r in cur.fetchall()]

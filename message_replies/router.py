@@ -8,6 +8,8 @@ la POST e' bloccata dalla guardia globale.
 
     GET  /api/message-replies/conversations/{sender_phone}   stato: finestra, STOP, blocchi, risposte
     POST /api/message-replies/conversations/{sender_phone}   invia una risposta di testo (una volta sola)
+    POST /api/message-replies/conversations/{sender_phone}/replies/{reply_id}/resume
+         riprende una risposta rimasta in coda e mai presa in carico (mai una incerta)
 """
 from __future__ import annotations
 
@@ -37,6 +39,12 @@ class ReplyRequest(BaseModel):
     confirm: bool = False
 
 
+class ResumeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    confirm: bool = False
+
+
 def _call(fn, *args):
     try:
         return fn(*args)
@@ -60,3 +68,9 @@ def state(sender_phone: str = SENDER, ctx: OperatorContext = Depends(require_ope
 @router.post("/conversations/{sender_phone}")
 def reply(body: ReplyRequest, sender_phone: str = SENDER, ctx: OperatorContext = Depends(require_operator)):
     return _call(service.send_reply, ctx, sender_phone, body.text, str(body.client_request_id), body.confirm)
+
+
+@router.post("/conversations/{sender_phone}/replies/{reply_id}/resume")
+def resume(body: ResumeRequest, sender_phone: str = SENDER, reply_id: int = Path(..., ge=1),
+           ctx: OperatorContext = Depends(require_operator)):
+    return _call(service.resume_reply, ctx, sender_phone, reply_id, body.confirm)

@@ -15,10 +15,20 @@ Ordine di un invio, per non mandare mai due volte la stessa risposta:
        doppio clic o un reinvio della stessa richiesta trovano il messaggio
        gia' registrato e NON lo rimandano
     3. `claim_message` di QUEL messaggio (mai gli altri in coda): due richieste
-       concorrenti sullo stesso messaggio, una sola lo prende
-    4. invio fuori da ogni transazione
-    5. `finalize_sent` (accettato, con il wamid) / `finalize_failed` (rifiuto
+       concorrenti sullo stesso messaggio, una sola lo prende. E' l'unica via:
+       il claim generico (`claim_due`) esclude `whatsapp`/`operator_reply`
+    4. di nuovo tutti i controlli, con l'ora e i dati di adesso, compreso
+       l'operatore (ancora attivo e autorizzato nell'agenzia): un blocco chiude
+       il messaggio come soppresso senza chiamare Meta
+    5. invio fuori da ogni transazione
+    6. `finalize_sent` (accettato, con il wamid) / `finalize_failed` (rifiuto
        certo) / `finalize_indeterminate` (esito incerto: MAI ritentato da solo)
+
+Ripresa dopo un'interruzione: una risposta ancora `queued` e mai presa in
+carico (`attempt_count = 0`) riprende i passi 3-6 con la stessa richiesta o
+con «Riprendi invio», solo per chi l'ha scritta. Una risposta `sending` o
+`indeterminate` non riparte mai: il processo puo' essersi fermato dopo la
+chiamata a Meta.
 
 La consegna e la lettura arrivano dopo, come stati del webhook (4A) collegati
 per wamid: il registro dice «accettato», la conversazione dice anche
@@ -30,6 +40,7 @@ nessuna risposta del cliente vale mai come consenso marketing.
 """
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
@@ -40,6 +51,7 @@ from inbound_messages import routing
 from inbound_messages.service import is_stop_request
 from operator_auth.permissions import sees_all_agency_records
 
+from . import repository
 from . import transport as transport_module
 from .enums import (
     CONFIRM_REQUIRED_MESSAGE,
@@ -49,6 +61,7 @@ from .enums import (
     GRAPH_VERSION_MISSING_MESSAGE,
     NO_CONTACT_MESSAGE,
     NOT_FOUND_MESSAGE,
+    NOT_RESUMABLE_MESSAGE,
     OUTBOUND_DISABLED_MESSAGE,
     PROVIDER_LABEL,
     SENDER_NOT_CONFIGURED_MESSAGE,
@@ -62,8 +75,7 @@ from .enums import (
 from .transport import SendResult
 
 CHANNEL = "whatsapp"
-#: La programmazione delle risposte manuali: mai "dovuta" per `claim_due`.
-MANUAL_LANE_SCHEDULE = datetime(9999, 12, 31, tzinfo=timezone.utc)
+REASON = "operator_reply"
 REPLIES_LIMIT = 100
 
 
@@ -133,13 +145,26 @@ def _conversation(cur, ctx, sender_phone: str) -> dict:
     return {"last": last, "closes_at": closes_at, "window_open": window_open, "stop_at": stop_at, "blocks": blocks}
 
 
-def _replies(cur, ctx, conv: dict, sender_phone: str) -> list[dict]:
+def _ledger_rows(cur, ctx, conv: dict, sender_phone: str) -> list[dict]:
     contact_id = conv["last"]["contact_id"]
     if contact_id is None:
         return []
-    rows = [m for m in communication.list_for_contact(ctx, contact_id, limit=REPLIES_LIMIT, cur=cur)
-            if m["channel"] == CHANNEL and m["reason_code"] == "operator_reply"
+    return [m for m in communication.list_for_contact(ctx, contact_id, limit=REPLIES_LIMIT, cur=cur)
+            if m["channel"] == CHANNEL and m["reason_code"] == REASON
             and m["destination_snapshot"] == sender_phone]
+
+
+def _resumable(ctx, sender_phone: str, message: dict) -> bool:
+    """Una risposta di questa conversazione, scritta da chi chiede, ancora in
+    coda e mai presa in carico: e' l'unico caso in cui puo' (ri)partire."""
+    return (message["channel"] == CHANNEL and message["reason_code"] == REASON
+            and message["destination_snapshot"] == sender_phone
+            and message["status"] == "queued" and message["attempt_count"] == 0
+            and ctx.user_id is not None and message.get("actor_user_id") == ctx.user_id)
+
+
+def _replies(cur, ctx, conv: dict, sender_phone: str) -> list[dict]:
+    rows = _ledger_rows(cur, ctx, conv, sender_phone)
     deliveries = inbound_repository.delivery_statuses(cur, [m["provider_message_id"] for m in rows
                                                             if m.get("provider_message_id")])
     names = inbound_repository.operator_names(cur, sorted({m["actor_user_id"] for m in rows if m.get("actor_user_id")}))
@@ -155,6 +180,7 @@ def _replies(cur, ctx, conv: dict, sender_phone: str) -> list[dict]:
             "suppressed_reason": m.get("suppressed_reason"),
             "operator": names.get(m.get("actor_user_id")), "created_at": _iso(m["created_at"]),
             "sent_at": _iso(m.get("sent_at")),
+            "can_resume": not conv["blocks"] and _resumable(ctx, sender_phone, m),
         })
     return out
 
@@ -164,6 +190,8 @@ def _send_time_block(ctx, sender_phone: str, enqueued_from: dict) -> str | None:
     l'ora attuale e i dati attuali, non con quelli dell'accodamento."""
     try:
         with core_cursor() as (_, cur):
+            if not repository.operator_still_authorized(cur, ctx):
+                return "operator_not_authorized"
             conv = _conversation(cur, ctx, sender_phone)
     except NotFound:
         return "conversation_not_visible"
@@ -189,9 +217,65 @@ def reply_state(ctx, sender_phone: str) -> dict:
         "stop": ({"requested": True, "at": _iso(conv["stop_at"]), "notice": STOP_NOTICE} if conv["stop_at"]
                  else {"requested": False}),
         "text_max": TEXT_MAX,
-        "has_uncertain_reply": any(r["status"] == "indeterminate" for r in replies),
+        # `sending` fuori da una richiesta in corso: il processo puo' essersi
+        # fermato dopo la chiamata a Meta, quindi l'esito e' ignoto quanto
+        # quello di `indeterminate`.
+        "has_uncertain_reply": any(r["status"] in ("indeterminate", "sending") for r in replies),
         "replies": replies,
     }
+
+
+def _raise_block(conv: dict) -> None:
+    if conv["blocks"]:
+        code, message = conv["blocks"][0]
+        raise (Unavailable if code in ("OUTBOUND_DISABLED", "CREDENTIALS_MISSING") else Blocked)(code, message)
+    if transport_module.current() is None:
+        raise Unavailable("OUTBOUND_DISABLED", OUTBOUND_DISABLED_MESSAGE)
+
+
+def _metadata(message: dict) -> dict:
+    value = message.get("metadata")
+    if isinstance(value, str):
+        value = json.loads(value)
+    return value if isinstance(value, dict) else {}
+
+
+def _deliver(ctx, sender_phone: str, message: dict) -> None:
+    """I passi 3-6 per UNA risposta in coda e mai presa in carico."""
+    enqueued_from = {"contact_id": message["contact_id"], "phone_number_id": _metadata(message).get("phone_number_id")}
+    claimed = communication.claim_message(ctx, message["id"], provider=PROVIDER_LABEL, channel=CHANNEL)
+    if claimed is None:                       # un'altra richiesta l'ha gia' presa: nessun secondo invio
+        return
+    token = claimed["message"]["claim_token"]
+    # Tutto di nuovo, DOPO il claim e PRIMA di Meta: operatore, finestra, numero
+    # mittente e agenzia, visibilita' e contatto, invio attivo. Un blocco
+    # chiude il messaggio come soppresso, senza chiamare il trasporto.
+    reason = _send_time_block(ctx, sender_phone, enqueued_from)
+    transport = transport_module.current() if reason is None else None
+    if reason is None and transport is None:
+        reason = "outbound_disabled"
+    if reason is not None:
+        communication.finalize_suppressed(ctx, message["id"], token, reason=reason)
+        return
+    try:
+        result = transport.send(enqueued_from["phone_number_id"], sender_phone, message["rendered_body"])
+    except Exception as exc:      # un trasporto che solleva: esito incerto, mai un reinvio
+        result = SendResult("indeterminate", error_code="outcome_unknown", error_detail=type(exc).__name__)
+    if result.outcome == "accepted":
+        communication.finalize_sent(ctx, message["id"], token, provider_message_id=result.provider_message_id)
+    elif result.outcome == "rejected":
+        communication.finalize_failed(ctx, message["id"], token, error_code=result.error_code,
+                                      error_detail=result.error_detail)
+    else:
+        communication.finalize_indeterminate(ctx, message["id"], token,
+                                             error_code=result.error_code or "outcome_unknown",
+                                             error_detail=result.error_detail)
+
+
+def _state_with(ctx, sender_phone: str, message_id: int) -> dict:
+    state = reply_state(ctx, sender_phone)
+    state["reply"] = next((r for r in state["replies"] if r["id"] == message_id), None)
+    return state
 
 
 def send_reply(ctx, sender_phone: str, text: str, client_request_id: str, confirmed: bool) -> dict:
@@ -203,53 +287,38 @@ def send_reply(ctx, sender_phone: str, text: str, client_request_id: str, confir
         raise Blocked("CONFIRM_REQUIRED", CONFIRM_REQUIRED_MESSAGE)
     with core_cursor() as (_, cur):
         conv = _conversation(cur, ctx, sender_phone)
-    if conv["blocks"]:
-        code, message = conv["blocks"][0]
-        raise (Unavailable if code in ("OUTBOUND_DISABLED", "CREDENTIALS_MISSING") else Blocked)(code, message)
-    if transport_module.current() is None:
-        raise Unavailable("OUTBOUND_DISABLED", OUTBOUND_DISABLED_MESSAGE)
+    _raise_block(conv)
     last = conv["last"]
 
     queued = communication.enqueue(
         ctx, contact_id=last["contact_id"], channel=CHANNEL, communication_type="service", mode="manual",
-        reason_code="operator_reply", rendered_body=text, destination_snapshot=sender_phone,
+        reason_code=REASON, rendered_body=text, destination_snapshot=sender_phone,
         idempotency_key=f"wa_reply:{agency_id}:{client_request_id}", property_id=last["property_id"],
-        # Fuori dalla portata di ogni `claim_due`: solo `claim_message` di questo
-        # percorso, con i suoi controlli, puo' prendere la risposta.
-        scheduled_at=MANUAL_LANE_SCHEDULE,
         metadata={"service_basis": "customer_initiated_whatsapp", "inbound_message_id": last["id"],
-                  "phone_number_id": last["phone_number_id"], "window_closes_at": _iso(conv["closes_at"]),
-                  "manual_reply_lane": True})
+                  "phone_number_id": last["phone_number_id"], "window_closes_at": _iso(conv["closes_at"])})
     message = queued["message"]
-    if queued["created"]:
-        claimed = communication.claim_message(ctx, message["id"], provider=PROVIDER_LABEL, channel=CHANNEL)
-        if claimed is not None:
-            token = claimed["message"]["claim_token"]
-            # Tutto di nuovo, DOPO il claim e PRIMA di Meta: finestra, numero
-            # mittente e agenzia, visibilita' e contatto, invio attivo. Un blocco
-            # chiude il messaggio come soppresso, senza chiamare il trasporto.
-            reason = _send_time_block(ctx, sender_phone, last)
-            transport = transport_module.current() if reason is None else None
-            if reason is None and transport is None:
-                reason = "outbound_disabled"
-            if reason is not None:
-                communication.finalize_suppressed(ctx, message["id"], token, reason=reason)
-            else:
-                try:
-                    result = transport.send(last["phone_number_id"], sender_phone, text)
-                except Exception as exc:      # un trasporto che solleva: esito incerto, mai un reinvio
-                    result = SendResult("indeterminate", error_code="outcome_unknown", error_detail=type(exc).__name__)
-                if result.outcome == "accepted":
-                    communication.finalize_sent(ctx, message["id"], token,
-                                                provider_message_id=result.provider_message_id)
-                elif result.outcome == "rejected":
-                    communication.finalize_failed(ctx, message["id"], token, error_code=result.error_code,
-                                                  error_detail=result.error_detail)
-                else:
-                    communication.finalize_indeterminate(ctx, message["id"], token,
-                                                         error_code=result.error_code or "outcome_unknown",
-                                                         error_detail=result.error_detail)
-    state = reply_state(ctx, sender_phone)
-    state["reply"] = next((r for r in state["replies"] if r["id"] == message["id"]), None)
+    # Nuova, o la stessa richiesta rimasta in coda dopo un'interruzione: stesso
+    # percorso. `sending`, `indeterminate` e ogni esito finale non ripartono.
+    if _resumable(ctx, sender_phone, message):
+        _deliver(ctx, sender_phone, message)
+    state = _state_with(ctx, sender_phone, message["id"])
     state["created"] = queued["created"]
+    return state
+
+
+def resume_reply(ctx, sender_phone: str, reply_id: int, confirmed: bool) -> dict:
+    """«Riprendi invio»: la stessa risposta, ancora in coda e mai presa in carico."""
+    if not confirmed:
+        raise Blocked("CONFIRM_REQUIRED", CONFIRM_REQUIRED_MESSAGE)
+    with core_cursor() as (_, cur):
+        conv = _conversation(cur, ctx, sender_phone)
+        message = next((m for m in _ledger_rows(cur, ctx, conv, sender_phone) if m["id"] == reply_id), None)
+    if message is None:
+        raise NotFound("NOT_FOUND", NOT_FOUND_MESSAGE)
+    if not _resumable(ctx, sender_phone, message):
+        raise Blocked("NOT_RESUMABLE", NOT_RESUMABLE_MESSAGE)
+    _raise_block(conv)
+    _deliver(ctx, sender_phone, message)
+    state = _state_with(ctx, sender_phone, message["id"])
+    state["created"] = False
     return state

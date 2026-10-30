@@ -121,7 +121,9 @@ def test_s06_l_origin_e_esattamente_appointment_reminder():
     assert "appointment_reminder" in context.SYSTEM_CONTEXT_ORIGINS
     # SENTINELLA AGGIORNATA DA C3: dopo `appointment_reminder` viene
     # `public_consent` (pagina del consenso); il promemoria resta unico.
-    assert context.SYSTEM_CONTEXT_ORIGINS[-2:] == ("appointment_reminder", "public_consent")
+    # SENTINELLA AGGIORNATA DA BLOCCO-4B: in coda `whatsapp_inbound` (STOP
+    # ricevuto su WhatsApp, revoca nell'agenzia che lo riceve).
+    assert context.SYSTEM_CONTEXT_ORIGINS[-3:] == ("appointment_reminder", "public_consent", "whatsapp_inbound")
     assert context.SYSTEM_CONTEXT_ORIGINS.count("appointment_reminder") == 1
     assert "appointment_reminders" not in context.SYSTEM_CONTEXT_ORIGINS
     codice = _codice("appointment_reminders/planner.py")

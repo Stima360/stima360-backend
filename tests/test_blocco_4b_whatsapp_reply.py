@@ -182,3 +182,76 @@ def test_reply_ui_confirms_reuses_the_request_key_and_never_calls_the_old_admin_
     # il corpo inviato e' SOLO testo, chiave e conferma: destinatario e mittente li decide il server
     assert "{ text: text.value, client_request_id: requestId, confirm: true }" in js
     assert "phone_number_id" not in js
+
+
+# ---------------------------------------------------------------------------
+# presa in carico e ripresa
+# ---------------------------------------------------------------------------
+
+class RecordingCursor:
+    def __init__(self):
+        self.calls = []
+
+    def execute(self, sql, params=None):
+        self.calls.append((sql, list(params or [])))
+
+    def fetchall(self):
+        return []
+
+    def fetchone(self):
+        return None
+
+
+def test_the_generic_claim_excludes_manual_whatsapp_replies_only():
+    from communication import repository
+    from operator_auth.context import OperatorContext
+
+    ctx = OperatorContext(user_id=1, agency_id=7, role="agency_owner", is_platform_admin=False, session_id=1,
+                          auth_channel="operator_session")
+    for channel in ("whatsapp", "email"):
+        cur = RecordingCursor()
+        assert repository.claim_due(cur, ctx, limit=5, provider="p", channel=channel, token_factory=lambda: "t") == []
+        sql, params = cur.calls[0]
+        assert "AND NOT (m.channel = %s AND m.reason_code = %s)" in sql
+        i = params.index(channel)
+        assert params[i + 1:i + 3] == ["whatsapp", "operator_reply"]               # canale e motivo, come parametri
+    # il claim mirato non ha l'esclusione: e' l'unica via per queste risposte
+    cur = RecordingCursor()
+    assert repository.claim_message(cur, ctx, 3, provider="p", channel="whatsapp", token_factory=lambda: "t") is None
+    assert "reason_code" not in cur.calls[0][0]
+
+
+def test_no_fictitious_schedule_is_left():
+    service = (ROOT / "message_replies" / "service.py").read_text(encoding="utf-8")
+    assert "MANUAL_LANE_SCHEDULE" not in service and "9999" not in service and "scheduled_at" not in service
+
+
+def _message(**over):
+    base = {"channel": "whatsapp", "reason_code": "operator_reply", "destination_snapshot": "393331234567",
+            "status": "queued", "attempt_count": 0, "actor_user_id": 5}
+    return {**base, **over}
+
+
+@pytest.mark.parametrize("over, ok", [
+    ({}, True),
+    ({"status": "sending"}, False), ({"status": "indeterminate"}, False), ({"status": "sent"}, False),
+    ({"status": "failed"}, False), ({"attempt_count": 1}, False),                 # gia' presa in carico una volta
+    ({"actor_user_id": 6}, False), ({"destination_snapshot": "393330000000"}, False),
+    ({"reason_code": "operator_manual"}, False),
+])
+def test_only_a_queued_never_claimed_reply_of_its_author_can_resume(over, ok):
+    from types import SimpleNamespace
+
+    from message_replies import service
+
+    assert service._resumable(SimpleNamespace(user_id=5), "393331234567", _message(**over)) is ok
+
+
+def test_reply_ui_distinguishes_waiting_sending_and_uncertain():
+    js = (APP / "components" / "whatsapp-reply.js").read_text(encoding="utf-8")
+    assert "In attesa: non è ancora partita" in js and "Riprendi invio" in js and "/resume" in js
+    assert "reply.status === 'sending'" in js and "non verrà ritentato" in js
+    assert "r.status === 'queued' && r.can_resume" in js                         # il server decide chi puo' riprendere
+    assert "{ confirm: true }" in js and "operator_not_authorized" in js
+    # nessun avviso promette un esito che il registro non ha
+    assert "if (reply.status === 'queued' || reply.status === 'sending') return { kind: 'error'" in js

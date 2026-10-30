@@ -511,3 +511,189 @@ def test_l_delivery_status_from_the_webhook_is_shown(rp):
     reply = next(r for r in owner.get(f"{API}/{sender}").json()["replies"] if r["id"] == body["reply"]["id"])
     assert reply["status"] == "sent" and reply["delivery"]["status"] == "delivered"
     assert reply["delivery"]["label"] == "Consegnato"
+
+
+# ---------------------------------------------------------------------------
+# G - presa in carico generica: le risposte manuali escluse, il resto invariato
+# ---------------------------------------------------------------------------
+
+def _owner_ctx(b):
+    return _ctx(b, "owner_a", "a")
+
+
+def test_g_a_queued_reply_is_due_now_but_the_generic_claim_never_takes_it(rp, monkeypatch):
+    """Nessuna data fittizia: la risposta in coda e' "dovuta" adesso, e il claim
+    generico la esclude per canale e motivo. Un altro messaggio WhatsApp in coda
+    (motivo diverso) resta candidato come prima."""
+    from communication import service as communication
+    from message_replies import service
+
+    sender, _ = _conversation(rp)
+    other_sender, other_contact = _conversation(rp)
+    other = communication.enqueue(_owner_ctx(rp), contact_id=other_contact, channel="whatsapp",
+                                  communication_type="service", mode="manual", reason_code="operator_manual",
+                                  rendered_body="Altro flusso", destination_snapshot=other_sender,
+                                  idempotency_key=f"altro:{uuid.uuid4()}")
+    monkeypatch.setattr(service.communication, "claim_message",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("processo interrotto")))
+    with pytest.raises(RuntimeError):
+        _reply(rp["login"]("owner_a"), sender)
+    ((reply_id, status, attempts, due),) = _q(
+        rp, "SELECT id, status, attempt_count, scheduled_at <= NOW() FROM communication_messages "
+            "WHERE destination_snapshot = %s", (sender,))
+    assert (status, attempts, due) == ("queued", 0, True)
+    claimed = communication.claim_due(_owner_ctx(rp), provider="generico", channel="whatsapp", limit=50)
+    ids = {c["message"]["id"] for c in claimed}
+    assert reply_id not in ids and other["message"]["id"] in ids
+    assert _q(rp, "SELECT status FROM communication_messages WHERE id = %s", (reply_id,)) == [("queued",)]
+    assert rp["fake"].calls == []
+
+
+# ---------------------------------------------------------------------------
+# R - ripresa dopo un'interruzione
+# ---------------------------------------------------------------------------
+
+def _crash_before_claim(monkeypatch):
+    from message_replies import service
+
+    original = service.communication.claim_message
+    monkeypatch.setattr(service.communication, "claim_message",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("processo interrotto")))
+    return lambda: monkeypatch.setattr(service.communication, "claim_message", original)
+
+
+def _crash_after_claim(monkeypatch):
+    """Il processo muore dopo la presa in carico: da fuori non si sa se Meta e'
+    stato chiamato."""
+    from message_replies import service
+
+    original = service._send_time_block
+    monkeypatch.setattr(service, "_send_time_block",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("processo interrotto")))
+    return lambda: monkeypatch.setattr(service, "_send_time_block", original)
+
+
+def test_r_the_same_request_resumes_a_reply_never_taken(rp, monkeypatch):
+    sender, _ = _conversation(rp)
+    owner = rp["login"]("owner_a")
+    key = str(uuid.uuid4())
+    restore = _crash_before_claim(monkeypatch)
+    with pytest.raises(RuntimeError):
+        _reply(owner, sender, "Testo originale", key=key)
+    st = owner.get(f"{API}/{sender}").json()
+    (pending,) = st["replies"]
+    assert pending["status"] == "queued" and pending["can_resume"] is True and st["has_uncertain_reply"] is False
+    restore()
+    body = _reply(owner, sender, "Testo cambiato", key=key).json()            # stessa chiave
+    assert body["created"] is False and body["reply"]["status"] == "sent"
+    assert rp["fake"].calls == [(NUMBER_A, sender, "Testo originale")]        # il testo registrato, una volta
+    (row,) = _ledger(rp, sender)
+    assert row[5] == "sent" and row[12] == 1
+
+
+def test_r_resume_by_id_only_for_its_author_and_with_confirmation(rp, monkeypatch):
+    ids = rp["ids"]
+    sender, _ = _conversation(rp, agent=ids["agent_a"])
+    owner, agent = rp["login"]("owner_a"), rp["login"]("agent_a")
+    restore = _crash_before_claim(monkeypatch)
+    with pytest.raises(RuntimeError):
+        _reply(owner, sender)
+    restore()
+    reply_id = _ledger(rp, sender)[0][0]
+    url = f"{API}/{sender}/replies/{reply_id}/resume"
+    assert agent.get(f"{API}/{sender}").json()["replies"][0]["can_resume"] is False
+    r = agent.post(url, json={"confirm": True})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "NOT_RESUMABLE"
+    assert rp["login"]("owner_b").post(url, json={"confirm": True}).status_code == 404
+    assert owner.post(url, json={"confirm": False}).json()["detail"]["code"] == "CONFIRM_REQUIRED"
+    assert owner.post(url, json={"confirm": True, "text": "altro"}).status_code == 422
+    assert rp["fake"].calls == []
+    body = owner.post(url, json={"confirm": True}).json()
+    assert body["reply"]["status"] == "sent" and len(rp["fake"].calls) == 1
+    again = owner.post(url, json={"confirm": True})
+    assert again.status_code == 409 and len(rp["fake"].calls) == 1 and len(_ledger(rp, sender)) == 1
+
+
+def test_r_resume_still_rechecks_the_window(rp, monkeypatch):
+    from message_replies import service
+
+    sender, _ = _conversation(rp, hours_ago=23)
+    owner = rp["login"]("owner_a")
+    restore = _crash_before_claim(monkeypatch)
+    with pytest.raises(RuntimeError):
+        _reply(owner, sender)
+    restore()
+    reply_id = _ledger(rp, sender)[0][0]
+    later = datetime.now(timezone.utc) + timedelta(hours=2)
+    monkeypatch.setattr(service, "_now", lambda: later)
+    r = owner.post(f"{API}/{sender}/replies/{reply_id}/resume", json={"confirm": True})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "WINDOW_CLOSED"
+    assert rp["fake"].calls == [] and _ledger(rp, sender)[0][5] == "queued"
+
+
+def test_r_a_reply_interrupted_while_sending_is_never_resent(rp, monkeypatch):
+    from communication import service as communication
+
+    sender, _ = _conversation(rp)
+    owner = rp["login"]("owner_a")
+    key = str(uuid.uuid4())
+    restore = _crash_after_claim(monkeypatch)
+    with pytest.raises(RuntimeError):
+        _reply(owner, sender, key=key)
+    restore()
+    (row,) = _ledger(rp, sender)
+    assert row[5] == "sending" and row[12] == 1
+    st = owner.get(f"{API}/{sender}").json()
+    assert st["replies"][0]["status"] == "sending" and st["replies"][0]["can_resume"] is False
+    assert st["has_uncertain_reply"] is True
+    # stessa richiesta, ripresa per id, claim generico: nessuno la rimanda
+    assert _reply(owner, sender, key=key).json()["reply"]["status"] == "sending"
+    r = owner.post(f"{API}/{sender}/replies/{row[0]}/resume", json={"confirm": True})
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "NOT_RESUMABLE"
+    claimed = communication.claim_due(_owner_ctx(rp), provider="x", channel="whatsapp", limit=50)
+    assert all(c["message"]["id"] != row[0] for c in claimed)
+    # il recupero dei claim scaduti la chiude come esito incerto, mai come reinvio
+    _q(rp, "UPDATE communication_messages SET claimed_at = NOW() - interval '1 hour' WHERE id = %s", (row[0],))
+    communication.recover_stale(_owner_ctx(rp), stale_after_seconds=60)
+    assert _ledger(rp, sender)[0][5] == "indeterminate"
+    r = owner.post(f"{API}/{sender}/replies/{row[0]}/resume", json={"confirm": True})
+    assert r.status_code == 409 and rp["fake"].calls == [] and len(_ledger(rp, sender)) == 1
+
+
+def test_r_an_uncertain_reply_cannot_be_resumed(rp):
+    sender, _ = _conversation(rp)
+    owner = rp["login"]("owner_a")
+    rp["fake"].outcome, rp["fake"].error_code = "indeterminate", "timeout"
+    reply_id = _reply(owner, sender).json()["reply"]["id"]
+    rp["fake"].outcome = "accepted"
+    r = owner.post(f"{API}/{sender}/replies/{reply_id}/resume", json={"confirm": True})
+    assert r.status_code == 409 and len(rp["fake"].calls) == 1
+
+
+# ---------------------------------------------------------------------------
+# O - l'operatore, riletto al momento dell'invio
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("revoke, restore", [
+    ("UPDATE agency_memberships SET status = 'suspended' WHERE operator_user_id = %(u)s AND agency_id = %(a)s",
+     "UPDATE agency_memberships SET status = 'active' WHERE operator_user_id = %(u)s AND agency_id = %(a)s"),
+    ("UPDATE operator_users SET status = 'disabled' WHERE id = %(u)s",
+     "UPDATE operator_users SET status = 'active' WHERE id = %(u)s"),
+    ("UPDATE agency_memberships SET role = 'agent' WHERE operator_user_id = %(u)s AND agency_id = %(a)s",
+     "UPDATE agency_memberships SET role = 'agency_owner' WHERE operator_user_id = %(u)s AND agency_id = %(a)s"),
+    ("UPDATE operator_sessions SET revoked_at = NOW() WHERE operator_user_id = %(u)s AND revoked_at IS NULL",
+     None),
+], ids=["membership_suspended", "user_disabled", "role_changed", "session_revoked"])
+def test_o_operator_revoked_after_enqueue_blocks_without_calling_meta(rp, monkeypatch, revoke, restore):
+    ids = rp["ids"]
+    params = {"u": ids["owner_a"], "a": ids["a"]}
+    sender, _ = _conversation(rp)
+    owner = rp["login"]("owner_a")
+    _between_enqueue_and_send(monkeypatch, lambda: _q(rp, revoke, params))
+    try:
+        _reply(owner, sender)
+    finally:
+        if restore:
+            _q(rp, restore, params)
+    assert rp["fake"].calls == []
+    assert _suppressed(rp, sender) == [("suppressed", "operator_not_authorized", None)]
