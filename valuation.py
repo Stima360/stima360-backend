@@ -596,14 +596,14 @@ def valore_pertinenze(flags: Dict[str, Any], base_mq: float, posizioneMare: str)
         else:
             euro += 4500.0
 
-    # Giardino — già ok
+    # Giardino — massimo 100 mq valorizzati
     if flags.get("Giardino"):
         try:
             mq_g = float(flags.get("mqGiardino") or 0)
         except:
             mq_g = 0.0
 
-       euro += min(mq_g, 100.0) * (base_mq / 5.0)
+        euro += min(mq_g, 100.0) * (base_mq / 5.0)
 
     # Extra da testo generico pertinenze (es. Piscina, posto moto, bici)
     text = (flags.get("pertinenze_text") or "").strip().lower()
