@@ -99,7 +99,7 @@ def _catalogo_piatto():
 
 def test_a01_comuni_e_microzone_coincidono_con_il_portale():
     # SENTINELLA AGGIORNATA DA C0-quater: il catalogo e' il portale PIU' i comuni aggiunti dal
-    # CRM, dichiarati uno per uno in `CRM_ADDED_MUNICIPALITIES` (oggi solo Giulianova, senza microzone)
+    # CRM, dichiarati uno per uno in `CRM_ADDED_MUNICIPALITIES` (oggi solo Giulianova)
     piatto = _catalogo_piatto()
     aggiunti = set(catalog.CRM_ADDED_MUNICIPALITIES)
     assert aggiunti == {"Giulianova"}
@@ -109,9 +109,16 @@ def test_a01_comuni_e_microzone_coincidono_con_il_portale():
         assert {c for c, v in portale.items() if v[0] == region} == set(comuni), region
     assert {c: v[3] for c, v in portale.items()} == PORTALE["zone"]   # stesso ordine delle microzone
     assert len(portale) == 25 and len(piatto) == 26
-    assert sum(len(v[3]) for v in piatto.values()) == 80
     assert not aggiunti & set(PORTALE["zone"])                         # nessun duplicato del portale
-    assert all(piatto[c][3] == [] for c in aggiunti)                   # nessuna microzona inventata
+    # SENTINELLA AGGIORNATA 2026-10-30: le microzone dei comuni aggiunti sono SOLO quelle decise dal
+    # titolare (`CRM_ADDED_MICROZONES`), nello stesso ordine; il portale resta a 80 microzone
+    assert sum(len(v[3]) for v in portale.values()) == 80
+    assert set(catalog.CRM_ADDED_MICROZONES) <= aggiunti
+    assert all(piatto[c][3] == list(catalog.CRM_ADDED_MICROZONES.get(c, ())) for c in aggiunti)
+    assert piatto["Giulianova"][3] == ["Giulianova Sud", "Giulianova Centro", "Giulianova Nord", "Giulianova Alta"]
+    assert sum(len(v[3]) for v in piatto.values()) == 84
+    for comune, (_r, _p, _i, zone) in piatto.items():
+        assert len(zone) == len(set(zone)), comune                     # nessuna microzona duplicata
 
 
 def test_a02_province_e_codici_istat():
@@ -141,6 +148,11 @@ def test_a03_albero_del_form():
     ("Abruzzo", "TE", "Tortoreto", "Lido Sud"),
     ("Marche", "FM", "Porto Sant’Elpidio", "Corva"),
     (None, None, "Fermo", "Lido di Fermo"),
+    ("Abruzzo", "TE", "Giulianova", "Giulianova Sud"),
+    ("Abruzzo", "TE", "Giulianova", "Giulianova Centro"),
+    ("Abruzzo", "TE", "Giulianova", "Giulianova Nord"),
+    ("Abruzzo", "TE", "Giulianova", "Giulianova Alta"),
+    ("Abruzzo", "TE", "Giulianova", None),
 ])
 def test_a04_combinazioni_valide(args):
     catalog.validate_location(*args)
@@ -156,6 +168,8 @@ def test_a04_combinazioni_valide(args):
     (("Abruzzo", None, "Fermo", None), "non appartiene alla regione"),
     (("Abruzzo", "TE", "Tortoreto", "Nord"), "non appartiene al comune"),
     (("Abruzzo", "TE", None, "Nord"), "richiede il comune"),
+    (("Abruzzo", "TE", "Giulianova", "Lido"), "non appartiene al comune"),
+    (("Abruzzo", "TE", "Tortoreto", "Giulianova Nord"), "non appartiene al comune"),
 ])
 def test_a05_combinazioni_incompatibili(args, match):
     with pytest.raises(ValueError, match=match):
