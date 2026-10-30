@@ -6,9 +6,10 @@ from __future__ import annotations
 MODE_ENV = "WHATSAPP_OUTBOUND_MODE"
 MODE_META = "meta"
 TOKEN_ENV = "WHATSAPP_TOKEN"
+#: Obbligatoria per attivare l'invio reale: nessuna versione implicita. Si
+#: sceglie prima dell'attivazione sulla documentazione ufficiale Meta.
 GRAPH_VERSION_ENV = "WHATSAPP_GRAPH_VERSION"
-#: La versione gia' usata dagli invii in esercizio (template e risposta admin).
-DEFAULT_GRAPH_VERSION = "v18.0"
+GRAPH_VERSION_PATTERN = r"^v[1-9][0-9]?\.[0-9]$"
 
 #: Regola della piattaforma (finestra di assistenza clienti): un messaggio
 #: libero, non template, si puo' inviare solo entro 24 ore dall'ultimo
@@ -40,5 +41,8 @@ WINDOW_CLOSED_MESSAGE = ("Sono passate più di 24 ore dall'ultimo messaggio del 
                          "messaggi modello approvati, non ancora disponibili qui.")
 EMPTY_TEXT_MESSAGE = "Scrivi il testo della risposta."
 CONFIRM_REQUIRED_MESSAGE = "Conferma l'invio prima di procedere."
-STOP_NOTICE = ("Il cliente ha scritto STOP: non riceverà comunicazioni promozionali su WhatsApp. "
-               "Rispondi solo per assistenza alla sua richiesta.")
+GRAPH_VERSION_MISSING_MESSAGE = ("La versione dell'API WhatsApp non è configurata o non è valida "
+                                 "(WHATSAPP_GRAPH_VERSION): l'invio resta bloccato.")
+STOP_NOTICE = ("Il cliente ha scritto STOP: ha rinunciato alle comunicazioni promozionali su WhatsApp di questa "
+               "agenzia. Non è un consenso a riceverne altre: la risposta è possibile solo perché ha scritto nelle "
+               "ultime 24 ore, e deve riguardare soltanto la sua richiesta.")

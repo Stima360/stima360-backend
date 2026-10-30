@@ -146,10 +146,12 @@ def candidate_contacts(cur, agency_id: int, phone: str):
 def last_inbound(cur, agency_id: int, sender_phone: str, *, agent_user_id: int | None):
     """L'ultimo messaggio ricevuto della conversazione nell'agenzia (visibile a chi chiede)."""
     extra, params = _agent_filter(agent_user_id)
+    # L'ora del cliente e' quella dichiarata da Meta, MA mai dopo la ricezione:
+    # un orario futuro non e' attendibile e non puo' allungare la finestra.
     cur.execute("SELECT m.id, m.phone_number_id, m.contact_id, m.property_id, m.provider_timestamp, m.received_at, "
-                "COALESCE(m.provider_timestamp, m.received_at) AS customer_at "
+                "LEAST(COALESCE(m.provider_timestamp, m.received_at), m.received_at) AS customer_at "
                 f"{_JOINS} WHERE m.agency_id = %s AND m.sender_phone = %s{extra} "
-                "ORDER BY COALESCE(m.provider_timestamp, m.received_at) DESC, m.id DESC LIMIT 1",
+                "ORDER BY LEAST(COALESCE(m.provider_timestamp, m.received_at), m.received_at) DESC, m.id DESC LIMIT 1",
                 (agency_id, sender_phone, *params))
     row = cur.fetchone()
     return dict(row) if row else None

@@ -330,7 +330,9 @@ def test_12_public_unsubscribe_e_un_origin_ammesso_e_l_insieme_resta_chiuso():
     # l'agenzia viene dal link risolto per impronta sul server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
-        "public_booking", "appointment_reminder", "public_consent")
+        "public_booking", "appointment_reminder", "public_consent",
+        # SENTINELLA AGGIORNATA DA BLOCCO-4B: lo STOP WhatsApp ricevuto da un'agenzia.
+        "whatsapp_inbound")
     ctx = context.SystemAgencyContext(agency_id=3, origin="public_unsubscribe")
     assert ctx.require_agency() == 3 and ctx.user_id is None
     with pytest.raises(ValueError):

@@ -48,6 +48,20 @@ export function failureText(reply) {
   if (reply.status === 'indeterminate') {
     return 'Esito incerto: la risposta potrebbe essere partita. Non è stata ritentata: verifica con il cliente prima di riscrivere.';
   }
+  if (reply.status === 'suppressed') {
+    const why = {
+      window_closed: 'la finestra di 24 ore si è chiusa prima dell’invio',
+      sender_not_configured: 'il numero WhatsApp non è più configurato per l’agenzia',
+      outbound_disabled: 'l’invio è stato disattivato',
+      credentials_missing: 'mancano le credenziali d’invio',
+      graph_version_missing: 'manca la versione dell’API configurata',
+      conversation_not_visible: 'non hai più accesso alla conversazione',
+      contact_changed: 'il contatto della conversazione è cambiato',
+      sender_changed: 'il numero della conversazione è cambiato',
+      no_contact: 'la conversazione non ha più un contatto',
+    }[reply.suppressed_reason];
+    return `Non inviata e non ritentata: ${why || 'un controllo prima dell’invio l’ha bloccata'}. WhatsApp non è stato chiamato.`;
+  }
   const detail = reply.error_detail || '';
   if (detail.includes('131047')) return 'Non inviata: la finestra di 24 ore era chiusa.';
   if (reply.error_code === 'invalid_destination') return 'Non inviata: il numero non può ricevere messaggi WhatsApp.';
@@ -71,7 +85,7 @@ function replyItem(r) {
     el('span', `badge ${r.status === 'sent' ? 'badge-ok' : (r.status === 'failed' || r.status === 'indeterminate') ? 'badge-warn' : 'badge-gray'}`,
       r.delivery ? r.delivery.label : r.status_label));
   item.append(head, el('p', 'wa-reply-text', r.text));
-  if (r.status === 'failed' || r.status === 'indeterminate') item.appendChild(el('p', 'wa-reply-error', failureText(r)));
+  if (r.status === 'failed' || r.status === 'indeterminate' || r.status === 'suppressed') item.appendChild(el('p', 'wa-reply-error', failureText(r)));
   return item;
 }
 
@@ -158,7 +172,7 @@ export async function mountWhatsappReply(container, { senderPhone }) {
           const reply = r.reply || {};
           let notice;
           if (reply.status === 'sent') notice = { kind: 'ok', text: 'Risposta accettata da WhatsApp.' };
-          else if (reply.status === 'failed' || reply.status === 'indeterminate') notice = { kind: 'error', text: failureText(reply) };
+          else if (['failed', 'indeterminate', 'suppressed'].includes(reply.status)) notice = { kind: 'error', text: failureText(reply) };
           else notice = { kind: 'ok', text: r.created === false ? 'Questa risposta era già stata registrata: non è stata inviata di nuovo.' : 'Risposta registrata.' };
           requestId = null; lastText = '';
           await load(notice);

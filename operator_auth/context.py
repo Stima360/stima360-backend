@@ -89,7 +89,11 @@ AUTH_CHANNELS = ("operator_session", "legacy_basic", "calendar_inbound")
 # privilegio: e' lo scope di UNA agenzia, come gli altri.
 SYSTEM_CONTEXT_ORIGINS = ("public_stima", "communication_dispatch", "owner_login",
                           "public_unsubscribe", "public_booking",
-                          "appointment_reminder", "public_consent")
+                          "appointment_reminder", "public_consent",
+                          # BLOCCO-4B: uno STOP ricevuto sul numero WhatsApp di UNA
+                          # agenzia revoca il consenso marketing WhatsApp di quel
+                          # contatto, solo in quell'agenzia (inbound_messages.service).
+                          "whatsapp_inbound")
 
 
 @runtime_checkable

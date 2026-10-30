@@ -15,13 +15,14 @@ L'esito e' sempre uno di tre, mai un'eccezione:
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 
 import requests
 
 from .enums import (
-    DEFAULT_GRAPH_VERSION,
     GRAPH_VERSION_ENV,
+    GRAPH_VERSION_PATTERN,
     META_WINDOW_ERROR,
     MODE_ENV,
     MODE_META,
@@ -46,10 +47,18 @@ def credentials_present() -> bool:
     return bool((os.getenv(TOKEN_ENV) or "").strip())
 
 
+def graph_version() -> str | None:
+    """La versione dell'API, solo se dichiarata esplicitamente e ben formata (es. `v21.0`)."""
+    value = (os.getenv(GRAPH_VERSION_ENV) or "").strip()
+    return value if re.fullmatch(GRAPH_VERSION_PATTERN, value) else None
+
+
 class MetaCloudTransport:
     """Un messaggio di testo con `POST /{version}/{phone_number_id}/messages`."""
 
-    def __init__(self, token: str, version: str = DEFAULT_GRAPH_VERSION, session=None):
+    def __init__(self, token: str, version: str, session=None):
+        if not re.fullmatch(GRAPH_VERSION_PATTERN, version or ""):
+            raise ValueError("WhatsApp Graph API version missing or malformed")
         self._token = token
         self._version = version
         self._session = session or requests
@@ -104,8 +113,8 @@ def classify(status_code: int, body) -> SendResult:
 
 
 def current():
-    """Il trasporto attivo, o None se l'invio e' disattivato o mancano le credenziali."""
-    if not enabled() or not credentials_present():
+    """Il trasporto attivo, o None se l'invio e' disattivato o mancano credenziali o versione."""
+    version = graph_version()
+    if not enabled() or not credentials_present() or version is None:
         return None
-    return MetaCloudTransport(os.getenv(TOKEN_ENV).strip(),
-                              (os.getenv(GRAPH_VERSION_ENV) or DEFAULT_GRAPH_VERSION).strip())
+    return MetaCloudTransport(os.getenv(TOKEN_ENV).strip(), version)

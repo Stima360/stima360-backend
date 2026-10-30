@@ -312,7 +312,9 @@ def test_c2_l_insieme_degli_origin_resta_chiuso():
     # l'agenzia viene dal link risolto per impronta sul server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
-        "public_booking", "appointment_reminder", "public_consent")
+        "public_booking", "appointment_reminder", "public_consent",
+        # SENTINELLA AGGIORNATA DA BLOCCO-4B: lo STOP WhatsApp ricevuto da un'agenzia.
+        "whatsapp_inbound")
     with pytest.raises(ValueError):
         SystemAgencyContext(agency_id=1, origin="owner_portal")
     with pytest.raises(ValueError):

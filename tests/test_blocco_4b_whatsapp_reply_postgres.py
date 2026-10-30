@@ -88,6 +88,7 @@ def rp(wa, monkeypatch):
     fake = FakeTransport()
     monkeypatch.setenv("WHATSAPP_OUTBOUND_MODE", "meta")
     monkeypatch.setenv("WHATSAPP_TOKEN", "token-sintetico-non-reale")
+    monkeypatch.setenv("WHATSAPP_GRAPH_VERSION", "v99.0")          # sintetica, ben formata
     monkeypatch.setattr(transport, "current", lambda: fake)
     return {**wa, "fake": fake}
 
@@ -225,35 +226,174 @@ def test_w_sending_is_disabled_by_default(rp, monkeypatch):
 # S - STOP e consenso
 # ---------------------------------------------------------------------------
 
-def test_s_stop_is_a_marketing_optout_and_service_replies_stay_possible(rp):
-    from consent import guard
+def _ctx(b, who, agency):
     from operator_auth.context import OperatorContext
 
+    role = "agency_owner" if who.startswith("owner") else "agent"
+    return OperatorContext(user_id=b["ids"][who], agency_id=b["ids"][agency], role=role, is_platform_admin=False,
+                           session_id=1, auth_channel="operator_session")
+
+
+def _revocations(b, contact):
+    return _q(b, "SELECT decision, channel, source, actor_type FROM consent_events WHERE contact_id = %s "
+                 "AND purpose = 'marketing' ORDER BY id", (contact,))
+
+
+def test_s_stop_revokes_marketing_only_in_the_receiving_agency(rp):
+    """Stesso telefono in due agenzie: lo STOP scritto al numero di A revoca il
+    marketing WhatsApp del contatto di A, non quello del contatto di B; nessuna
+    riga nel registro di piattaforma (che varrebbe per tutte le agenzie)."""
+    from consent import guard
+    from consent import service as consent_service
+
     ids = rp["ids"]
-    sender, contact = _conversation(rp, text="Mi interessa, grazie")
-    assert _q(rp, "SELECT count(*) FROM contact_channel_consents WHERE contact_id = %s", (contact,))[0][0] == 0
+    sender, contact_a = _conversation(rp, text="Mi interessa, grazie")
+    contact_b = _contact(rp, ids["b"], "Stesso telefono in B", sender)
+    consent_service.record_grant(_ctx(rp, "owner_b", "b"), contact_id=contact_b, purpose="marketing", channel="whatsapp",
+                                 source="crm", actor_type="operator", actor_ref=f"operator_user:{ids['owner_b']}",
+                                 idempotency_key=f"t:grant:{contact_b}")
+    assert guard.can_send_marketing(_ctx(rp, "owner_b", "b"), contact_b, channel="whatsapp").allowed is True
+    optouts_before = _q(rp, "SELECT count(*) FROM communication_optouts")[0][0]
+    assert _revocations(rp, contact_a) == []                       # una risposta del cliente non e' consenso
     assert rp["post"](_payload(_change(NUMBER_A, [_message(sender, body=" Stop. ")]))).status_code == 200
-    optouts = _q(rp, "SELECT channel, address_normalized, source, actor_type, source_agency_id, source_contact_id "
-                     "FROM communication_optouts WHERE address_normalized = %s", (sender,))
-    assert optouts == [("whatsapp", sender, "whatsapp_stop", "subject", ids["a"], contact)]
+    assert _revocations(rp, contact_a) == [("revoked", "whatsapp", "whatsapp_optout", "subject")]
+    assert guard.can_send_marketing(_ctx(rp, "owner_a", "a"), contact_a, channel="whatsapp").allowed is False
+    assert guard.can_send_marketing(_ctx(rp, "owner_b", "b"), contact_b, channel="whatsapp").allowed is True
+    assert _revocations(rp, contact_b) == [("granted", "whatsapp", "crm", "operator")]
+    assert _q(rp, "SELECT count(*) FROM communication_optouts")[0][0] == optouts_before
+
+
+def test_s_stop_notice_is_not_a_consent_and_service_reply_needs_the_window(rp):
+    sender, contact = _conversation(rp)
+    assert rp["post"](_payload(_change(NUMBER_A, [_message(sender, body="STOP",
+                                                           ts=str(int(time.time())))]))).status_code == 200
     owner = rp["login"]("owner_a")
     st = owner.get(f"{API}/{sender}").json()
-    assert st["stop"]["requested"] is True and "assistenza" in st["stop"]["notice"]
-    assert st["can_reply"] is True                                            # assistenza consentita
-    assert _reply(owner, sender, "Ricevuto, non le invieremo promozioni.").json()["reply"]["status"] == "sent"
-    # nessuna risposta del cliente e' consenso marketing; il marketing WhatsApp resta negato
-    assert _q(rp, "SELECT count(*) FROM contact_channel_consents WHERE contact_id = %s", (contact,))[0][0] == 0
-    ctx = OperatorContext(user_id=ids["owner_a"], agency_id=ids["a"], role="agency_owner", is_platform_admin=False,
-                          session_id=1, auth_channel="operator_session")
-    assert guard.can_send_marketing(ctx, contact, channel="whatsapp").allowed is False
+    assert st["stop"]["requested"] is True
+    notice = st["stop"]["notice"]
+    assert "Non è un consenso" in notice and "ultime 24 ore" in notice and "questa agenzia" in notice
+    assert _reply(owner, sender, "Ricevuto, nessuna promozione.").json()["reply"]["status"] == "sent"
+    assert _q(rp, "SELECT count(*) FROM contact_channel_consents WHERE contact_id = %s AND status = 'granted'",
+              (contact,))[0][0] == 0
 
 
 def test_s_a_resent_stop_is_recorded_once(rp):
-    sender, _ = _conversation(rp)
+    sender, contact = _conversation(rp)
     payload = _payload(_change(NUMBER_A, [_message(sender, body="STOP", mid=f"wamid.stop.{uuid.uuid4().hex}")]))
     for _ in range(2):
         assert rp["post"](payload).status_code == 200
-    assert _q(rp, "SELECT count(*) FROM communication_optouts WHERE address_normalized = %s", (sender,))[0][0] == 1
+    assert _revocations(rp, contact) == [("revoked", "whatsapp", "whatsapp_optout", "subject")]
+
+
+def test_s_stop_without_a_certain_contact_waits_for_the_manual_association(rp):
+    ids = rp["ids"]
+    sender, _ = _conversation(rp, contact=False)
+    assert rp["post"](_payload(_change(NUMBER_A, [_message(sender, body="STOP")]))).status_code == 200
+    contact = _contact(rp, ids["a"], "Associato dopo", "393000000099")
+    assert _revocations(rp, contact) == []
+    stop_id = _q(rp, "SELECT id FROM whatsapp_inbound_messages WHERE sender_phone = %s AND text_body = 'STOP'",
+                 (sender,))[0][0]
+    r = rp["login"]("owner_a").post(f"/api/inbound-messages/{stop_id}/link", json={"contact_id": contact})
+    assert r.status_code == 200, r.text
+    assert _revocations(rp, contact) == [("revoked", "whatsapp", "whatsapp_optout", "subject")]
+
+
+# ---------------------------------------------------------------------------
+# T - controlli ripetuti al momento dell'invio (dopo l'accodamento, prima di Meta)
+# ---------------------------------------------------------------------------
+
+def _between_enqueue_and_send(monkeypatch, action):
+    """Esegue `action` dopo l'accodamento e prima del ricontrollo, nel punto in
+    cui un messaggio accodato attende di essere inviato."""
+    from message_replies import service
+
+    original = service.communication.claim_message
+
+    def claim(*args, **kwargs):
+        claimed = original(*args, **kwargs)
+        action()
+        return claimed
+
+    monkeypatch.setattr(service.communication, "claim_message", claim)
+
+
+def _suppressed(b, sender):
+    return _q(b, "SELECT status, suppressed_reason, provider_message_id FROM communication_messages "
+                 "WHERE destination_snapshot = %s", (sender,))
+
+
+def test_t_window_expiring_after_enqueue_blocks_without_calling_meta(rp, monkeypatch):
+    from message_replies import service
+
+    sender, _ = _conversation(rp, hours_ago=23)
+    later = datetime.now(timezone.utc) + timedelta(hours=2)
+    _between_enqueue_and_send(monkeypatch, lambda: monkeypatch.setattr(service, "_now", lambda: later))
+    body = _reply(rp["login"]("owner_a"), sender).json()
+    assert rp["fake"].calls == []
+    assert _suppressed(rp, sender) == [("suppressed", "window_closed", None)]
+    assert body["reply"]["status"] == "suppressed"
+
+
+def test_t_a_future_provider_timestamp_cannot_extend_the_window(rp, monkeypatch):
+    from message_replies import service
+
+    sender, _ = _conversation(rp, hours_ago=-72)                     # Meta dichiara "fra tre giorni"
+    owner = rp["login"]("owner_a")
+    st = owner.get(f"{API}/{sender}").json()
+    closes = datetime.fromisoformat(st["window"]["closes_at"])
+    assert closes <= datetime.now(timezone.utc) + timedelta(hours=24, minutes=1)    # dalla ricezione, non dal futuro
+    monkeypatch.setattr(service, "_now", lambda: datetime.now(timezone.utc) + timedelta(hours=25))
+    r = _reply(owner, sender)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "WINDOW_CLOSED" and rp["fake"].calls == []
+
+
+def test_t_sender_number_removed_after_enqueue_blocks(rp, monkeypatch):
+    ids = rp["ids"]
+    sender, _ = _conversation(rp)
+    _between_enqueue_and_send(monkeypatch, lambda: monkeypatch.setenv("WHATSAPP_INBOUND_ROUTES", f"{NUMBER_A}:{ids['b']}"))
+    _reply(rp["login"]("owner_a"), sender)
+    assert rp["fake"].calls == [] and _suppressed(rp, sender) == [("suppressed", "sender_not_configured", None)]
+
+
+def test_t_sending_disabled_after_enqueue_blocks(rp, monkeypatch):
+    sender, _ = _conversation(rp)
+    _between_enqueue_and_send(monkeypatch, lambda: monkeypatch.setenv("WHATSAPP_OUTBOUND_MODE", "off"))
+    _reply(rp["login"]("owner_a"), sender)
+    assert rp["fake"].calls == [] and _suppressed(rp, sender) == [("suppressed", "outbound_disabled", None)]
+
+
+def test_t_lost_visibility_after_enqueue_blocks(rp, monkeypatch):
+    ids = rp["ids"]
+    sender, contact = _conversation(rp, agent=ids["agent_a"])
+    _between_enqueue_and_send(monkeypatch, lambda: _q(rp, "UPDATE contacts SET assigned_agent_id = %s WHERE id = %s",
+                                                     (ids["agent2_a"], contact)))
+    _reply(rp["login"]("agent_a"), sender)
+    assert rp["fake"].calls == [] and _suppressed(rp, sender) == [("suppressed", "conversation_not_visible", None)]
+
+
+def test_t_the_generic_dispatcher_cannot_take_these_replies(rp, monkeypatch):
+    from communication import service as communication
+
+    sender, _ = _conversation(rp)
+    seen = {}
+
+    def peek():
+        ctx = _ctx(rp, "owner_a", "a")
+        seen["claimed"] = communication.claim_due(ctx, provider="generico", channel="whatsapp", limit=50)
+
+    from message_replies import service
+
+    original = service.communication.enqueue
+
+    def enqueue(*args, **kwargs):
+        out = original(*args, **kwargs)
+        peek()                                                    # la risposta e' in coda: il claim generico la vede?
+        return out
+
+    monkeypatch.setattr(service.communication, "enqueue", enqueue)
+    assert _reply(rp["login"]("owner_a"), sender).json()["reply"]["status"] == "sent"
+    assert all(c["message"]["destination_snapshot"] != sender for c in seen["claimed"])
+    assert rp["login"]("owner_a").post("/api/communication/dispatch", json={"channel": "whatsapp"}).status_code == 501
 
 
 # ---------------------------------------------------------------------------

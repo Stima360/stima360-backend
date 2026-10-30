@@ -20,8 +20,10 @@ from __future__ import annotations
 import json
 import logging
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from core.database import core_cursor
+from operator_auth.context import SystemAgencyContext
 from operator_auth.permissions import sees_all_agency_records
 
 from . import repository, routing
@@ -41,6 +43,8 @@ from .enums import (
 from .parser import ParsedPayload
 
 log = logging.getLogger(__name__)
+
+INBOUND_ORIGIN = "whatsapp_inbound"
 
 LIST_LIMIT = 200
 
@@ -98,9 +102,11 @@ def ingest(parsed: ParsedPayload, routes: dict[str, set[int]] | None = None) -> 
             new = repository.insert_message(cur, m, routing_status=status, agency_id=agency_id,
                                             routing_reason=reason, contact_id=contact_id, contact_match=match)
             summary["messages_new" if new else "messages_duplicate"] += 1
-            if new and is_stop_request(m):
-                _record_stop(cur, m, agency_id=agency_id, contact_id=contact_id)
-                summary["stop_optouts"] = summary.get("stop_optouts", 0) + 1
+            if new and is_stop_request(m) and status == ROUTED and contact_id is not None:
+                _record_stop(cur, SystemAgencyContext(agency_id=agency_id, origin=INBOUND_ORIGIN),
+                             contact_id=contact_id, provider_message_id=m.provider_message_id,
+                             decided_at=m.provider_timestamp)
+                summary["stop_revocations"] = summary.get("stop_revocations", 0) + 1
         for e in parsed.events:
             status, agency_id, _ = route(e.phone_number_id)
             new = repository.insert_event(cur, e, routing_status=status, agency_id=agency_id)
@@ -117,24 +123,26 @@ def is_stop_request(m) -> bool:
     return "".join(ch for ch in m.text_body.upper() if ch.isalnum()) in STOP_KEYWORDS
 
 
-def _record_stop(cur, m, *, agency_id, contact_id) -> None:
-    """Lo STOP diventa la rinuncia di PIATTAFORMA al marketing WhatsApp per quel
-    numero (`communication_optouts`, fonte `whatsapp_stop`, decisa dal
-    soggetto), nella stessa transazione del messaggio e idempotente sul suo
-    identificativo Meta. Vale anche se il numero non e' instradato: la lista e'
-    per indirizzo, non per agenzia. NON tocca il consenso: una risposta del
-    cliente non e' mai consenso marketing, e lo STOP non blocca le risposte di
-    assistenza nella finestra (vedi `message_replies`)."""
-    from consent import repository as consent_repository
+def _record_stop(cur, ctx, *, contact_id: int, provider_message_id: str, decided_at=None) -> None:
+    """Lo STOP revoca il consenso marketing WhatsApp di QUEL contatto, SOLO
+    nell'agenzia del numero che l'ha ricevuto (`consent.service.record_revocation`,
+    fonte `whatsapp_optout`, decisa dal soggetto), nella stessa transazione del
+    messaggio e idempotente su messaggio e contatto.
 
-    if not consent_repository.platform_optout_available(cur):
-        return
-    consent_repository.insert_platform_optout(cur, {
-        "channel": "whatsapp", "address_normalized": m.sender_phone,
-        "opted_out_at": m.provider_timestamp or datetime.now(timezone.utc), "source": "whatsapp_stop",
-        "source_agency_id": agency_id, "source_contact_id": contact_id, "consent_event_id": None,
-        "actor_type": "subject", "actor_ref": None, "note": None,
-        "idempotency_key": f"whatsapp_stop:{m.provider_message_id}"})
+    NON e' la rinuncia di piattaforma (`communication_optouts`): quel registro
+    vale per indirizzo e per TUTTE le agenzie, e lo STOP scritto a un'agenzia
+    non e' una dichiarazione verso le altre. Senza un contatto certo (numero
+    non instradato, nessun contatto o piu' contatti con quel numero) non si
+    revoca nulla d'ufficio: lo si fa quando un operatore associa il contatto.
+    Una risposta del cliente non e' mai consenso marketing, e la revoca non
+    autorizza ne' vieta le risposte di assistenza (vedi `message_replies`)."""
+    from consent import service as consent_service
+
+    consent_service.record_revocation(
+        ctx, contact_id=contact_id, purpose="marketing", channel="whatsapp", source="whatsapp_optout",
+        actor_type="subject", decided_at=decided_at or datetime.now(timezone.utc),
+        note="STOP ricevuto su WhatsApp", idempotency_key=f"whatsapp_stop:{provider_message_id}:{contact_id}",
+        cur=cur)
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +256,11 @@ def link(ctx, message_id: int, contact_id: int | None, property_id: int | None) 
             repository.link(cur, agency_id=agency_id, message_id=message_id, contact_id=contact_id,
                             property_id=property_id, previous_contact_id=row["contact_id"],
                             previous_property_id=row["property_id"], user_id=ctx.user_id)
+            if (contact_id is not None and contact_id != row["contact_id"]
+                    and is_stop_request(SimpleNamespace(message_type=row["message_type"], text_body=row["text_body"]))):
+                # Lo STOP del soggetto, ora attribuito a un contatto di questa agenzia.
+                _record_stop(cur, ctx, contact_id=contact_id, provider_message_id=row["provider_message_id"],
+                             decided_at=row["provider_timestamp"])
     result = get_message(ctx, message_id)
     result["changed"] = changed
     return result

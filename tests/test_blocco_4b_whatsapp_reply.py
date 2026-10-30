@@ -49,13 +49,39 @@ class FakeSession:
 def test_sending_is_disabled_unless_explicitly_enabled(monkeypatch):
     monkeypatch.delenv("WHATSAPP_OUTBOUND_MODE", raising=False)
     monkeypatch.setenv("WHATSAPP_TOKEN", "x")
+    monkeypatch.setenv("WHATSAPP_GRAPH_VERSION", "v21.0")
     assert transport.enabled() is False and transport.current() is None
     for value in ("", "1", "true", "on", "simulato"):
         monkeypatch.setenv("WHATSAPP_OUTBOUND_MODE", value)
         assert transport.current() is None
     monkeypatch.setenv("WHATSAPP_OUTBOUND_MODE", "meta")
+    assert isinstance(transport.current(), transport.MetaCloudTransport)
     monkeypatch.delenv("WHATSAPP_TOKEN")
     assert transport.current() is None                         # senza credenziali nessun trasporto
+
+
+@pytest.mark.parametrize("version", [None, "", "18.0", "v18", "v18.0.1", "V18.0", "v0.1", "latest", "v18.0 "])
+def test_real_sending_requires_an_explicit_well_formed_graph_version(monkeypatch, version):
+    monkeypatch.setenv("WHATSAPP_OUTBOUND_MODE", "meta")
+    monkeypatch.setenv("WHATSAPP_TOKEN", "x")
+    if version is None:
+        monkeypatch.delenv("WHATSAPP_GRAPH_VERSION", raising=False)
+    else:
+        monkeypatch.setenv("WHATSAPP_GRAPH_VERSION", version)
+    if version == "v18.0 ":                                    # spazi tolti: valida
+        assert transport.graph_version() == "v18.0"
+        return
+    assert transport.graph_version() is None and transport.current() is None
+
+
+def test_the_adapter_has_no_implicit_version():
+    import inspect
+
+    assert inspect.signature(transport.MetaCloudTransport.__init__).parameters["version"].default is inspect._empty
+    with pytest.raises(ValueError):
+        transport.MetaCloudTransport("tok", "")
+    enums = (ROOT / "message_replies" / "enums.py").read_text(encoding="utf-8")
+    assert "DEFAULT_GRAPH_VERSION" not in enums and "v18" not in enums
 
 
 def test_text_message_request_shape():
@@ -76,7 +102,7 @@ def test_text_message_request_shape():
     (requests.exceptions.SSLError(), "indeterminate", "outcome_unknown"),
 ])
 def test_network_errors_are_definite_only_when_nothing_left(exc, outcome, code):
-    result = transport.MetaCloudTransport("tok", session=FakeSession(exc)).send("1", "393331234567", "x")
+    result = transport.MetaCloudTransport("tok", "v21.0", session=FakeSession(exc)).send("1", "393331234567", "x")
     assert (result.outcome, result.error_code) == (outcome, code)
     assert "393331234567" not in (result.error_detail or "")
 
@@ -95,7 +121,7 @@ def test_network_errors_are_definite_only_when_nothing_left(exc, outcome, code):
 ])
 def test_meta_responses_are_classified(status, body, outcome, code, detail):
     response = FakeResponse(status, body)
-    result = transport.MetaCloudTransport("tok", session=FakeSession(response)).send("1", "2", "x")
+    result = transport.MetaCloudTransport("tok", "v21.0", session=FakeSession(response)).send("1", "2", "x")
     assert (result.outcome, result.error_code, result.error_detail) == (outcome, code, detail)
 
 
@@ -149,6 +175,10 @@ def test_reply_ui_confirms_reuses_the_request_key_and_never_calls_the_old_admin_
     assert "if (!requestId) requestId = newRequestId();" in js                # stessa chiave sui nuovi tentativi
     assert re.search(r"send\.disabled = true", js)                            # niente doppio clic
     assert "Esito incerto" in js and "Non è stata ritentata" in js
+    # una risposta bloccata dai controlli all'invio dice perche' e che WhatsApp non e' stato chiamato
+    assert "reply.status === 'suppressed'" in js and "WhatsApp non è stato chiamato" in js
+    for reason in ("window_closed", "sender_not_configured", "outbound_disabled", "conversation_not_visible"):
+        assert reason in js, reason
     # il corpo inviato e' SOLO testo, chiave e conferma: destinatario e mittente li decide il server
     assert "{ text: text.value, client_request_id: requestId, confirm: true }" in js
     assert "phone_number_id" not in js
