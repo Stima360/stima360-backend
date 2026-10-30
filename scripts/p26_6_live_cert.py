@@ -722,6 +722,18 @@ DOMAINS = (
              "agency_id nel corpo -> 422, nessuna associazione eseguita",
     ),
     Domain(
+        "MESSAGE_REPLIES", "/api/message-replies",
+        # BLOCCO-4B. SOLO RIFIUTI: la matrice non invia MAI una risposta WhatsApp.
+        # Destinatario e mittente non si possono passare (422), una conversazione
+        # che non esiste nell'agenzia della sessione e' 404 (o 503 se l'invio e'
+        # disattivato), mai un 2xx su una POST.
+        certifier="message_replies",
+        depends_on=None,
+        api_delete=False,
+        note="due rotte sondate: anonimo e Basic -> 401, destinatario o mittente nel corpo -> 422, "
+             "conversazione inesistente -> 404, nessun invio",
+    ),
+    Domain(
         "LEGACY_ADMIN", "/api/admin",
         listing="/api/admin/stime?day=oggi",
         note="le sette route /api/admin che toccano dati di tenant, migrate "
@@ -7471,6 +7483,49 @@ def certify_inbound_messages(report, http, cert, domain, jars, owned, context) -
                                 payload={"contact_id": None, "agency_id": agenzia_altra})
         report.check(f"INBOUND_MESSAGES-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
                      f"{etichetta}: POST {base}/<id>/link con agency_id -> {risposta.status} (atteso 422)")
+
+
+MESSAGE_REPLIES_OPERAZIONI = (("GET", "/conversations/390000000001"), ("POST", "/conversations/390000000001"))
+
+
+def certify_message_replies(report, http, cert, domain, jars, owned, context) -> None:
+    """MESSAGE_REPLIES (BLOCCO-4B): nessun invio tentato con successo.
+
+        anonimo, Basic                                -> 401 su tutte le rotte (mount)
+        GET  conversazione inesistente                -> 404
+        POST con destinatario/mittente nel corpo      -> 422 (corpo chiuso)
+        POST su una conversazione inesistente         -> 404 o 503, mai 2xx
+    """
+    import uuid as _uuid
+
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in MESSAGE_REPLIES_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = {} if metodo != "GET" else None
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"MESSAGE_REPLIES-anonimo-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"MESSAGE_REPLIES-basic-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    percorso = base + "/conversations/390000000001"
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        valore = (context.get("agencies") or {}).get(altro)
+        agenzia_altra = valore.get("id") if isinstance(valore, dict) else valore
+        risposta = http.request("GET", percorso, jar=jars[etichetta])
+        report.check(f"MESSAGE_REPLIES-inesistente-{etichetta}", risposta.status == 404,
+                     f"{etichetta}: GET {percorso} -> {risposta.status} (atteso 404)")
+        risposta = http.request("POST", percorso, jar=jars[etichetta],
+                                payload={"text": "x", "client_request_id": str(_uuid.uuid4()), "confirm": True,
+                                         "to": "390000000002", "agency_id": agenzia_altra})
+        report.check(f"MESSAGE_REPLIES-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: POST {percorso} con destinatario e agenzia di {altro} nel corpo -> "
+                     f"{risposta.status} (atteso 422)")
+        risposta = http.request("POST", percorso, jar=jars[etichetta],
+                                payload={"text": "x", "client_request_id": str(_uuid.uuid4()), "confirm": True})
+        report.check(f"MESSAGE_REPLIES-nessun-invio-{etichetta}", risposta.status in (404, 503),
+                     f"{etichetta}: POST {percorso} -> {risposta.status} (atteso 404 o 503, mai un invio)")
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:

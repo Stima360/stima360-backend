@@ -469,6 +469,12 @@ def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
     )
     candidati = [r["id"] for r in cur.fetchall()]
 
+    return _claim_ids(cur, ctx, candidati, provider=provider, token_factory=token_factory)
+
+
+def _claim_ids(cur, ctx, candidati, *, provider: str, token_factory) -> list[dict[str, Any]]:
+    """I passi 2-5 del claim, per gli id gia' scelti (e bloccati) dal chiamante."""
+    agency = ctx.require_agency()
     reclamati: list[dict[str, Any]] = []
     for message_id in candidati:
         token = token_factory()
@@ -515,6 +521,26 @@ def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
         reclamati.append({"message": message, "attempt": _row(cur.fetchone())})
 
     return reclamati
+
+
+def claim_message(cur, ctx, message_id: int, *, provider: str, channel: str, token_factory) -> dict[str, Any] | None:
+    """BLOCCO-4B: il claim di UN messaggio preciso, non di tutti quelli dovuti.
+
+    Per un invio manuale: l'operatore ha appena accodato il SUO messaggio e lo
+    manda subito. `claim_due` prenderebbe invece qualsiasi messaggio dovuto del
+    canale, compresi quelli di un percorso automatico, che questo invio non
+    deve toccare. Stessa transizione (`queued -> sending`, tentativo aperto
+    nello stesso commit): il CAS su `status` dentro `_claim_ids` e' il lock -
+    due richieste sullo stesso id, una sola lo prende. `None` se il messaggio
+    non e' piu' in coda, non e' del canale o non e' dell'agenzia.
+    """
+    source, scope_params = communication_scoped_source(ctx, "communication_messages", "m")
+    cur.execute(f"SELECT m.id FROM {source} AND m.id = %s AND m.status = %s AND m.channel = %s",
+                scope_params + [message_id, INITIAL_STATUS, channel])
+    if cur.fetchone() is None:
+        return None
+    reclamati = _claim_ids(cur, ctx, [message_id], provider=provider, token_factory=token_factory)
+    return reclamati[0] if reclamati else None
 
 
 #: Come ogni stato terminale si traduce in tre cose: l'esito del tentativo, la

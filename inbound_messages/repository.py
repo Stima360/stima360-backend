@@ -139,3 +139,36 @@ def candidate_contacts(cur, agency_id: int, phone: str):
                 f"WHERE c.agency_id = %s AND c.phone_normalized = %s AND {_LIVE_CONTACT} ORDER BY c.id LIMIT 20",
                 (agency_id, phone))
     return [dict(r) for r in cur.fetchall()]
+
+
+# --- BLOCCO-4B: letture per le risposte manuali ---------------------------------
+
+def last_inbound(cur, agency_id: int, sender_phone: str, *, agent_user_id: int | None):
+    """L'ultimo messaggio ricevuto della conversazione nell'agenzia (visibile a chi chiede)."""
+    extra, params = _agent_filter(agent_user_id)
+    cur.execute("SELECT m.id, m.phone_number_id, m.contact_id, m.property_id, m.provider_timestamp, m.received_at, "
+                "COALESCE(m.provider_timestamp, m.received_at) AS customer_at "
+                f"{_JOINS} WHERE m.agency_id = %s AND m.sender_phone = %s{extra} "
+                "ORDER BY COALESCE(m.provider_timestamp, m.received_at) DESC, m.id DESC LIMIT 1",
+                (agency_id, sender_phone, *params))
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
+def delivery_statuses(cur, provider_message_ids: list[str]) -> dict[str, dict]:
+    """L'ultimo stato di consegna ricevuto da Meta per ciascun messaggio inviato."""
+    if not provider_message_ids:
+        return {}
+    cur.execute("SELECT DISTINCT ON (provider_message_id) provider_message_id, status, provider_timestamp, details "
+                "FROM whatsapp_webhook_events WHERE event_kind = 'status' AND provider_message_id = ANY(%s) "
+                "ORDER BY provider_message_id, provider_timestamp DESC NULLS LAST, id DESC",
+                (provider_message_ids,))
+    return {r["provider_message_id"]: dict(r) for r in cur.fetchall()}
+
+
+def operator_names(cur, user_ids: list[int]) -> dict[int, str]:
+    if not user_ids:
+        return {}
+    cur.execute("SELECT id, first_name, last_name FROM operator_users WHERE id = ANY(%s)", (user_ids,))
+    return {r["id"]: " ".join(x for x in (r["first_name"], r["last_name"]) if x) or f"Operatore n. {r['id']}"
+            for r in cur.fetchall()}

@@ -1672,3 +1672,19 @@ a.census-unit-main { text-decoration: none; }
 @media (max-width: 767px) {
   .messages-layout { grid-template-columns: minmax(0, 1fr); }
 }
+
+/* BLOCCO-4B: risposta WhatsApp manuale. */
+.wa-reply { border-top: 1px solid var(--border); padding-top: 10px; display: grid; gap: 8px; min-width: 0; }
+.wa-reply h4 { margin: 0; font-size: 14px; }
+.wa-reply-window { margin: 0; font-size: 13px; }
+.wa-reply-stop { border-left: 3px solid #d97706; padding-left: 8px; font-size: 13px; }
+.wa-reply-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.wa-reply-item { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; display: grid; gap: 4px; }
+.wa-reply-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.wa-reply-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wa-reply-error { margin: 0; color: #b91c1c; font-size: 13px; }
+.wa-reply-field { display: grid; gap: 4px; min-width: 0; }
+.wa-reply-field textarea { width: 100%; box-sizing: border-box; }
+.wa-reply-counter { font-size: 12px; justify-self: end; }
+.wa-reply-confirm { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; display: grid; gap: 6px; }
+.wa-reply .btn[data-wa-reply-prepare] { justify-self: start; }

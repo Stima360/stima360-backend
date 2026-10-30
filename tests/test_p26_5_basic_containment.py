@@ -358,6 +358,11 @@ TENANT_PREFIXES = (
     # come verifica il test 6. Il webhook `/webhook/whatsapp` resta pubblico
     # per progetto (firma), sopra.
     "/api/inbound-messages",
+    # SENTINELLA AGGIORNATA DA BLOCCO-4B: la risposta WhatsApp manuale. Superficie
+    # operatore come le altre - agenzia, destinatario e numero mittente dal
+    # server (`require_operator` su ogni rotta, corpo chiuso) - quindi dichiara
+    # il cookie e SOLO il cookie, come verifica il test 6.
+    "/api/message-replies",
 )
 
 

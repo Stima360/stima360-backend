@@ -1,0 +1,373 @@
+"""BLOCCO-4B - risposta WhatsApp manuale su PostgreSQL VERO.
+
+Stesso banco di BLOCCO-2C/4A (schema completo su un cluster LOCALE
+usa-e-getta, migrazioni dal runner), app vera e login vero. Gate:
+`P29_TEST_DSN` locale e `BLOCCO_2C_TEST_CLUSTER_VERIFIED=1`.
+
+Il trasporto verso Meta e' SIMULATO: `message_replies.transport.current` e'
+sostituito da un trasporto finto; `requests.post` e le vecchie funzioni
+d'invio restano trappole (fixture `wa` del 4A) che fanno fallire il test.
+
+    P  permessi: titolare, agente assegnato, agente non assegnato, altra agenzia,
+       sola lettura, corpo chiuso, conferma obbligatoria
+    W  finestra di 24 ore; contatto mancante; numero mittente non configurato;
+       invio disattivato per impostazione predefinita
+    S  STOP: rinuncia marketing registrata, risposta di assistenza consentita,
+       nessun consenso marketing dalle risposte del cliente
+    D  doppio invio: stessa richiesta, richieste concorrenti, claim mirato
+    E  errori: rifiuto (finestra Meta), timeout incerto mai ritentato, eccezione
+    L  registro: operatore, testo, data, stato; consegna dal webhook; altri
+       messaggi in coda non toccati
+"""
+from __future__ import annotations
+
+import threading
+import time
+import uuid
+from datetime import datetime, timedelta, timezone
+
+import pytest
+
+from tests.test_blocco_2c_integrated_postgres import (  # noqa: F401 - fixture
+    CLUSTER_VERIFIED,
+    DSN,
+    _q,
+    app,
+    banco,
+)
+from tests.test_blocco_4a_whatsapp_inbound_postgres import (  # noqa: F401 - fixture
+    NUMBER_A,
+    NUMBER_B,
+    _change,
+    _contact,
+    _message,
+    _payload,
+    _sender,
+    wa,
+)
+
+pytestmark = [
+    pytest.mark.skipif(not DSN, reason="P29_TEST_DSN non impostata: nessun PostgreSQL locale"),
+    pytest.mark.skipif(not CLUSTER_VERIFIED, reason="cluster usa-e-getta non dichiarato verificato "
+                       "(BLOCCO_2C_TEST_CLUSTER_VERIFIED=1)"),
+]
+
+API = "/api/message-replies/conversations"
+
+
+class FakeTransport:
+    """Il trasporto simulato: registra le chiamate, risponde come gli si dice."""
+
+    def __init__(self):
+        self.calls = []
+        self.outcome = "accepted"
+        self.error_code = None
+        self.error_detail = None
+        self.raise_exc = None
+        self.delay = 0.0
+        self._lock = threading.Lock()
+
+    def send(self, phone_number_id, to, text):
+        from message_replies.transport import SendResult
+
+        with self._lock:
+            self.calls.append((phone_number_id, to, text))
+        if self.delay:
+            time.sleep(self.delay)
+        if self.raise_exc:
+            raise self.raise_exc
+        if self.outcome == "accepted":
+            return SendResult("accepted", provider_message_id=f"wamid.out.{uuid.uuid4().hex}")
+        return SendResult(self.outcome, error_code=self.error_code, error_detail=self.error_detail)
+
+
+@pytest.fixture
+def rp(wa, monkeypatch):
+    from message_replies import transport
+
+    fake = FakeTransport()
+    monkeypatch.setenv("WHATSAPP_OUTBOUND_MODE", "meta")
+    monkeypatch.setenv("WHATSAPP_TOKEN", "token-sintetico-non-reale")
+    monkeypatch.setattr(transport, "current", lambda: fake)
+    return {**wa, "fake": fake}
+
+
+def _conversation(b, *, agency="a", number=NUMBER_A, hours_ago=1, contact=True, agent=None, text="Ciao, info?"):
+    ids = b["ids"]
+    sender = _sender()
+    contact_id = _contact(b, ids[agency], f"Cliente {sender[-4:]}", sender, agent=agent) if contact else None
+    ts = str(int((datetime.now(timezone.utc) - timedelta(hours=hours_ago)).timestamp()))
+    assert b["post"](_payload(_change(number, [_message(sender, body=text, ts=ts)]))).status_code == 200
+    return sender, contact_id
+
+
+def _reply(client, sender, text="Buongiorno, la richiamo oggi.", key=None, confirm=True):
+    return client.post(f"{API}/{sender}", json={"text": text, "client_request_id": key or str(uuid.uuid4()),
+                                                "confirm": confirm})
+
+
+def _ledger(b, sender):
+    return _q(b, "SELECT id, channel, communication_type, mode, reason_code, status, actor_type, actor_user_id, "
+                 "rendered_body, provider_message_id, error_code, error_detail, attempt_count FROM "
+                 "communication_messages WHERE destination_snapshot = %s ORDER BY id", (sender,))
+
+
+# ---------------------------------------------------------------------------
+# P - permessi
+# ---------------------------------------------------------------------------
+
+def test_p_owner_replies_and_the_ledger_records_operator_text_status(rp):
+    ids = rp["ids"]
+    sender, contact = _conversation(rp)
+    owner = rp["login"]("owner_a")
+    st = owner.get(f"{API}/{sender}").json()
+    assert st["can_reply"] is True and st["window"]["open"] is True and st["stop"] == {"requested": False}
+    r = _reply(owner, sender, "Buongiorno, la richiamo oggi.")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["created"] is True and body["reply"]["status"] == "sent"
+    assert body["reply"]["status_label"] == "Accettato da WhatsApp" and body["reply"]["operator"]
+    assert rp["fake"].calls == [(NUMBER_A, sender, "Buongiorno, la richiamo oggi.")]
+    (row,) = _ledger(rp, sender)
+    assert row[1:9] == ("whatsapp", "service", "manual", "operator_reply", "sent", "operator", ids["owner_a"],
+                        "Buongiorno, la richiamo oggi.")
+    assert row[9].startswith("wamid.out.") and row[12] == 1
+    attempts = _q(rp, "SELECT outcome, provider FROM communication_attempts WHERE message_id = %s", (row[0],))
+    assert attempts == [("accepted", "meta_cloud_api")]
+
+
+def test_p_permissions_agency_isolation_and_closed_body(rp):
+    ids = rp["ids"]
+    sender, contact = _conversation(rp, agent=ids["agent_a"])
+    agent, agent2, owner_b = rp["login"]("agent_a"), rp["login"]("agent2_a"), rp["login"]("owner_b")
+    assert agent.get(f"{API}/{sender}").json()["can_reply"] is True          # agente del contatto
+    assert agent2.get(f"{API}/{sender}").status_code == 404                   # agente non assegnato
+    assert _reply(agent2, sender).status_code == 404
+    assert owner_b.get(f"{API}/{sender}").status_code == 404                  # altra agenzia
+    assert _reply(owner_b, sender).status_code == 404
+    owner = rp["login"]("owner_a")
+    for extra in ({"to": "393330000000"}, {"phone_number_id": NUMBER_B}, {"agency_id": ids["b"]}):
+        r = owner.post(f"{API}/{sender}", json={"text": "x", "client_request_id": str(uuid.uuid4()), "confirm": True,
+                                                **extra})
+        assert r.status_code == 422, extra
+    r = _reply(owner, sender, confirm=False)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "CONFIRM_REQUIRED"
+    assert _reply(owner, sender, text="x" * 4097).status_code == 422
+    assert rp["fake"].calls == [] and _ledger(rp, sender) == []
+    assert _reply(agent, sender).json()["reply"]["status"] == "sent"
+    assert _ledger(rp, sender)[0][7] == ids["agent_a"]
+
+
+def test_p_read_only_consultation_cannot_reply(rp):
+    ids = rp["ids"]
+    sender, _ = _conversation(rp)
+    sa = rp["login"]("super")
+    try:
+        assert sa.patch(f"/api/platform/agencies/{ids['a']}", json={"status": "suspended"}).status_code == 200
+        assert sa.post(f"/api/platform/agencies/{ids['a']}/enter").json()["read_only"] is True
+        assert sa.get(f"{API}/{sender}").status_code == 200
+        r = _reply(sa, sender)
+        assert r.status_code == 403 and "sola lettura" in r.text.lower()
+        assert sa.post("/api/platform/agency-context/exit").status_code == 204
+    finally:
+        sa.patch(f"/api/platform/agencies/{ids['a']}", json={"status": "active"})
+        _q(rp, "UPDATE agencies SET status = 'active' WHERE id = %s", (ids["a"],))
+    assert rp["fake"].calls == [] and _ledger(rp, sender) == []
+
+
+# ---------------------------------------------------------------------------
+# W - finestra, contatto, numero, invio disattivato
+# ---------------------------------------------------------------------------
+
+def test_w_window_closed_after_24_hours(rp):
+    sender, _ = _conversation(rp, hours_ago=25)
+    owner = rp["login"]("owner_a")
+    st = owner.get(f"{API}/{sender}").json()
+    assert st["can_reply"] is False and st["window"]["open"] is False
+    assert [b["code"] for b in st["blocks"]] == ["WINDOW_CLOSED"]
+    r = _reply(owner, sender)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "WINDOW_CLOSED"
+    assert rp["fake"].calls == [] and _ledger(rp, sender) == []
+    # un nuovo messaggio del cliente riapre la finestra
+    now = str(int(datetime.now(timezone.utc).timestamp()))
+    assert rp["post"](_payload(_change(NUMBER_A, [_message(sender, body="Ci sono ancora", ts=now)]))).status_code == 200
+    assert owner.get(f"{API}/{sender}").json()["can_reply"] is True
+
+
+def test_w_contact_and_sender_number_are_required(rp, monkeypatch):
+    ids = rp["ids"]
+    owner = rp["login"]("owner_a")
+    sender, _ = _conversation(rp, contact=False)
+    r = _reply(owner, sender)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "NO_CONTACT"
+    sender2, _ = _conversation(rp)
+    monkeypatch.setenv("WHATSAPP_INBOUND_ROUTES", f"{NUMBER_B}:{ids['b']}")      # il numero non e' piu' dell'agenzia
+    r = _reply(owner, sender2)
+    assert r.status_code == 409 and r.json()["detail"]["code"] == "SENDER_NOT_CONFIGURED"
+    assert rp["fake"].calls == []
+
+
+def test_w_sending_is_disabled_by_default(rp, monkeypatch):
+    sender, _ = _conversation(rp)
+    owner = rp["login"]("owner_a")
+    monkeypatch.delenv("WHATSAPP_OUTBOUND_MODE")
+    st = owner.get(f"{API}/{sender}").json()
+    assert st["can_reply"] is False and st["blocks"][0]["code"] == "OUTBOUND_DISABLED"
+    r = _reply(owner, sender)
+    assert r.status_code == 503 and r.json()["detail"]["code"] == "OUTBOUND_DISABLED"
+    monkeypatch.setenv("WHATSAPP_OUTBOUND_MODE", "meta")
+    monkeypatch.delenv("WHATSAPP_TOKEN")
+    assert _reply(owner, sender).json()["detail"]["code"] == "CREDENTIALS_MISSING"
+    assert rp["fake"].calls == [] and _ledger(rp, sender) == []
+
+
+# ---------------------------------------------------------------------------
+# S - STOP e consenso
+# ---------------------------------------------------------------------------
+
+def test_s_stop_is_a_marketing_optout_and_service_replies_stay_possible(rp):
+    from consent import guard
+    from operator_auth.context import OperatorContext
+
+    ids = rp["ids"]
+    sender, contact = _conversation(rp, text="Mi interessa, grazie")
+    assert _q(rp, "SELECT count(*) FROM contact_channel_consents WHERE contact_id = %s", (contact,))[0][0] == 0
+    assert rp["post"](_payload(_change(NUMBER_A, [_message(sender, body=" Stop. ")]))).status_code == 200
+    optouts = _q(rp, "SELECT channel, address_normalized, source, actor_type, source_agency_id, source_contact_id "
+                     "FROM communication_optouts WHERE address_normalized = %s", (sender,))
+    assert optouts == [("whatsapp", sender, "whatsapp_stop", "subject", ids["a"], contact)]
+    owner = rp["login"]("owner_a")
+    st = owner.get(f"{API}/{sender}").json()
+    assert st["stop"]["requested"] is True and "assistenza" in st["stop"]["notice"]
+    assert st["can_reply"] is True                                            # assistenza consentita
+    assert _reply(owner, sender, "Ricevuto, non le invieremo promozioni.").json()["reply"]["status"] == "sent"
+    # nessuna risposta del cliente e' consenso marketing; il marketing WhatsApp resta negato
+    assert _q(rp, "SELECT count(*) FROM contact_channel_consents WHERE contact_id = %s", (contact,))[0][0] == 0
+    ctx = OperatorContext(user_id=ids["owner_a"], agency_id=ids["a"], role="agency_owner", is_platform_admin=False,
+                          session_id=1, auth_channel="operator_session")
+    assert guard.can_send_marketing(ctx, contact, channel="whatsapp").allowed is False
+
+
+def test_s_a_resent_stop_is_recorded_once(rp):
+    sender, _ = _conversation(rp)
+    payload = _payload(_change(NUMBER_A, [_message(sender, body="STOP", mid=f"wamid.stop.{uuid.uuid4().hex}")]))
+    for _ in range(2):
+        assert rp["post"](payload).status_code == 200
+    assert _q(rp, "SELECT count(*) FROM communication_optouts WHERE address_normalized = %s", (sender,))[0][0] == 1
+
+
+# ---------------------------------------------------------------------------
+# D - doppio invio
+# ---------------------------------------------------------------------------
+
+def test_d_the_same_request_twice_sends_once(rp):
+    sender, _ = _conversation(rp)
+    owner = rp["login"]("owner_a")
+    key = str(uuid.uuid4())
+    first, second = _reply(owner, sender, key=key), _reply(owner, sender, key=key)
+    assert first.json()["created"] is True and second.json()["created"] is False
+    assert second.json()["reply"]["status"] == "sent"
+    assert len(rp["fake"].calls) == 1 and len(_ledger(rp, sender)) == 1
+
+
+def test_d_concurrent_double_click_sends_once(rp):
+    sender, _ = _conversation(rp)
+    clients = [rp["login"]("owner_a"), rp["login"]("owner_a")]
+    key = str(uuid.uuid4())
+    rp["fake"].delay = 0.3
+    barrier = threading.Barrier(2)
+    results = []
+
+    def go(c):
+        barrier.wait(5)
+        results.append(_reply(c, sender, key=key))
+
+    threads = [threading.Thread(target=go, args=(c,)) for c in clients]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    assert sorted(r.status_code for r in results) == [200, 200]
+    assert sorted(r.json()["created"] for r in results) == [False, True]
+    assert len(rp["fake"].calls) == 1 and len(_ledger(rp, sender)) == 1
+
+
+def test_d_the_targeted_claim_never_takes_other_queued_messages(rp):
+    from communication import service as communication
+    from operator_auth.context import OperatorContext
+
+    ids = rp["ids"]
+    other_sender, other_contact = _conversation(rp)
+    ctx = OperatorContext(user_id=ids["owner_a"], agency_id=ids["a"], role="agency_owner", is_platform_admin=False,
+                          session_id=1, auth_channel="operator_session")
+    queued = communication.enqueue(ctx, contact_id=other_contact, channel="whatsapp", communication_type="service",
+                                   mode="manual", reason_code="operator_manual", rendered_body="In coda da un altro flusso",
+                                   destination_snapshot=other_sender, idempotency_key=f"altro:{uuid.uuid4()}")
+    sender, _ = _conversation(rp)
+    assert _reply(rp["login"]("owner_a"), sender).json()["reply"]["status"] == "sent"
+    status = _q(rp, "SELECT status, attempt_count FROM communication_messages WHERE id = %s", (queued["message"]["id"],))
+    assert status == [("queued", 0)]
+    assert [c[1] for c in rp["fake"].calls] == [sender]
+    # e sullo stesso messaggio un secondo claim non prende nulla
+    assert communication.claim_message(ctx, queued["message"]["id"], provider="x", channel="whatsapp") is not None
+    assert communication.claim_message(ctx, queued["message"]["id"], provider="x", channel="whatsapp") is None
+
+
+# ---------------------------------------------------------------------------
+# E - errori ed esiti incerti
+# ---------------------------------------------------------------------------
+
+def test_e_meta_rejection_is_a_definite_failure(rp):
+    sender, _ = _conversation(rp)
+    rp["fake"].outcome, rp["fake"].error_code, rp["fake"].error_detail = "rejected", "provider_rejected", "meta_131047_window_closed"
+    body = _reply(rp["login"]("owner_a"), sender).json()
+    assert body["reply"]["status"] == "failed" and body["reply"]["error_detail"] == "meta_131047_window_closed"
+    (row,) = _ledger(rp, sender)
+    assert row[5] == "failed" and row[10] == "provider_rejected" and row[9] is None
+
+
+def test_e_uncertain_timeout_is_never_retried(rp):
+    from communication import service as communication
+    from operator_auth.context import OperatorContext
+
+    ids = rp["ids"]
+    sender, _ = _conversation(rp)
+    owner = rp["login"]("owner_a")
+    rp["fake"].outcome, rp["fake"].error_code, rp["fake"].error_detail = "indeterminate", "timeout", "read_timeout"
+    key = str(uuid.uuid4())
+    body = _reply(owner, sender, key=key).json()
+    assert body["reply"]["status"] == "indeterminate" and body["has_uncertain_reply"] is True
+    # la stessa richiesta non riparte, e nessun claim la riprende da sola
+    rp["fake"].outcome = "accepted"
+    assert _reply(owner, sender, key=key).json()["created"] is False
+    ctx = OperatorContext(user_id=ids["owner_a"], agency_id=ids["a"], role="agency_owner", is_platform_admin=False,
+                          session_id=1, auth_channel="operator_session")
+    claimed = communication.claim_due(ctx, provider="x", channel="whatsapp", limit=50)
+    assert all(c["message"]["destination_snapshot"] != sender for c in claimed)
+    assert len(rp["fake"].calls) == 1
+    (row,) = _ledger(rp, sender)
+    assert row[5] == "indeterminate" and row[10] == "timeout"
+
+
+def test_e_a_transport_exception_is_an_uncertain_outcome(rp):
+    sender, _ = _conversation(rp)
+    rp["fake"].raise_exc = RuntimeError("connessione caduta")
+    body = _reply(rp["login"]("owner_a"), sender).json()
+    assert body["reply"]["status"] == "indeterminate" and body["reply"]["error_detail"] == "RuntimeError"
+
+
+# ---------------------------------------------------------------------------
+# L - consegna dal webhook
+# ---------------------------------------------------------------------------
+
+def test_l_delivery_status_from_the_webhook_is_shown(rp):
+    sender, _ = _conversation(rp)
+    owner = rp["login"]("owner_a")
+    body = _reply(owner, sender).json()
+    wamid = _ledger(rp, sender)[0][9]
+    statuses = [{"id": wamid, "status": "sent", "timestamp": str(int(time.time()))},
+                {"id": wamid, "status": "delivered", "timestamp": str(int(time.time()) + 1)}]
+    assert rp["post"](_payload(_change(NUMBER_A, statuses=statuses))).status_code == 200
+    reply = next(r for r in owner.get(f"{API}/{sender}").json()["replies"] if r["id"] == body["reply"]["id"])
+    assert reply["status"] == "sent" and reply["delivery"]["status"] == "delivered"
+    assert reply["delivery"]["label"] == "Consegnato"

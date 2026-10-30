@@ -607,8 +607,13 @@ def test_n9_la_superficie_pubblica_del_service_e_dichiarata():
     # un messaggio in coda - e il ledger ha un solo scrittore. Non spedisce:
     # il consenso, il claim e il trasporto restano dove sono, e il
     # dispatcher continua a essere l'unico che parla con un provider.
+    # SENTINELLA AGGIORNATA DA BLOCCO-4B: `claim_message` e' la tredicesima. E'
+    # il claim di UN messaggio preciso (la risposta WhatsApp manuale appena
+    # accodata dall'operatore), con le stesse regole di `claim_due`: chi la
+    # usa non deve prendere in carico i messaggi dovuti di un percorso
+    # automatico. Non spedisce: il trasporto resta fuori da `communication/`.
     assert pubbliche == {
         "enqueue", "cancel", "send_now", "get_message", "list_for_contact",
-        "claim_due", "finalize_sent", "finalize_failed", "finalize_indeterminate",
+        "claim_due", "claim_message", "finalize_sent", "finalize_failed", "finalize_indeterminate",
         "finalize_suppressed", "recover_stale", "list_attempts",
     }, sorted(pubbliche)

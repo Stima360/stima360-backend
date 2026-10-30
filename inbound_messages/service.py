@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime, timezone
 
 from core.database import core_cursor
 from operator_auth.permissions import sees_all_agency_records
@@ -35,6 +36,7 @@ from .enums import (
     NOT_INSTALLED_MESSAGE,
     PROPERTY_NOT_FOUND_MESSAGE,
     ROUTED,
+    STOP_KEYWORDS,
 )
 from .parser import ParsedPayload
 
@@ -96,12 +98,43 @@ def ingest(parsed: ParsedPayload, routes: dict[str, set[int]] | None = None) -> 
             new = repository.insert_message(cur, m, routing_status=status, agency_id=agency_id,
                                             routing_reason=reason, contact_id=contact_id, contact_match=match)
             summary["messages_new" if new else "messages_duplicate"] += 1
+            if new and is_stop_request(m):
+                _record_stop(cur, m, agency_id=agency_id, contact_id=contact_id)
+                summary["stop_optouts"] = summary.get("stop_optouts", 0) + 1
         for e in parsed.events:
             status, agency_id, _ = route(e.phone_number_id)
             new = repository.insert_event(cur, e, routing_status=status, agency_id=agency_id)
             summary["events_new" if new else "events_duplicate"] += 1
     log.info("whatsapp_inbound %s", json.dumps(summary))
     return summary
+
+
+def is_stop_request(m) -> bool:
+    """BLOCCO-4B: un messaggio di testo che dice solo STOP (maiuscole,
+    minuscole e punteggiatura ignorate). Nessun'altra parola e' interpretata."""
+    if m.message_type != "text" or not m.text_body:
+        return False
+    return "".join(ch for ch in m.text_body.upper() if ch.isalnum()) in STOP_KEYWORDS
+
+
+def _record_stop(cur, m, *, agency_id, contact_id) -> None:
+    """Lo STOP diventa la rinuncia di PIATTAFORMA al marketing WhatsApp per quel
+    numero (`communication_optouts`, fonte `whatsapp_stop`, decisa dal
+    soggetto), nella stessa transazione del messaggio e idempotente sul suo
+    identificativo Meta. Vale anche se il numero non e' instradato: la lista e'
+    per indirizzo, non per agenzia. NON tocca il consenso: una risposta del
+    cliente non e' mai consenso marketing, e lo STOP non blocca le risposte di
+    assistenza nella finestra (vedi `message_replies`)."""
+    from consent import repository as consent_repository
+
+    if not consent_repository.platform_optout_available(cur):
+        return
+    consent_repository.insert_platform_optout(cur, {
+        "channel": "whatsapp", "address_normalized": m.sender_phone,
+        "opted_out_at": m.provider_timestamp or datetime.now(timezone.utc), "source": "whatsapp_stop",
+        "source_agency_id": agency_id, "source_contact_id": contact_id, "consent_event_id": None,
+        "actor_type": "subject", "actor_ref": None, "note": None,
+        "idempotency_key": f"whatsapp_stop:{m.provider_message_id}"})
 
 
 # ---------------------------------------------------------------------------

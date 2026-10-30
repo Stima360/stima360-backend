@@ -5,11 +5,14 @@
 // (/api/inbound-messages): mittente, data, testo o tipo del messaggio,
 // contatto e immobile collegati, messaggi ancora da associare. L'associazione
 // (contatto e immobile) la offre il server con `can_link` (titolare e
-// amministratori); un agente vede solo i messaggi dei suoi contatti. Nessun
-// pulsante di invio: questa pagina non scrive a nessuno. Tutto il testo passa
-// da `textContent`; allegati e link non vengono aperti.
+// amministratori); un agente vede solo i messaggi dei suoi contatti.
+// BLOCCO-4B: in fondo alla conversazione la risposta manuale di testo
+// (components/whatsapp-reply.js, /api/message-replies), con conferma; mai il
+// vecchio invio admin. Tutto il testo passa da `textContent`; allegati e link
+// non vengono aperti.
 
 import { apiGet, apiPost } from '../core/api-client.js';
+import { mountWhatsappReply } from '../components/whatsapp-reply.js';
 
 const API = '/api/inbound-messages';
 
@@ -141,7 +144,7 @@ export async function renderMessaggi(container, params = []) {
   root.setAttribute('data-messages', '');
   root.appendChild(el('h2', 'section-title', 'Messaggi WhatsApp'));
   root.appendChild(el('p', 'muted messages-notice',
-    'Messaggi WhatsApp ricevuti dai numeri dell’agenzia. Solo consultazione: da qui non si inviano risposte. Allegati e link non vengono aperti.'));
+    'Messaggi WhatsApp ricevuti dai numeri dell’agenzia. Le risposte sono solo di testo, nella finestra di 24 ore consentita da WhatsApp, e partono solo dopo la tua conferma. Allegati e link non vengono aperti.'));
   const notice = el('div');
   notice.setAttribute('role', 'status');
   notice.setAttribute('data-messages-notice', '');
@@ -231,6 +234,7 @@ export async function renderMessaggi(container, params = []) {
       }
       detail.appendChild(card);
     }
+    await mountWhatsappReply(detail, { senderPhone: sender });
   }
 
   allBtn.addEventListener('click', () => { onlyUnlinked = false; allBtn.classList.add('active'); unlinkedBtn.classList.remove('active'); loadList(); });

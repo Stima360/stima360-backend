@@ -224,6 +224,10 @@ def test_messages_view_reads_safely_and_offers_no_send():
     assert "innerHTML" not in js and "textContent" in js
     assert "can_link" in js and "Da associare" in js and "/link" in js
     lowered = js.lower()
-    for forbidden in ("button('invia", "button('rispondi", "/reply", "/send", "wa.me", "window.open", "href ="):
+    # SENTINELLA AGGIORNATA DA BLOCCO-4B: la pagina ospita ora la risposta manuale
+    # (components/whatsapp-reply.js, /api/message-replies, con conferma). Resta
+    # vietato ogni altro canale d'invio: il vecchio /api/admin/whatsapp/reply,
+    # i link wa.me, l'apertura di finestre o URL.
+    for forbidden in ("/api/admin/whatsapp", "/reply", "/send", "wa.me", "window.open", "href ="):
         assert forbidden not in lowered, forbidden
-    assert "da qui non si inviano risposte" in lowered
+    assert "partono solo dopo la tua conferma" in lowered

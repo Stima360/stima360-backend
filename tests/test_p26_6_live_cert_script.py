@@ -2130,6 +2130,21 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 201, b'{"id": 1, "status": "draft"}')
         return self._reply(method, path, 404, b'{"detail":{"code":"VALUATION_NOT_FOUND"}}')
 
+    def _message_replies(self, method, path, agency, payload):
+        """BLOCCO-4B. Il doppio di `/api/message-replies`: corpo chiuso (modello
+        VERO), conversazione inesistente 404. Rotto `isolation`: la POST
+        risponde 200 come se avesse inviato, e la certificazione deve fallire."""
+        from message_replies.router import ReplyRequest
+
+        if method == "POST":
+            try:
+                ReplyRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            if self._broken("isolation", "message_replies"):
+                return self._reply(method, path, 200, b'{"reply": {"status": "sent"}}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
+
     def _inbound_messages(self, method, path, agency, payload):
         """BLOCCO-4A. Il doppio di `/api/inbound-messages`: elenco della sola
         agenzia della sessione, corpo dell'associazione chiuso (modello VERO).
@@ -2553,6 +2568,10 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA BLOCCO-4A
         if path.startswith("/api/inbound-messages"):
             return self._inbound_messages(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-4B
+        if path.startswith("/api/message-replies"):
+            return self._message_replies(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3523,6 +3542,25 @@ def test_13o_inbound_messages_leaking_another_agency_fail_the_matrix(monkeypatch
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("INBOUND_MESSAGES-elenco") for i in falliti), falliti
+
+
+def test_13p_message_replies_are_certified_rejections_only(monkeypatch):
+    """BLOCCO-4B: la sezione MESSAGE_REPLIES gira nella matrice e ogni prova e'
+    un PASS: 2 rotte anonime + 2 Basic + 3 domande per agenzia, nessun invio."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("MESSAGE_REPLIES-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 2 + 2 + 3 * 2, righe
+
+
+def test_13q_a_reply_that_sends_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="message_replies"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("MESSAGE_REPLIES-nessun-invio") for i in falliti), falliti
 
 
 def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):

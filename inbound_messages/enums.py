@@ -18,6 +18,10 @@ MATCH_AMBIGUOUS = "ambiguous"
 MATCH_MANUAL = "manual"
 
 TEXT_MAX = 10000
+
+#: BLOCCO-4B: le sole parole che valgono come rinuncia (testo intero, senza
+#: punteggiatura). Rinuncia al marketing su WhatsApp, non alle risposte di assistenza.
+STOP_KEYWORDS = frozenset({"STOP"})
 META_TEXT_MAX = 1000
 
 MESSAGE_TYPE_LABELS = {

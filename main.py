@@ -83,6 +83,8 @@ from owner_report.router import router as owner_report_router
 from inbound_messages import parser as inbound_parser
 from inbound_messages import service as inbound_service
 from inbound_messages.router import router as inbound_messages_router
+# BLOCCO-4B: risposta WhatsApp manuale alle conversazioni (`/api/message-replies`).
+from message_replies.router import router as message_replies_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
@@ -207,6 +209,9 @@ app.include_router(owner_report_router, dependencies=[Depends(require_authentica
 # BLOCCO-4A: stesso montaggio; scope da `require_operator`, permessi in `inbound_messages.service`.
 # Sola consultazione e associazione: nessuna rotta invia messaggi.
 app.include_router(inbound_messages_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-4B: stesso montaggio; permessi, finestra e invio in `message_replies.service`.
+# L'invio reale e' disattivato salvo `WHATSAPP_OUTBOUND_MODE=meta`.
+app.include_router(message_replies_router, dependencies=[Depends(require_authenticated_operator)])
 # P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.
