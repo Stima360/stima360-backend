@@ -352,6 +352,12 @@ TENANT_PREFIXES = (
     # (`require_operator` su ogni rotta, corpo chiuso) - quindi dichiara il
     # cookie e SOLO il cookie, come verifica il test 6.
     "/api/owner-reports",
+    # SENTINELLA AGGIORNATA DA BLOCCO-4A: i messaggi WhatsApp ricevuti. Superficie
+    # operatore come le altre - agenzia dalla sessione (`require_operator` su
+    # ogni rotta, corpo chiuso) - quindi dichiara il cookie e SOLO il cookie,
+    # come verifica il test 6. Il webhook `/webhook/whatsapp` resta pubblico
+    # per progetto (firma), sopra.
+    "/api/inbound-messages",
 )
 
 

@@ -2130,6 +2130,27 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 201, b'{"id": 1, "status": "draft"}')
         return self._reply(method, path, 404, b'{"detail":{"code":"VALUATION_NOT_FOUND"}}')
 
+    def _inbound_messages(self, method, path, agency, payload):
+        """BLOCCO-4A. Il doppio di `/api/inbound-messages`: elenco della sola
+        agenzia della sessione, corpo dell'associazione chiuso (modello VERO).
+        Rotto `isolation`: l'elenco contiene una conversazione dell'altra agenzia
+        e la certificazione deve accorgersene (corpo diverso da un elenco)."""
+        import json as _json
+
+        from inbound_messages.router import LinkRequest
+
+        rotto = self._broken("isolation", "inbound_messages")
+        if path == "/api/inbound-messages/conversations" and method == "GET":
+            if rotto:
+                return self._reply(method, path, 200, b'{"items": "conversazioni di un\'altra agenzia"}')
+            return self._reply(method, path, 200, _json.dumps({"items": [], "can_link": True}).encode())
+        if path.endswith("/link") and method == "POST":
+            try:
+                LinkRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"MESSAGE_NOT_FOUND"}}')
+
     def _owner_reports(self, method, path, agency, payload):
         """REPORT-PROPRIETARIO-1. Il doppio di `/api/owner-reports`: immobile
         cercato nella PROPRIA agenzia, corpo del PDF chiuso (modello VERO).
@@ -2528,6 +2549,10 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA REPORT-PROPRIETARIO-1
         if path.startswith("/api/owner-reports"):
             return self._owner_reports(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-4A
+        if path.startswith("/api/inbound-messages"):
+            return self._inbound_messages(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3478,6 +3503,26 @@ def test_13m_owner_reports_reaching_the_other_agency_fail_the_matrix(monkeypatch
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("OWNER_REPORTS-anteprima") for i in falliti), falliti
+
+
+def test_13n_inbound_messages_are_certified_rejections_and_reads_only(monkeypatch):
+    """BLOCCO-4A: la sezione INBOUND_MESSAGES gira nella matrice e ogni sua
+    prova e' un PASS: 4 rotte anonime + 4 Basic + 3 domande per agenzia."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("INBOUND_MESSAGES-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 4 + 4 + 3 * 2, righe
+    assert {i for _, i in righe} >= {"INBOUND_MESSAGES-elenco-A", "INBOUND_MESSAGES-corpo-chiuso-B-A"}
+
+
+def test_13o_inbound_messages_leaking_another_agency_fail_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="inbound_messages"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("INBOUND_MESSAGES-elenco") for i in falliti), falliti
 
 
 def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):

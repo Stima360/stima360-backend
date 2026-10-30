@@ -71,7 +71,9 @@ pytestmark = [
 
 OPERATORE = "blocco2c.collaudo"
 PASSWORD = "Blocco2c-prova-locale!"
-NUOVE = ("115_agency_logos", "116_property_valuations", "117_property_valuation_pdfs")
+# SENTINELLA AGGIORNATA DA BLOCCO-4A: dopo la 117 la cartella reale contiene anche la
+# 118 (ricezione WhatsApp), applicata nello stesso passaggio dal runner.
+NUOVE = ("115_agency_logos", "116_property_valuations", "117_property_valuation_pdfs", "118_whatsapp_inbound")
 BASE = {"characteristics": "Trilocale sintetico al secondo piano.",
         "surface": {"value": "85", "kind": "commerciale", "source": "planimetria"},
         "rationale": "Motivazione sintetica: stato buono, zona servita.",

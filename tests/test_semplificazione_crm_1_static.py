@@ -63,17 +63,20 @@ def test_01_la_107_e_valida_additiva_e_l_ultima():
     # SENTINELLA AGGIORNATA DA BLOCCO-2B: poi la sola 117 (i PDF delle valutazioni approvate: una
     # tabella nuova `property_valuation_pdfs` immutabile, nessun backfill, down che rifiuta di
     # perdere documenti), ora l'ultima
-    assert tutte[-1].version == "117_property_valuation_pdfs"
-    assert tutte[-2].version == "116_property_valuations"
-    assert tutte[-3].version == "115_agency_logos"
-    assert tutte[-4].version == "114_territory_logical_delete"
-    assert tutte[-5].version == "113_operator_logical_delete"
-    assert tutte[-6].version == "112_stime_consenso_marketing_prova"
-    assert tutte[-7].version == "111_voice_mandate_intents"
-    assert tutte[-8].version == "110_consent_capture"
-    assert tutte[-9].version == "109_consent_channels"
-    assert tutte[-10].version == "108_followup_contact_journey"
-    ultima = tutte[-11]
+    # SENTINELLA AGGIORNATA DA BLOCCO-4A: poi la sola 118 (ricezione WhatsApp: tre tabelle nuove,
+    # nessun backfill, `whatsapp_incoming` non toccata, down che rifiuta di perdere messaggi), ora l'ultima
+    assert tutte[-1].version == "118_whatsapp_inbound"
+    assert tutte[-2].version == "117_property_valuation_pdfs"
+    assert tutte[-3].version == "116_property_valuations"
+    assert tutte[-4].version == "115_agency_logos"
+    assert tutte[-5].version == "114_territory_logical_delete"
+    assert tutte[-6].version == "113_operator_logical_delete"
+    assert tutte[-7].version == "112_stime_consenso_marketing_prova"
+    assert tutte[-8].version == "111_voice_mandate_intents"
+    assert tutte[-9].version == "110_consent_capture"
+    assert tutte[-10].version == "109_consent_channels"
+    assert tutte[-11].version == "108_followup_contact_journey"
+    ultima = tutte[-12]
     assert ultima.version == "107_visita_immobile_incarico"
     assert ultima.down_path is not None and not ultima.non_transactional
     assert runner.validate_migration(ultima) == []

@@ -710,6 +710,18 @@ DOMAINS = (
              "raggiungibile, agency_id nel corpo -> 422",
     ),
     Domain(
+        "INBOUND_MESSAGES", "/api/inbound-messages",
+        # BLOCCO-4A. SOLO RIFIUTI E LETTURE: la matrice non associa messaggi e
+        # non chiama il webhook. L'agenzia viene SOLO dalla sessione: l'elenco
+        # risponde con la sola agenzia della sessione (o 503 se la 118 manca),
+        # un messaggio inesistente e' 404, `agency_id` nel corpo e' 422.
+        certifier="inbound_messages",
+        depends_on=None,
+        api_delete=False,
+        note="quattro rotte sondate: anonimo e Basic -> 401, elenco della sola sessione, "
+             "agency_id nel corpo -> 422, nessuna associazione eseguita",
+    ),
+    Domain(
         "LEGACY_ADMIN", "/api/admin",
         listing="/api/admin/stime?day=oggi",
         note="le sette route /api/admin che toccano dati di tenant, migrate "
@@ -7417,6 +7429,48 @@ def certify_owner_reports(report, http, cert, domain, jars, owned, context) -> N
             report.check(f"OWNER_REPORTS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
                          f"{etichetta}: POST {base}/<immobile proprio>/pdf con agency_id -> {risposta.status} "
                          "(atteso 422)")
+
+
+INBOUND_MESSAGES_OPERAZIONI = (("GET", "/conversations"), ("GET", "/conversations/393330000000"),
+                               ("GET", "/1"), ("POST", "/1/link"))
+
+
+def certify_inbound_messages(report, http, cert, domain, jars, owned, context) -> None:
+    """INBOUND_MESSAGES (BLOCCO-4A): nessuna scrittura riuscita tentata.
+
+        anonimo, Basic                          -> 401 su tutte le rotte (mount)
+        GET /conversations                      -> 200 (503 se la 118 manca)
+        GET /<id inesistente>                   -> 404 (503 se la 118 manca)
+        POST /<id>/link con agency_id nel corpo -> 422 (corpo chiuso, nessuna associazione)
+    """
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in INBOUND_MESSAGES_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = {} if metodo != "GET" else None
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"INBOUND_MESSAGES-anonimo-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"INBOUND_MESSAGES-basic-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        risposta = http.request("GET", f"{base}/conversations", jar=jars[etichetta])
+        corpo = risposta.json() if risposta.status == 200 else None
+        report.check(f"INBOUND_MESSAGES-elenco-{etichetta}",
+                     risposta.status == 503 or (risposta.status == 200 and isinstance(corpo, dict)
+                                                and isinstance(corpo.get("items"), list)),
+                     f"{etichetta}: GET {base}/conversations -> {risposta.status}")
+        risposta = http.request("GET", f"{base}/999999999", jar=jars[etichetta])
+        report.check(f"INBOUND_MESSAGES-inesistente-{etichetta}", risposta.status in (404, 503),
+                     f"{etichetta}: GET {base}/<id inesistente> -> {risposta.status} (atteso 404)")
+        valore = (context.get("agencies") or {}).get(altro)
+        agenzia_altra = valore.get("id") if isinstance(valore, dict) else valore
+        risposta = http.request("POST", f"{base}/999999999/link", jar=jars[etichetta],
+                                payload={"contact_id": None, "agency_id": agenzia_altra})
+        report.check(f"INBOUND_MESSAGES-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: POST {base}/<id>/link con agency_id -> {risposta.status} (atteso 422)")
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:

@@ -201,7 +201,8 @@ def test_m_migration_is_valid_for_the_runner():
 
     tutte = runner.discover_migrations()
     # SENTINELLA AGGIORNATA DA BLOCCO-2B: la 117 segue la 116.
-    assert tutte[-1].version == "117_property_valuation_pdfs"
+    # SENTINELLA AGGIORNATA DA BLOCCO-4A: poi la 118 (ricezione WhatsApp).
+    assert tutte[-1].version == "118_whatsapp_inbound"
     m116 = next(m for m in tutte if m.version == "116_property_valuations")
     assert runner.validate_migration(m116) == []
 

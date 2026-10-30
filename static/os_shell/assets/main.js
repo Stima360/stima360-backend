@@ -53,6 +53,8 @@ import { renderCestino } from './views/cestino.js';
 import { renderVoce } from './views/voce.js';
 // BLOCCO-1B: «Dati agenzia e logo», aperta dal menu utente (nessuna voce in sidebar).
 import { renderAgenziaDati } from './views/agenzia-dati.js';
+// BLOCCO-4A: «Messaggi WhatsApp» (ricezione e consultazione, nessun invio).
+import { renderMessaggi } from './views/messaggi.js';
 import { voiceStatus } from './voice/voice-api.js';
 
 const SECTIONS = [
@@ -77,6 +79,8 @@ const SECTIONS = [
   { name: 'abbinamenti', label: 'Abbinamenti' },
   { name: 'attivita', label: 'Attività' },
   { name: 'automazioni', label: 'Automazioni' },
+  // BLOCCO-4A: messaggi WhatsApp ricevuti (consultazione e associazione).
+  { name: 'messaggi', label: 'Messaggi WhatsApp' },
   // DELETE-ARCH Fase 2B3: in fondo. CESTINO-GENERALE-1: il Cestino UNICO di
   // tutto il CRM, voce normale e ben visibile (app.css), anche per il Super Admin.
   { name: 'cestino', label: 'Cestino' },
@@ -232,6 +236,8 @@ registerRoute('voce', (container) => renderVoce(container));
 // BLOCCO-1B: `#/agenzia`. Rotta di tenant come le altre (la guardia sotto rimanda
 // alla Rete chi non opera in un'agenzia); i permessi li decide il server.
 registerRoute('agenzia', (container) => renderAgenziaDati(container));
+// BLOCCO-4A: `#/messaggi[/<telefono>]`. I permessi li decide il server.
+registerRoute('messaggi', (container, params = []) => renderMessaggi(container, params));
 
 initRouter(contentEl, {
   // P26-4: il router butta un risultato che arriva dopo un cambio di sessione.
@@ -295,6 +301,8 @@ const NAV_ICON_PATHS = {
   abbinamenti: ['M7 7h4a4 4 0 0 1 4 4v2', 'M17 17h-4a4 4 0 0 1-4-4v-2', 'M12 9l3 4 4-4'],
   attivita: ['M3 12h5l3-7 4 14 3-7h3'],
   automazioni: ['M12 3v3', 'M12 18v3', 'M3 12h3', 'M18 12h3', 'M6 6l2 2', 'M16 16l2 2', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6'],
+  // BLOCCO-4A: un fumetto di conversazione.
+  messaggi: ['M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z', 'M8 11h8', 'M8 14h5'],
   cestino: ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 14h10l1-14', 'M10 11v6', 'M14 11v6'],
   rete: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20', 'M2 12h20', 'M12 2c5 5 5 15 0 20', 'M12 2c-5 5-5 15 0 20'],
   voce: ['M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3', 'M5 11a7 7 0 0 0 14 0', 'M12 18v3', 'M9 21h6'],

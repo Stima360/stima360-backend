@@ -232,7 +232,7 @@ def _signed_post(client, raw_body: bytes, signature: str | None):
 
 VALID_MESSAGE = (
     b'{ "entry": [{"changes": [{"value": {"messages": ['
-    b'{"from": "393331234567", "type": "text", "text": {"body": "Ciao"}}'
+    b'{"from": "393331234567", "id": "wamid.prova", "type": "text", "text": {"body": "Ciao"}}'
     b']}}]}] }'
 )
 
@@ -242,18 +242,23 @@ def test_whatsapp_valid_signature_accepts_raw_body_and_preserves_incoming_flow(
     main_module,
     monkeypatch,
 ):
+    # SENTINELLA AGGIORNATA DA BLOCCO-4A: il messaggio firmato non va piu' in
+    # `whatsapp_incoming` con una INSERT singola (che salvava solo il primo
+    # messaggio e ignorava gli errori): arriva intero a
+    # `inbound_messages.service.ingest`, che lo salva in una transazione e
+    # fa rispondere 200 solo dopo il commit (le prove su PostgreSQL vero sono
+    # in tests/test_blocco_4a_whatsapp_inbound_postgres.py).
     monkeypatch.setenv("WHATSAPP_APP_SECRET", APP_SECRET)
-    connection = FakeConnection()
-    monkeypatch.setattr(main_module, "get_connection", lambda: connection)
+    received = []
+    monkeypatch.setattr(main_module.inbound_service, "ingest", lambda parsed: received.append(parsed) or {})
 
     response = _signed_post(client, VALID_MESSAGE, _signature(VALID_MESSAGE))
 
     assert response.status_code == 200
     assert response.json() == {"ok": True}
-    assert connection.commit_count == 1
-    assert len(connection.cursor_instance.executions) == 1
-    _query, params = connection.cursor_instance.executions[0]
-    assert params == ("393331234567", "text", "Ciao")
+    assert len(received) == 1 and len(received[0].messages) == 1
+    m = received[0].messages[0]
+    assert (m.sender_phone, m.message_type, m.text_body) == ("393331234567", "text", "Ciao")
 
 
 @pytest.mark.parametrize(
@@ -275,6 +280,8 @@ def test_whatsapp_missing_or_invalid_signature_is_rejected_before_database(
         raise AssertionError("database accessed before webhook signature verification")
 
     monkeypatch.setattr(main_module, "get_connection", forbidden_database)
+    # BLOCCO-4A: la persistenza passa da `inbound_service.ingest`, anch'essa vietata prima della firma.
+    monkeypatch.setattr(main_module.inbound_service, "ingest", lambda *_a, **_k: forbidden_database())
 
     response = _signed_post(client, VALID_MESSAGE, signature)
 
@@ -296,6 +303,8 @@ def test_whatsapp_tampered_raw_body_is_rejected_before_database(
         raise AssertionError("database accessed before webhook signature verification")
 
     monkeypatch.setattr(main_module, "get_connection", forbidden_database)
+    # BLOCCO-4A: la persistenza passa da `inbound_service.ingest`, anch'essa vietata prima della firma.
+    monkeypatch.setattr(main_module.inbound_service, "ingest", lambda *_a, **_k: forbidden_database())
     tampered = VALID_MESSAGE.replace(b"Ciao", b"Alterato")
 
     response = _signed_post(client, tampered, _signature(VALID_MESSAGE))
@@ -318,6 +327,8 @@ def test_whatsapp_missing_app_secret_fails_closed_before_database(
         raise AssertionError("database accessed without webhook app secret")
 
     monkeypatch.setattr(main_module, "get_connection", forbidden_database)
+    # BLOCCO-4A: la persistenza passa da `inbound_service.ingest`, anch'essa vietata prima della firma.
+    monkeypatch.setattr(main_module.inbound_service, "ingest", lambda *_a, **_k: forbidden_database())
 
     response = _signed_post(client, VALID_MESSAGE, _signature(VALID_MESSAGE))
 

@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from flow.router import router as flow_router
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
-import hashlib, hmac, logging, os, re, uvicorn, secrets, uuid, requests
+import hashlib, hmac, json, logging, os, re, uvicorn, secrets, uuid, requests
 from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
 import stime_purge
@@ -79,6 +79,10 @@ from agency_profile.router import router as agency_profile_router
 from property_valuations.router import router as property_valuations_router
 # REPORT-PROPRIETARIO-1: report attivita' dell'immobile per il proprietario (`/api/owner-reports`).
 from owner_report.router import router as owner_report_router
+# BLOCCO-4A: ricezione WhatsApp (persistenza dal webhook) e consultazione `/api/inbound-messages`.
+from inbound_messages import parser as inbound_parser
+from inbound_messages import service as inbound_service
+from inbound_messages.router import router as inbound_messages_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
@@ -200,6 +204,9 @@ app.include_router(property_valuations_router, dependencies=[Depends(require_aut
 # REPORT-PROPRIETARIO-1: stesso montaggio; scope da `require_operator`, permessi in
 # `owner_report.service` (chi puo' gestire l'immobile). Sola lettura: nessuna scrittura.
 app.include_router(owner_report_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-4A: stesso montaggio; scope da `require_operator`, permessi in `inbound_messages.service`.
+# Sola consultazione e associazione: nessuna rotta invia messaggi.
+app.include_router(inbound_messages_router, dependencies=[Depends(require_authenticated_operator)])
 # P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.
@@ -2195,60 +2202,53 @@ def admin_update_stima(
 # ---------------------------------------------------------
 @app.get("/webhook/whatsapp")
 def whatsapp_verify(
+    request: Request,
     hub_mode: str = None,
     hub_challenge: str = None,
     hub_verify_token: str = None,
 ):
+    # BLOCCO-4A: Meta invia `hub.mode`, `hub.verify_token`, `hub.challenge`
+    # (con il punto); i nomi con il trattino basso restano accettati. Senza un
+    # token configurato la verifica e' sempre rifiutata.
+    query = request.query_params
+    mode = query.get("hub.mode") or hub_mode
+    token = query.get("hub.verify_token") or hub_verify_token
+    challenge = query.get("hub.challenge") or hub_challenge
     VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
 
-    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
-        return int(hub_challenge)
+    if (VERIFY_TOKEN and mode == "subscribe" and token and challenge and challenge.isdigit()
+            and hmac.compare_digest(token, VERIFY_TOKEN)):
+        return int(challenge)
 
     raise HTTPException(status_code=403, detail="Webhook verification failed")
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request):
+    """BLOCCO-4A: ricezione affidabile.
+
+    Firma verificata sul corpo ORIGINALE prima di qualsiasi accesso al
+    database. Tutti i messaggi, gli stati di consegna e gli altri eventi del
+    payload sono salvati in UNA transazione (`inbound_messages.service.ingest`),
+    idempotente sull'identificativo del provider. La risposta 200 arriva solo
+    dopo il commit: un errore di scrittura risponde 500 e Meta ritenta, senza
+    duplicati. Nessuna risposta viene inviata e nessun allegato scaricato.
+    """
     raw_body = await request.body()
     verify_whatsapp_signature(
         raw_body,
         request.headers.get("X-Hub-Signature-256"),
     )
-    payload = await request.json()
-
     try:
-        entry = payload.get("entry", [])[0]
-        changes = entry.get("changes", [])[0].get("value", {})
-
-        if "messages" not in changes:
-            return {"ok": True}
-
-        msg = changes["messages"][0]
-        from_number = msg.get("from")
-        msg_type = msg.get("type")
-
-        text = None
-        if msg_type == "text":
-            text = msg.get("text", {}).get("body")
-        else:
-            # 👇 SALVA TUTTO
-            text = f"[{msg_type.upper()}]"
-
-        if not from_number:
-            return {"ok": True}
-
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO whatsapp_incoming
-            (from_number, message_type, text, received_at, direction)
-            VALUES (%s, %s, %s, NOW(), 'in')
-        """, (from_number, msg_type, text))
-        conn.commit()
-        cur.close()
-        conn.close()
-
-    except Exception as e:
-        print("WHATSAPP WEBHOOK ERROR:", e)
+        parsed = inbound_parser.parse(json.loads(raw_body))
+    except (ValueError, inbound_parser.MalformedPayload):
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
+    try:
+        await run_in_threadpool(inbound_service.ingest, parsed)
+    except inbound_service.NotInstalled as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("whatsapp_inbound_persist_failed error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Webhook not persisted") from exc
 
     return {"ok": True}
 

@@ -563,8 +563,10 @@ def test_h_migration_117_is_valid_additive_and_its_down_keeps_documents():
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
     # SENTINELLA AGGIORNATA DA BLOCCO-2B
-    assert tutte[-1].version == "117_property_valuation_pdfs"
-    assert tutte[-1].down_available and runner.validate_migration(tutte[-1]) == []
+    # SENTINELLA AGGIORNATA DA BLOCCO-4A: la 118 (ricezione WhatsApp) segue la 117.
+    m117 = next(m for m in tutte if m.version == "117_property_valuation_pdfs")
+    assert tutte[-1].version == "118_whatsapp_inbound"
+    assert m117.down_available and runner.validate_migration(m117) == []
     up = (ROOT / "migrations" / "117_property_valuation_pdfs.sql").read_text(encoding="utf-8")
     executable = "\n".join(r for r in up.splitlines() if not r.lstrip().startswith("--"))
     assert "CREATE TABLE property_valuation_pdfs" in executable

@@ -1651,3 +1651,24 @@ a.census-unit-main { text-decoration: none; }
 @media (max-width: 767px) {
   .owner-report-fact { grid-template-columns: 1fr; }
 }
+
+/* BLOCCO-4A: «Messaggi WhatsApp». */
+.messages-page { display: grid; gap: 12px; }
+.messages-notice { font-size: 13px; border-left: 3px solid var(--primary); padding-left: 8px; }
+.messages-layout { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.messages-list { display: grid; gap: 6px; min-width: 0; }
+.messages-list .btn.messages-conversation { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: start;
+  align-items: start; gap: 2px; text-align: left; width: 100%; height: auto; white-space: normal; }
+.messages-list .btn.messages-conversation.active { outline: 2px solid var(--primary); }
+.messages-message .btn[data-message-link-open] { justify-self: start; }
+.messages-preview { overflow-wrap: anywhere; font-size: 13px; }
+.messages-detail { display: grid; gap: 10px; min-width: 0; }
+.messages-message { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; display: grid; gap: 6px; }
+.messages-message-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.messages-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.messages-links, .messages-hint { margin: 0; font-size: 13px; }
+.messages-link-form { display: grid; gap: 8px; }
+.messages-field { display: grid; gap: 4px; min-width: 0; }
+@media (max-width: 767px) {
+  .messages-layout { grid-template-columns: minmax(0, 1fr); }
+}

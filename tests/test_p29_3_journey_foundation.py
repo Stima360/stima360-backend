@@ -152,7 +152,9 @@ def test_01_la_071_e_valida_e_in_coda():
     # additiva), con la sua down.
     # SENTINELLA AGGIORNATA DA BLOCCO-2B: 117_property_valuation_pdfs (PDF delle valutazioni
     # approvate; additiva), con la sua down.
-    assert numeri[numeri.index(76):] == list(range(76, 118))
+    # SENTINELLA AGGIORNATA DA BLOCCO-4A: 118_whatsapp_inbound (ricezione WhatsApp; additiva),
+    # con la sua down.
+    assert numeri[numeri.index(76):] == list(range(76, 119))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))
