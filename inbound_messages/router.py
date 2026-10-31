@@ -8,6 +8,7 @@ consultazione in sola lettura la POST e' bloccata dalla guardia globale.
 
     GET  /api/inbound-messages/conversations?only_unlinked=   conversazioni
     GET  /api/inbound-messages/conversations/{sender_phone}   messaggi di un mittente
+    POST /api/inbound-messages/conversations/{sender_phone}/read  segna letti (per l'operatore della sessione)
     GET  /api/inbound-messages/{id}                           un messaggio (con lo storico associazioni)
     POST /api/inbound-messages/{id}/link                      associa contatto e immobile
 """
@@ -50,6 +51,11 @@ def conversations(only_unlinked: bool = Query(False), ctx: OperatorContext = Dep
 def conversation(sender_phone: str = Path(..., pattern=r"^[0-9]{6,15}$"),
                  ctx: OperatorContext = Depends(require_operator)):
     return _call(service.conversation, ctx, sender_phone)
+
+
+@router.post("/conversations/{sender_phone}/read")
+def read(sender_phone: str = Path(..., pattern=r"^[0-9]{6,15}$"), ctx: OperatorContext = Depends(require_operator)):
+    return _call(service.mark_read, ctx, sender_phone)
 
 
 @router.get("/{message_id}")

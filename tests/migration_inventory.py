@@ -117,6 +117,7 @@ APPROVED_VERSIONS = (
     "123_whatsapp_auto_reply_send",
     "124_do_not_contact_and_link_revocation",
     "125_signature_provider_readiness",
+    "126_whatsapp_inbound_reads",
 )
 
 

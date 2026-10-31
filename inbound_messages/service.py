@@ -37,6 +37,7 @@ from .enums import (
     MESSAGE_TYPE_LABELS,
     NOT_INSTALLED_MESSAGE,
     PROPERTY_NOT_FOUND_MESSAGE,
+    READS_NOT_INSTALLED_MESSAGE,
     ROUTED,
     STOP_KEYWORDS,
 )
@@ -187,8 +188,9 @@ def list_conversations(ctx, *, only_unlinked: bool = False) -> dict:
     agent = _agent_scope(ctx)
     with core_cursor() as (_, cur):
         _require_installed(cur)
+        reads = repository.reads_installed(cur)
         rows = repository.list_conversations(cur, agency_id, agent_user_id=agent, only_unlinked=only_unlinked,
-                                             limit=LIST_LIMIT)
+                                             limit=LIST_LIMIT, reader_user_id=ctx.user_id if reads else None)
         last = {m["id"]: m for m in repository.messages_by_ids(cur, agency_id, [r["last_message_id"] for r in rows])}
     items = []
     for r in rows:
@@ -196,9 +198,10 @@ def list_conversations(ctx, *, only_unlinked: bool = False) -> dict:
         items.append({
             "sender_phone": r["sender_phone"], "messages": int(r["messages"]),
             "without_contact": int(r["without_contact"]), "without_property": int(r["without_property"]),
+            "unread": None if r["unread"] is None else int(r["unread"]),
             "last_received_at": _iso(r["last_received_at"]), "last_message": _message(m) if m else None,
         })
-    return {"items": items, "can_link": agent is None, "limit": LIST_LIMIT}
+    return {"items": items, "can_link": agent is None, "limit": LIST_LIMIT, "unread_available": reads}
 
 
 def conversation(ctx, sender_phone: str) -> dict:
@@ -208,13 +211,41 @@ def conversation(ctx, sender_phone: str) -> dict:
         _require_installed(cur)
         rows = repository.conversation_messages(cur, agency_id, sender_phone, agent_user_id=agent, limit=LIST_LIMIT)
         candidates = repository.candidate_contacts(cur, agency_id, sender_phone) if agent is None and rows else []
+        contact_ids = sorted({r["contact_id"] for r in rows if r.get("contact_id")})
+        stime = repository.related_stime(cur, agency_id, sender_phone, contact_ids) if rows else []
     if not rows:
         raise NotFound("MESSAGE_NOT_FOUND", MESSAGE_NOT_FOUND_MESSAGE)
     return {"sender_phone": sender_phone, "messages": [_message(r) for r in rows], "can_link": agent is None,
+            "stime": [_stima(x) for x in stime],
             "contact_candidates": [{"id": c["id"], "name": _contact_name({"contact_name": c["display_name"],
                                                                            "contact_first_name": c["first_name"],
                                                                            "contact_last_name": c["last_name"]})}
                                    for c in candidates]}
+
+
+def _stima(row) -> dict:
+    """Una stima legata alla conversazione, con il motivo del legame."""
+    return {"id": row["id"], "data": _iso(row.get("data")), "comune": row.get("comune"), "via": row.get("via"),
+            "civico": row.get("civico"), "tipologia": row.get("tipologia"),
+            "name": " ".join(x for x in (row.get("nome"), row.get("cognome")) if x) or None,
+            "match": "contact" if row.get("by_contact") else "phone"}
+
+
+def mark_read(ctx, sender_phone: str) -> dict:
+    """Segna come letti, per l'operatore della sessione, i messaggi della
+    conversazione che vede adesso. Non cambia lo stato degli altri operatori."""
+    agency_id = ctx.require_agency()
+    agent = _agent_scope(ctx)
+    with core_cursor(commit=True) as (_, cur):
+        _require_installed(cur)
+        if not repository.reads_installed(cur):
+            raise NotInstalled("READS_NOT_INSTALLED", READS_NOT_INSTALLED_MESSAGE)
+        rows = repository.conversation_messages(cur, agency_id, sender_phone, agent_user_id=agent, limit=LIST_LIMIT)
+        if not rows:
+            raise NotFound("MESSAGE_NOT_FOUND", MESSAGE_NOT_FOUND_MESSAGE)
+        last = max(r["id"] for r in rows)
+        repository.mark_read(cur, agency_id, ctx.user_id, sender_phone, last)
+    return {"sender_phone": sender_phone, "last_read_message_id": last, "unread": 0}
 
 
 def get_message(ctx, message_id: int) -> dict:

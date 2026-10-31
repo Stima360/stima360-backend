@@ -205,7 +205,10 @@ def test_routes_are_mounted_behind_the_operator_session():
     line = next(r for r in main.splitlines() if "inbound_messages_router" in r and "include_router" in r)
     assert "require_authenticated_operator" in line
     router = (ROOT / "inbound_messages" / "router.py").read_text(encoding="utf-8")
-    assert "@router.post" in router and router.count("@router.post") == 1 and "/link" in router
+    # SENTINELLA AGGIORNATA dall'integrazione del numero esistente: la seconda POST
+    # segna letti i messaggi per l'operatore della sessione (nessun invio).
+    assert "@router.post" in router and router.count("@router.post") == 2 and "/link" in router
+    assert '@router.post("/conversations/{sender_phone}/read")' in router
 
 
 # ---------------------------------------------------------------------------

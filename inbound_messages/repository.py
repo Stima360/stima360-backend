@@ -65,17 +65,66 @@ def _agent_filter(agent_user_id: int | None) -> tuple[str, tuple]:
     return " AND c.assigned_agent_id = %s", (agent_user_id,)
 
 
-def list_conversations(cur, agency_id: int, *, agent_user_id: int | None, only_unlinked: bool, limit: int):
+def reads_installed(cur) -> bool:
+    cur.execute("SELECT to_regclass('whatsapp_inbound_reads') IS NOT NULL AS installed")
+    return bool(cur.fetchone()["installed"])
+
+
+def list_conversations(cur, agency_id: int, *, agent_user_id: int | None, only_unlinked: bool, limit: int,
+                       reader_user_id: int | None = None):
+    """`reader_user_id`: con la migrazione 126, conta i messaggi non ancora
+    letti da QUELL'operatore (`unread`); senza, `unread` e' NULL."""
     extra, params = _agent_filter(agent_user_id)
     having = " HAVING count(*) FILTER (WHERE m.contact_id IS NULL OR m.property_id IS NULL) > 0" if only_unlinked else ""
+    if reader_user_id is None:
+        unread, reads, read_params = "NULL::bigint AS unread", "", ()
+    else:
+        unread = "count(*) FILTER (WHERE m.id > COALESCE(r.last_read_message_id, 0)) AS unread"
+        reads = ("LEFT JOIN whatsapp_inbound_reads r ON r.agency_id = m.agency_id AND r.user_id = %s "
+                 "AND r.sender_phone = m.sender_phone ")
+        read_params = (reader_user_id,)
     cur.execute(
         "SELECT m.sender_phone, max(m.received_at) AS last_received_at, count(*) AS messages, "
         "count(*) FILTER (WHERE m.contact_id IS NULL) AS without_contact, "
         "count(*) FILTER (WHERE m.property_id IS NULL) AS without_property, "
+        f"{unread}, "
         "(array_agg(m.id ORDER BY m.received_at DESC, m.id DESC))[1] AS last_message_id "
-        f"{_JOINS} WHERE m.agency_id = %s{extra} GROUP BY m.sender_phone{having} "
+        f"{_JOINS}{reads}WHERE m.agency_id = %s{extra} GROUP BY m.sender_phone{having} "
         "ORDER BY max(m.received_at) DESC LIMIT %s",
-        (agency_id, *params, limit))
+        (*read_params, agency_id, *params, limit))
+    return [dict(r) for r in cur.fetchall()]
+
+
+def mark_read(cur, agency_id: int, user_id: int, sender_phone: str, message_id: int) -> None:
+    """Il segno avanza soltanto: una lettura piu' vecchia non lo riporta indietro."""
+    cur.execute(
+        "INSERT INTO whatsapp_inbound_reads (agency_id, user_id, sender_phone, last_read_message_id) "
+        "VALUES (%s, %s, %s, %s) ON CONFLICT (agency_id, user_id, sender_phone) DO UPDATE "
+        "SET last_read_message_id = GREATEST(whatsapp_inbound_reads.last_read_message_id, "
+        "EXCLUDED.last_read_message_id), read_at = NOW()",
+        (agency_id, user_id, sender_phone, message_id))
+
+
+# Stesso numero in formato internazionale: le cifre, senza `00` iniziale; un
+# numero nazionale (fino a 10 cifre) prende il prefisso 39.
+_STIMA_DIGITS = "regexp_replace(regexp_replace(coalesce(s.telefono, ''), '\\D', '', 'g'), '^00', '')"
+_STIMA_PHONE = f"(CASE WHEN length({_STIMA_DIGITS}) <= 10 THEN '39' || {_STIMA_DIGITS} ELSE {_STIMA_DIGITS} END)"
+
+
+def related_stime(cur, agency_id: int, sender_phone: str, contact_ids: list[int], limit: int = 10):
+    """Le stime dell'agenzia legate alla conversazione: quelle dei contatti
+    collegati (lead del contatto) e quelle con lo stesso numero di telefono.
+    `match` dice come: mai un collegamento salvato, solo una lettura."""
+    cur.execute(
+        "SELECT s.id, s.data, s.comune, s.via, s.civico, s.tipologia, s.nome, s.cognome, "
+        "bool_or(l.contact_id = ANY(%s)) AS by_contact, "
+        f"bool_or(coalesce(s.telefono, '') <> '' AND {_STIMA_PHONE} = %s) AS by_phone "
+        "FROM stime s LEFT JOIN lead_stime ls ON ls.stima_id = s.id "
+        "LEFT JOIN leads l ON l.id = ls.lead_id AND l.agency_id = s.agency_id "
+        "WHERE s.agency_id = %s AND (l.contact_id = ANY(%s) "
+        f"OR (coalesce(s.telefono, '') <> '' AND {_STIMA_PHONE} = %s)) "
+        "GROUP BY s.id ORDER BY s.data DESC NULLS LAST, s.id DESC LIMIT %s",
+        (contact_ids, sender_phone, agency_id, contact_ids, sender_phone, limit))
     return [dict(r) for r in cur.fetchall()]
 
 

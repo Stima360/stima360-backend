@@ -1668,6 +1668,11 @@ a.census-unit-main { text-decoration: none; }
 .messages-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .messages-links, .messages-hint { margin: 0; font-size: 13px; }
 .messages-link-form { display: grid; gap: 8px; }
+.messages-list .btn.messages-conversation.unread strong { font-weight: 800; }
+.messages-stime { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; font-size: 13px; }
+.messages-stime h4 { margin: 0 0 4px; font-size: 14px; }
+.messages-stime ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.messages-stime li, .messages-links a { overflow-wrap: anywhere; }
 .messages-field { display: grid; gap: 4px; min-width: 0; }
 @media (max-width: 767px) {
   .messages-layout { grid-template-columns: minmax(0, 1fr); }

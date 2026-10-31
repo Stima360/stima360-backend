@@ -10,8 +10,12 @@
 // (components/whatsapp-reply.js, /api/message-replies), con conferma; mai il
 // vecchio invio admin. Tutto il testo passa da `textContent`; allegati e link
 // non vengono aperti.
+// Integrazione del numero esistente: «non letti» per operatore (segnati letti
+// all'apertura della conversazione, migrazione 126) e stime collegate (dal
+// contatto o dallo stesso numero), con i collegamenti a contatto, immobile e stima.
 
 import { apiGet, apiPost } from '../core/api-client.js';
+import { navigate } from '../core/router.js';
 import { mountWhatsappReply } from '../components/whatsapp-reply.js';
 import { mountReplySuggestion } from '../components/suggested-reply.js';
 import { fetchAutoState, renderAutoPanel, renderDecision } from '../components/auto-reply.js';
@@ -57,6 +61,46 @@ export function errorMessage(error) {
   if (d && typeof d === 'object' && !Array.isArray(d) && d.message) return d.message;
   if (Array.isArray(d)) return 'Alcuni dati non sono validi.';
   return (error && error.message) || 'Operazione non riuscita.';
+}
+
+/** Apre una scheda del CRM (mai un indirizzo esterno o ricevuto nel messaggio). */
+function openButton(label, route, id) {
+  const b = button(label, 'ghost messages-open');
+  b.setAttribute('data-open', `${route}/${id}`);
+  b.addEventListener('click', () => navigate(route, [String(id)]));
+  return b;
+}
+
+/** Collegamenti a contatto e immobile del messaggio (solo se collegati). */
+function linkAnchors(m) {
+  const wrap = el('p', 'messages-links');
+  if (m.contact) wrap.appendChild(openButton(`Apri contatto: ${m.contact.name || `n. ${m.contact.id}`}`, 'contatti', m.contact.id));
+  if (m.property) {
+    wrap.appendChild(openButton(`Apri immobile: ${m.property.title || m.property.code || `n. ${m.property.id}`}`, 'immobili', m.property.id));
+  }
+  return wrap;
+}
+
+function stimeSection(stime) {
+  const section = el('div', 'messages-stime');
+  section.setAttribute('data-messages-stime', '');
+  section.appendChild(el('h4', null, 'Stime collegate'));
+  if (!stime || !stime.length) {
+    section.appendChild(el('p', 'muted', 'Nessuna stima dal contatto collegato o con questo numero.'));
+    return section;
+  }
+  const list = el('ul');
+  for (const s of stime) {
+    const li = el('li');
+    const where = [s.via, s.civico].filter(Boolean).join(' ');
+    const label = [where, s.comune, s.tipologia].filter(Boolean).join(' · ') || `Stima n. ${s.id}`;
+    li.append(openButton(label, 'stime', s.id),
+      el('span', 'muted', ` — ${dateTimeText(s.data)} · ${s.match === 'contact' ? 'dal contatto collegato' : 'stesso numero: verifica che sia la stessa persona'}`));
+    li.setAttribute('data-stima', String(s.id));
+    list.appendChild(li);
+  }
+  section.appendChild(list);
+  return section;
 }
 
 function linkState(m) {
@@ -195,6 +239,12 @@ export async function renderMessaggi(container, params = []) {
       const who = (last && last.contact && last.contact.name) || (last && last.sender_profile_name) || phoneText(c.sender_phone);
       item.append(el('strong', null, who), el('span', 'muted', `${phoneText(c.sender_phone)} · ${dateTimeText(c.last_received_at)}`),
         el('span', 'messages-preview', messageSummary(last)));
+      if (c.unread) {
+        item.classList.add('unread');
+        const badge = el('span', 'badge badge-role', `Non letti: ${c.unread}`);
+        badge.setAttribute('data-messages-unread', String(c.unread));
+        item.appendChild(badge);
+      }
       if (c.without_contact || c.without_property) {
         item.appendChild(el('span', 'badge badge-warn', `Da associare: ${Math.max(c.without_contact, c.without_property)}`));
       }
@@ -215,6 +265,16 @@ export async function renderMessaggi(container, params = []) {
       return;
     }
     detail.replaceChildren(el('h3', null, `Conversazione con ${phoneText(sender)}`));
+    // Letti per chi apre la conversazione: un errore (sola lettura, migrazione assente) non blocca la vista.
+    apiPost(`${API}/conversations/${encodeURIComponent(sender)}/read`, {}).then(() => {
+      const item = list.querySelector(`[data-sender="${sender}"]`);
+      if (item) {
+        item.classList.remove('unread');
+        const badge = item.querySelector('[data-messages-unread]');
+        if (badge) badge.remove();
+      }
+    }).catch(() => {});
+    detail.appendChild(stimeSection(data.stime));
     // BLOCCO-4D: stato del motore (solo simulazione) e decisioni registrate.
     let auto = null;
     try {
@@ -233,7 +293,7 @@ export async function renderMessaggi(container, params = []) {
         el('span', 'muted', `Ricevuto ${dateTimeText(m.received_at)}${m.provider_timestamp ? ` · inviato ${dateTimeText(m.provider_timestamp)}` : ''}`));
       if (!m.is_text) head.appendChild(el('span', 'badge badge-gray', m.message_type_label));
       card.append(head, el('p', m.is_text ? 'messages-text' : 'messages-text muted', messageSummary(m)),
-        el('p', 'muted messages-links', linkState(m)));
+        el('p', 'muted messages-links', linkState(m)), linkAnchors(m));
       if (data.can_link) {
         const toggle = button('Associa', 'ghost', 'data-message-link-open');
         toggle.addEventListener('click', () => {

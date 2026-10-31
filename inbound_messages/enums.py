@@ -34,6 +34,8 @@ MESSAGE_TYPE_LABELS = {
 NOT_INSTALLED_MESSAGE = ("La ricezione WhatsApp non è ancora attiva su questo ambiente: "
                          "la migrazione 118 non è stata applicata.")
 MESSAGE_NOT_FOUND_MESSAGE = "Messaggio non trovato."
+READS_NOT_INSTALLED_MESSAGE = ("Lo stato letto/non letto non è ancora attivo su questo ambiente: "
+                               "la migrazione 126 non è stata applicata.")
 LINK_FORBIDDEN_MESSAGE = "Solo il titolare o un amministratore dell'agenzia può associare i messaggi."
 CONTACT_NOT_FOUND_MESSAGE = "Contatto non trovato in questa agenzia."
 PROPERTY_NOT_FOUND_MESSAGE = "Immobile non trovato in questa agenzia."
