@@ -36,6 +36,7 @@ function when(iso) {
 
 export function renderDoNotContact(state, { readOnly = false, onSet, onLift } = {}) {
   const box = el('section', 'dnc-panel');
+  box.style.marginBottom = '16px';
   box.setAttribute('data-dnc', state.active ? 'active' : 'inactive');
   if (!state.installed) return box;
   if (state.active) {
