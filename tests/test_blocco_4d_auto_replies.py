@@ -18,19 +18,31 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / "static" / "os_shell" / "assets"
 
 
-@pytest.mark.parametrize("value", [None, "", "off", "send", "meta", "on", "true", "1", "SIMULATE", " simulate x"])
+# SENTINELLA AGGIORNATA DAL MODO D'INVIO (migrazione 123): `send` e' il secondo
+# valore ammesso dell'arresto generale. Ogni altro valore, e l'assenza, fermano.
+@pytest.mark.parametrize("value", [None, "", "off", "meta", "on", "true", "1", "SIMULATE", "SEND", " simulate x", "sending"])
 def test_the_engine_is_stopped_unless_explicitly_simulating(monkeypatch, value):
     if value is None:
         monkeypatch.delenv(enums.GLOBAL_ENV, raising=False)
     else:
         monkeypatch.setenv(enums.GLOBAL_ENV, value)
-    assert service.global_enabled() is False
+    assert service.global_enabled() is False and service.global_mode() == "off"
+    for agency in ("off", "simulate", "send"):
+        assert service.effective_mode(agency) == "off"
 
 
 def test_only_simulate_starts_it(monkeypatch):
     monkeypatch.setenv(enums.GLOBAL_ENV, " simulate ")
     assert service.global_enabled() is True
-    assert enums.MODES == ("off", "simulate")                         # nessun modo d'invio
+    assert enums.MODES == ("off", "simulate", "send")
+    # con `simulate` sull'ambiente nessuna agenzia invia, nemmeno se impostata su `send`
+    assert [service.effective_mode(m) for m in ("off", "simulate", "send", None, "x")] == \
+        ["off", "simulate", "simulate", "off", "off"]
+
+
+def test_send_needs_send_on_the_environment_and_on_the_agency(monkeypatch):
+    monkeypatch.setenv(enums.GLOBAL_ENV, "send")
+    assert [service.effective_mode(m) for m in ("off", "simulate", "send", None)] == ["off", "simulate", "send", "off"]
 
 
 def test_migration_119_is_valid_additive_and_simulation_only():
@@ -53,13 +65,20 @@ def test_migration_119_is_valid_additive_and_simulation_only():
     assert "whatsapp_inbound_messages" not in down_exec
 
 
-def test_the_engine_never_sends_queues_or_creates_tasks():
+def test_the_engine_sends_only_through_the_registry_and_the_4b_transport():
+    """SENTINELLA AGGIORNATA DAL MODO D'INVIO: il motore accoda nel registro
+    delle comunicazioni e consegna con il trasporto del 4B, mai con un client
+    HTTP suo, mai con il claim generico, mai con un modello linguistico."""
     code = "\n".join(p.read_text(encoding="utf-8") for p in (ROOT / "auto_replies").glob("*.py"))
     stripped = re.sub(r'"""[\s\S]*?"""', "", code)
-    for forbidden in ("enqueue", "claim_message", "claim_due", "transport", "requests", "httpx", "graph.facebook",
-                      "send_reply", "create_task", "INSERT INTO tasks", "INSERT INTO communication", "openai",
-                      "anthropic", "finalize_"):
+    for forbidden in ("claim_due", "requests", "httpx", "graph.facebook", "send_reply", "INSERT INTO communication",
+                      "openai", "anthropic", "urllib"):
         assert forbidden not in stripped, forbidden
+    assert stripped.count("transport.send(") == 1 and stripped.count("communication.enqueue(") == 1
+    assert stripped.count("communication.claim_message(") == 1
+    # il trasporto si chiama solo dopo il claim e i controlli dell'ultimo momento
+    deliver = stripped[stripped.index("def _deliver("):stripped.index("def tick(")]
+    assert deliver.index("claim_message") < deliver.index("_send_time_check") < deliver.index("transport.send(")
     # opera come sistema dell'agenzia: nessun operatore inventato
     assert "SystemAgencyContext(agency_id=agency_id, origin=INBOUND_ORIGIN)" in stripped
 

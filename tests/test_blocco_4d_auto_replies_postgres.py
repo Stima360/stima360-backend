@@ -116,7 +116,7 @@ def test_c_certain_answer_from_the_message_property_without_internal_code(ar):
     out = _tick(ar)
     assert out["status"] == "simulated" and out["sent"] == 0 and out["queued"] == 0
     decision, reason, text, version, mode, data, handoff = _decision(ar, mid)
-    assert (decision, reason, version, mode, handoff) == ("answer", None, "5b-2", "simulate", None)
+    assert (decision, reason, version, mode, handoff) == ("answer", None, "5b-3", "simulate", None)
     assert text == ("Buongiorno, grazie per il messaggio. Per l'immobile di cui ci scrive: il prezzo richiesto è "
                     "€ 185.000; c'è l'ascensore.")
     assert code not in text and "Trilocale" not in text
@@ -271,7 +271,12 @@ def test_a_only_managers_configure_and_run_the_engine(ar):
     assert agent.post(f"{API}/tick").status_code == 403
     assert agent.get(f"{API}/settings").json()["can_configure"] is False
     owner = ar["login"]("owner_a")
-    assert owner.put(f"{API}/settings", json={"mode": "send"}).status_code == 422       # nessun modo d'invio
+    # SENTINELLA AGGIORNATA DAL MODO D'INVIO (123): `send` si imposta, ma con l'ambiente su
+    # `simulate` resta una simulazione (prove complete in test_blocco_4d_send_postgres.py)
+    st = owner.put(f"{API}/settings", json={"mode": "send"}).json()
+    assert st["mode"] == "send" and st["effective"] == "simulate" and st["sending"] == "disabled"
+    assert owner.put(f"{API}/settings", json={"mode": "meta"}).status_code == 422
+    assert owner.put(f"{API}/settings", json={"mode": "simulate"}).status_code == 200
     assert owner.put(f"{API}/settings", json={"mode": "simulate", "agency_id": ar["ids"]["b"]}).status_code == 422
 
 
@@ -316,7 +321,8 @@ def test_p_global_stop_and_agency_off_record_nothing(ar, monkeypatch):
     monkeypatch.delenv("WHATSAPP_AUTO_REPLY_MODE")
     out = _tick(ar)
     assert out["status"] == "stopped" and out["recorded"] == 0 and _decision(ar, mid) is None
-    for value in ("", "send", "meta", "on", "true"):
+    # SENTINELLA AGGIORNATA DAL MODO D'INVIO: `send` non e' piu' un valore che ferma (vedi 123)
+    for value in ("", "SEND", "meta", "on", "true"):
         monkeypatch.setenv("WHATSAPP_AUTO_REPLY_MODE", value)
         assert _tick(ar)["status"] == "stopped"
     st = ar["login"]("owner_a").get(f"{API}/settings").json()

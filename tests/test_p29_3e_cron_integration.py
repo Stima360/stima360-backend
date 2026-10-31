@@ -499,9 +499,12 @@ def test_22_il_cron_chiama_TRE_rotte_e_nessun_altra():
     # SENTINELLA AGGIORNATA DA A32-2: il giro dei promemoria, la sola rotta in
     # piu' (una scrittura
     # idempotente del ledger, come il tick: nessun provision, nessun activate)
+    # SENTINELLA AGGIORNATA DA BLOCCO-4D (modo d'invio): il giro delle risposte
+    # automatiche, chiamato SOLO con COMMUNICATION_AUTO_REPLY_TICK=1 (spento di default)
     assert rotte == {"/api/operator-auth/login", "/api/operator-auth/logout",
                      "/api/communication/journeys/tick",
                      "/api/communication/reminders/tick",
+                     "/api/auto-replies/tick",
                      "/api/communication/dispatch"}, sorted(rotte)
 
 

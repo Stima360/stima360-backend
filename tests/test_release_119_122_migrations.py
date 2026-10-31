@@ -26,15 +26,20 @@ def test_embedded_checksums_match_the_repository():
     for v, (up, down) in rel.NEW.items():
         assert _sha(ROOT / "migrations" / f"{v}.sql") == up, v
         assert _sha(ROOT / "migrations" / f"{v}_down.sql") == down, v
+    # SENTINELLA AGGIORNATA DALLA 123: con la 123 nel deploy il pacchetto 119-122
+    # non si applica piu' (check/apply si fermano), la sua verifica resta valida.
+    g = rel.Gate()
+    rel.files_gate(g, allow_later=True)
+    assert g.problems == []
     g = rel.Gate()
     rel.files_gate(g)
-    assert g.problems == []
+    assert g.problems == ["nessun file di migrazione oltre la 122 nel deploy"]
 
 
 def test_placeholder_or_wrong_database_stops_before_connecting(monkeypatch):
     for host, name in (("INCOLLA_QUI_L_HOST_TEST_VERIFICATO", "stima360_db_test"), ("h", "stima360_db")):
         env = {"DB_HOST": "h", "DB_NAME": name, "PATH": "/usr/bin:/bin"}
-        out = subprocess.run([sys.executable, str(ROOT / "scripts" / "release_119_122_migrations.py"), "check",
+        out = subprocess.run([sys.executable, str(ROOT / "scripts" / "release_119_122_migrations.py"), "verify",
                               "--expected-host", host], env=env, capture_output=True, text=True)
         assert out.returncode == 1 and "nessuna connessione aperta" in out.stdout, out.stdout
 

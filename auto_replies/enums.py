@@ -2,18 +2,28 @@
 from __future__ import annotations
 
 #: Arresto generale: il motore gira SOLO se questa variabile vale esattamente
-#: `simulate`. Assente, vuota o con ogni altro valore: fermo, per tutte le
-#: agenzie, qualunque sia la loro impostazione. Non esiste un valore d'invio.
+#: `simulate` o `send`. Assente, vuota o con ogni altro valore: fermo, per
+#: tutte le agenzie, qualunque sia la loro impostazione. Il modo effettivo di
+#: un'agenzia e' il MINORE fra questo e il suo (off < simulate < send): con
+#: `simulate` sull'ambiente nessuna agenzia invia, anche se impostata su `send`.
 GLOBAL_ENV = "WHATSAPP_AUTO_REPLY_MODE"
 GLOBAL_SIMULATE = "simulate"
+GLOBAL_SEND = "send"
 
 MODE_OFF = "off"
 MODE_SIMULATE = "simulate"
-MODES = (MODE_OFF, MODE_SIMULATE)
+MODE_SEND = "send"
+MODES = (MODE_OFF, MODE_SIMULATE, MODE_SEND)
+MODE_RANK = {MODE_OFF: 0, MODE_SIMULATE: 1, MODE_SEND: 2}
+
+#: Il motivo dell'invio nel registro delle comunicazioni (migrazione 123).
+COMMUNICATION_REASON = "auto_reply"
+#: Il nome del mittente nel registro dei tentativi (come il 4B).
+PROVIDER_LABEL = "meta_whatsapp_cloud"
 
 #: Versione delle regole: una decisione per (messaggio, versione). Cambiare
 #: regole o testi (anche quelli del 4C) vuol dire cambiare questa stringa.
-RULES_VERSION = "5b-2"          # collegamento di prenotazione solo per immobile «Attivo»
+RULES_VERSION = "5b-3"          # modo d'invio: attivita' reale assegnata, collegamento dedicato
 
 #: Quanti messaggi al massimo per giro e per agenzia.
 TICK_LIMIT = 50
@@ -40,11 +50,20 @@ DECISION_LABELS = {
     SKIPPED: "Nessuna risposta automatica",
 }
 SIMULATION_LABEL = "Simulazione — non inviato"
+SEND_LABELS = {
+    "queued": "In coda per l'invio", "sending": "Invio in corso", "sent": "Inviato",
+    "failed": "Non inviato (rifiutato)", "indeterminate": "Esito incerto: non viene ritentato",
+    "suppressed": "Non inviato: bloccato dai controlli prima dell'invio", "cancelled": "Annullato",
+    "expired": "Non inviato: scaduto",
+}
+NO_SEND_LABEL = "Nessun messaggio da inviare"
 
-#: BLOCCO-5B. Il collegamento di prenotazione NON si scrive nel registro: il
-#: token esiste solo come impronta. Il testo simulato porta questo segnaposto
-#: e la decisione conserva l'id del collegamento; un invio reale dovra'
-#: sostituirlo con l'indirizzo vero (decisione aperta: vedi la roadmap).
+#: BLOCCO-5B. Il collegamento di prenotazione NON si scrive mai nel registro:
+#: il token esiste solo come impronta. Il testo REGISTRATO (decisione e
+#: messaggio in coda) porta questo segnaposto; nel modo d'invio, subito prima
+#: di chiamare Meta, si emette un collegamento DEDICATO (con scadenza,
+#: revocabile) e il segnaposto e' sostituito dal suo indirizzo SOLO nel testo
+#: consegnato al trasporto, in memoria.
 BOOKING_LINK_PLACEHOLDER = "[collegamento di prenotazione della visita]"
 VISIT_BOOKING_TEXT = ("Buongiorno, grazie per l'interesse. Può scegliere giorno e orario disponibili per la visita "
                       "da qui: {link}. L'appuntamento è fissato solo quando la pagina conferma la prenotazione.")

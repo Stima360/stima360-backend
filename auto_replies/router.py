@@ -31,7 +31,7 @@ SENDER = Path(..., pattern=r"^[0-9]{6,15}$")
 class SettingsRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["off", "simulate"]
+    mode: Literal["off", "simulate", "send"]
 
 
 def _call(fn, *args):

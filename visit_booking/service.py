@@ -49,6 +49,12 @@ from public_booking import security
 
 from . import repository
 
+#: Lo stato commerciale con cui un collegamento DEDICATO resta usabile: lo
+#: stesso con cui il motore delle risposte lo propone (BLOCCO-4C/5B).
+ACTIVE_STATUS = "active"
+#: Validita' massima di un collegamento dedicato (mai oltre il padre).
+INVITE_VALIDITY_DAYS = 7
+
 PAGE_PATH = "/visita/"
 MANAGE_PATH = "/visita-gestione/"
 RATE_WINDOW_SECONDS = 60
@@ -236,16 +242,57 @@ def _gate(link_id: int, kind: str, client_ip: str) -> None:
                 raise RateLimited()
 
 
+def _usable(cur, link: dict | None) -> bool:
+    return (link is not None and link["status"] == "active"
+            and (link["expires_at"] is None or link["expires_at"] > _now()))
+
+
+def _dedicated_usable(cur, link: dict) -> bool:
+    """Un collegamento DEDICATO (emesso da una risposta automatica) vale solo
+    finche' vale il collegamento dell'operatore da cui nasce, l'agente e' un
+    membro attivo e l'immobile e' ancora «Attivo»: le stesse condizioni con cui
+    e' stato proposto, verificate di nuovo a ogni uso."""
+    parent = repository.link_by_id(cur, link["agency_id"], link["parent_link_id"])
+    return (_usable(cur, parent)
+            and appointment_repository.active_membership(cur, link["agency_id"], link["assigned_user_id"])
+            and repository.commercial_status(cur, link["agency_id"], link["property_id"]) == ACTIVE_STATUS)
+
+
 def _resolve(cur, token: str) -> dict:
     """Il link prenotabile, o la stessa risposta neutra per ogni rifiuto."""
     if not repository.installed(cur):
         raise LinkNotBookable()
     link = repository.link_by_token_hash(cur, security.hash_token(token or ""))
-    if (link is None or link["status"] != "active"
-            or (link["expires_at"] is not None and link["expires_at"] <= _now())
+    if (not _usable(cur, link)
+            or (link.get("parent_link_id") is not None and not _dedicated_usable(cur, link))
             or not writes.mandate_open(cur, link["agency_id"], link["property_id"])):
         raise LinkNotBookable()
     return link
+
+
+def issue_dedicated_link(cur, agency_id: int, parent_link_id: int, *, decision_id: int, contact_id: int,
+                         now: datetime | None = None) -> str | None:
+    """Migrazione 123: emette il collegamento DEDICATO per UNA risposta, nella
+    transazione del chiamante, e restituisce il SOLO percorso con il token
+    (`/visita/<token>`), che il chiamante non deve registrare. None se non e'
+    emettibile adesso (padre non piu' valido, incarico chiuso, immobile non
+    «Attivo», agente non attivo, gia' emesso per questa decisione)."""
+    now = now or _now()
+    if not repository.dedicated_installed(cur):
+        return None
+    parent = repository.link_by_id(cur, agency_id, parent_link_id, lock=True)
+    if not _usable(cur, parent) or not writes.mandate_open(cur, agency_id, parent["property_id"]):
+        return None
+    if (not appointment_repository.active_membership(cur, agency_id, parent["assigned_user_id"])
+            or repository.commercial_status(cur, agency_id, parent["property_id"]) != ACTIVE_STATUS):
+        return None
+    expires = now + timedelta(days=INVITE_VALIDITY_DAYS)
+    if parent["expires_at"] is not None:
+        expires = min(expires, parent["expires_at"])
+    token = security.generate_token()
+    row = repository.insert_dedicated(cur, parent, token_hash=security.hash_token(token), decision_id=decision_id,
+                                      contact_id=contact_id, expires_at=expires)
+    return f"/visita/{token}" if row is not None else None
 
 
 def _public_property(cur, link) -> dict:
