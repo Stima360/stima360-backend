@@ -652,6 +652,45 @@ def test_f1_un_appuntamento_sospende_e_la_ripresa_e_dal_prossimo_passo(fb, monke
     assert e["status"] == "active" and e["next_step_no"] == 7  # giorno 28
 
 
+def test_f1b_un_appuntamento_aperto_ma_passato_non_sospende_per_sempre(fb, monkeypatch):
+    """BLOCCO 1 (caso reale: richiesta di appuntamento rimasta `requested` dopo
+    la sua data): l'orario passato senza esito non e' piu' una relazione viva.
+    Richiesta mai confermata -> come un mancato (+2 giorni); fissato e non
+    chiuso -> come uno svolto (+14 giorni). Poi la sequenza riprende dal
+    prossimo passo in calendario, senza arretrati."""
+    m = fb
+    cid, e = _iscrivi(m, monkeypatch, "richiesta.passata@example.it")
+    app = _appuntamento(m, cid, inizio=ORA + 2 * GIORNO, stato="requested")
+    _tick(m, now=ORA + GIORNO)
+    e = _iscrizioni(m, contact_id=cid)[0]
+    assert e["status"] == "paused" and e["paused_source"] == "appointment" and e["resume_after"] is None
+    # passato e mai confermato: pausa con una fine (fine appuntamento + 2 giorni)
+    _tick(m, now=ORA + 3 * GIORNO)
+    e = _iscrizioni(m, contact_id=cid)[0]
+    fine = ORA + 2 * GIORNO + timedelta(hours=1)
+    assert e["status"] == "paused" and e["resume_after"] == fine + 2 * GIORNO
+    assert e["pause_ref"] == f"appointment:{app}:requested:expired"
+    # dopo: riprende, nessun passo arretrato accodato in blocco
+    _tick(m, now=fine + 2 * GIORNO + timedelta(hours=1))
+    e = _iscrizioni(m, contact_id=cid)[0]
+    assert e["status"] == "active" and e["next_action_at"] > fine + 2 * GIORNO
+    assert len([x for x in _messaggi(m, e["id"]) if x["status"] == "queued"]) <= 1
+    assert _q(m, "SELECT status FROM appointments WHERE id = %s", (app,)) == [["requested"]]   # dato intatto
+
+
+def test_f1c_un_appuntamento_fissato_passato_e_non_chiuso_tiene_14_giorni(fb, monkeypatch):
+    m = fb
+    cid, e = _iscrivi(m, monkeypatch, "fissato.passato@example.it")
+    _appuntamento(m, cid, inizio=ORA + 2 * GIORNO, stato="scheduled")
+    _tick(m, now=ORA + 4 * GIORNO)
+    e = _iscrizioni(m, contact_id=cid)[0]
+    assert e["status"] == "paused" and e["resume_after"] == ORA + 2 * GIORNO + timedelta(hours=1) + 14 * GIORNO
+    # un appuntamento futuro, nel frattempo, torna a sospendere senza fine
+    _appuntamento(m, cid, inizio=ORA + 30 * GIORNO, stato="scheduled")
+    _tick(m, now=ORA + 5 * GIORNO)
+    assert _iscrizioni(m, contact_id=cid)[0]["resume_after"] is None
+
+
 def test_f2_consulenza_relazione_commerciale_e_vendita(fb, monkeypatch):
     m = fb
     cid, e = _iscrivi(m, monkeypatch, "comm@example.it")
