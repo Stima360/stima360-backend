@@ -111,7 +111,7 @@ from __future__ import annotations
 
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from urllib.parse import urlparse
 
 import requests
@@ -129,7 +129,8 @@ class TechnicalError(RuntimeError):
 class Config:
     base_url: str
     email: str
-    password: str
+    #: Mai nel repr: un oggetto stampato o loggato non deve mostrare la password.
+    password: str = field(repr=False)
     channel: str
     limit: int
     timeout: tuple[float, float]
@@ -149,7 +150,7 @@ class Config:
     #: Il segreto di servizio del cron (`COMMUNICATION_CRON_TOKEN`) e l'agenzia
     #: del giro (`COMMUNICATION_CRON_AGENCY_ID`). Presenti: un'identita'
     #: TECNICA, senza password di nessuna persona. Assenti: il login di prima.
-    token: str | None = None
+    token: str | None = field(default=None, repr=False)
     agency_id: int | None = None
 
 
