@@ -73,7 +73,11 @@
     } else {
       const list = el('ul', 'owner-report-prices');
       for (const p of rep.price_history) {
-        list.appendChild(el('li', null, `${day(p.date)}: ${money(p.old_price)} → ${money(p.new_price)}`));
+        // Senza prezzo precedente e' la prima impostazione, non un dato mancante.
+        const text = (p.old_price === null || p.old_price === undefined || p.old_price === '')
+          ? `${day(p.date)}: prezzo iniziale ${money(p.new_price)}`
+          : `${day(p.date)}: ${money(p.old_price)} → ${money(p.new_price)}`;
+        list.appendChild(el('li', null, text));
       }
       content.appendChild(list);
     }

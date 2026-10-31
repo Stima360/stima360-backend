@@ -33,5 +33,7 @@ def test_portal_ui_is_safe_and_states_missing_data():
     js = (ROOT / "static" / "owner_portal" / "assets" / "owner-report.js").read_text(encoding="utf-8")
     assert "innerHTML" not in js and "textContent" in js and "Dato non disponibile" in js
     assert "response.status === 404" in js and "section.hidden = true" in js           # revoca: sezione nascosta
+    # la prima impostazione del prezzo non e' un «dato non disponibile»
+    assert "prezzo iniziale ${money(p.new_price)}" in js
     html = (ROOT / "static" / "owner_portal" / "index.html").read_text(encoding="utf-8")
     assert 'id="owner-report-section"' in html and "/owner/assets/owner-report.js" in html
