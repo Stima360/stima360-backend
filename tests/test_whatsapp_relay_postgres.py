@@ -228,3 +228,42 @@ def test_i_an_agent_sees_a_relayed_reply_only_for_an_assigned_contact(rl, monkey
     seen = {c["sender_phone"] for c in agent.get(f"{API}/conversations").json()["items"]}
     assert mine in seen and other not in seen
     assert agent.get(f"{API}/conversations/{other}").status_code == 404
+
+
+# ---------------------------------------------------------------------------
+# E - dall'inoltro preparato per la produzione al CRM vero
+# ---------------------------------------------------------------------------
+
+def test_e_the_production_forwarder_delivers_into_the_real_crm(rl, monkeypatch):
+    import sys
+    from pathlib import Path
+
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "integrations" / "whatsapp_relay"))
+    import forwarder
+
+    ids = rl["ids"]
+    allowed, customer = _sender(), _sender()
+    monkeypatch.setenv(relay.ALLOWED_SENDERS_ENV, allowed)
+    contact = _contact(rl, ids["a"], "Mittente autorizzato", allowed)
+    mid = f"wamid.e2e.{uuid.uuid4().hex}"
+    meta_body = json.dumps(_payload(_change(NUMBER_A, [_message(allowed, body="Prova end-to-end", mid=mid),
+                                                       _message(customer, body="Cliente reale")]))).encode()
+    cfg = forwarder.config({forwarder.URL_ENV: "https://crm-test.example/webhook/whatsapp",
+                            forwarder.SECRET_ENV: RELAY_SECRET, forwarder.SENDERS_ENV: allowed})
+    body = forwarder.select(meta_body, cfg.senders)
+    client = rl["login"]("owner_a")
+    codes = []
+
+    def post(url, *, data, headers, timeout):
+        r = client.post("/webhook/whatsapp", content=data, headers=headers)
+        codes.append(r.status_code)
+        return r
+
+    assert forwarder.deliver(cfg, body, post=post, sleep=lambda s: None) == "delivered"
+    assert forwarder.deliver(cfg, body, post=post, sleep=lambda s: None) == "delivered"   # reinvio
+    assert codes == [200, 200]
+    rows = _rows(rl, "provider_message_id = %s", (mid,))
+    assert len(rows) == 1 and rows[0][1] == ids["a"] and rows[0][6] == contact
+    assert _rows(rl, "sender_phone = %s", (customer,)) == []
+    conv = client.get(f"{API}/conversations/{allowed}").json()
+    assert [m["text"] for m in conv["messages"]] == ["Prova end-to-end"]

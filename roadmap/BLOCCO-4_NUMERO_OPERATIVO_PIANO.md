@@ -14,6 +14,14 @@ id di servizio o stringa di connessione. Nota: alcuni di questi valori compaiono
 in chiaro in file già presenti nel repository (vedi §6.3); qui non vengono
 ripetuti.
 
+**Aggiornamento (integrazione del numero esistente):** l'opzione A è ora **implementata
+e provata in locale**, non distribuita. Differenza dal piano: l'inoltro non riusa la firma
+Meta. Usa una firma propria (`WHATSAPP_RELAY_SECRET`), così l'App Secret resta solo in
+produzione. In più c'è un filtro dei mittenti, sia in produzione sia nel CRM, che limita la
+prova al mittente autorizzato. Codice dell'inoltro, patch di `main` e procedura sono in
+`integrations/whatsapp_relay/ATTIVAZIONE.md`. Il lato CRM è `inbound_messages/relay.py`
+sullo stesso `/webhook/whatsapp`.
+
 ---
 
 ## 0. Sintesi

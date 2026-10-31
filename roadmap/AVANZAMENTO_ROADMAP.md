@@ -18,7 +18,7 @@ Livelli, sempre distinti:
 | 1 | Chiusura collaudo 4D–7 (prenotazione, riprogrammazione, annullamento, Agenda, foglio visita, report e revoca) | — (nessun codice nuovo) | sì: API 117/117, browser 16/16 sulla replica | **no**: Render irraggiungibile da qui (§ 3) | no |
 | 2 | Motore WhatsApp pronto all'invio, spento | sì (`5fdd4d5`, `b541d97`) | sì | no | no: resta spento |
 | 3 | Collegamento di prenotazione dedicato | sì (`5fdd4d5`) | sì | no | no |
-| 4 | Collegamento del numero operativo | piano (`BLOCCO-4_NUMERO_OPERATIVO_PIANO.md`) | — | no | no |
+| 4 | Collegamento del numero operativo | sì: inoltro firmato e filtro dei mittenti nel CRM (`024c1e1`), casella con non letti e stime (`56df239`), inoltro di produzione preparato e non distribuito (`integrations/whatsapp_relay/`) | sì | no | no: produzione non modificata |
 | 5 | Firma reale | ricerca (`BLOCCO-5_FIRMA_FORNITORI.md`) e parti indipendenti dal fornitore (`aee4842`) | sì, con un fornitore finto | no | no: nessun fornitore scelto |
 | 6 | Lacune operative | sì (`b541d97`) | sì | no | no |
 

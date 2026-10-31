@@ -1,0 +1,35 @@
+--- a/main.py
++++ b/main.py
+@@ -1,6 +1,6 @@
+ # backend/main.py — versione ripulita Stima360
+ 
+-from fastapi import FastAPI, Request, HTTPException, Depends, Response
++from fastapi import FastAPI, Request, HTTPException, Depends, Response, BackgroundTasks
+ from fastapi.middleware.cors import CORSMiddleware
+ from fastapi.security import HTTPBasic, HTTPBasicCredentials 
+ from fastapi.staticfiles import StaticFiles
+@@ -25,6 +25,7 @@
+ from proposal.router import router as proposal_router
+ from owner.router_admin import router as owner_admin_router
+ from owner.router_portal import router as owner_portal_router
++import whatsapp_relay  # inoltro best-effort al CRM: spento senza variabili
+ # ---------------------------------------------------------
+ # CONFIG
+ # ---------------------------------------------------------
+@@ -1232,12 +1233,15 @@
+     raise HTTPException(status_code=403, detail="Webhook verification failed")
+ 
+ @app.post("/webhook/whatsapp")
+-async def whatsapp_webhook(request: Request):
++async def whatsapp_webhook(request: Request, background_tasks: BackgroundTasks):
+     raw_body = await request.body()
+     verify_whatsapp_signature(
+         raw_body,
+         request.headers.get("X-Hub-Signature-256"),
+     )
++    # Inoltro al CRM DOPO la risposta a Meta; non solleva mai e non cambia
++    # ne' il salvataggio in whatsapp_incoming ne' la risposta.
++    whatsapp_relay.schedule(background_tasks, raw_body)
+     payload = await request.json()
+ 
+     try:
