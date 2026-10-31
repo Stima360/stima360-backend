@@ -745,6 +745,18 @@ DOMAINS = (
              "POST -> 405, nessun invio",
     ),
     Domain(
+        "VISIT_BOOKING_LINKS", "/api/visit-booking-links",
+        # BLOCCO-5A. SOLO RIFIUTI: la matrice non crea MAI un collegamento di
+        # prenotazione. L'immobile dell'altra agenzia non e' raggiungibile ne'
+        # in elenco ne' in creazione (404); un `agency_id` o un campo ignoto
+        # nel corpo -> 422; anonimo e Basic -> 401.
+        certifier="visit_booking_links",
+        depends_on="PROPERTY",
+        api_delete=False,
+        note="due rotte sondate: anonimo e Basic -> 401, immobile altrui -> 404 in elenco e "
+             "in creazione, corpo chiuso -> 422, nessun collegamento creato",
+    ),
+    Domain(
         "AUTO_REPLIES", "/api/auto-replies",
         # BLOCCO-4D. SOLO RIFIUTI: la matrice non fa MAI girare il motore e non
         # cambia il modo dell'agenzia. Anonimo e Basic -> 401; la conversazione
@@ -7654,6 +7666,49 @@ def certify_auto_replies(report, http, cert, domain, jars, owned, context) -> No
         risposta = http.request("PUT", base + "/settings", jar=jars[etichetta], payload={"mode": "send"})
         report.check(f"AUTO_REPLIES-nessun-invio-{etichetta}", risposta.status == 422,
                      f"{etichetta}: PUT {base}/settings con modo d'invio -> {risposta.status} (atteso 422)")
+
+
+VISIT_BOOKING_LINKS_OPERAZIONI = (("GET", "?property_id=1"), ("POST", ""))
+
+
+def certify_visit_booking_links(report, http, cert, domain, jars, owned, context) -> None:
+    """VISIT_BOOKING_LINKS (BLOCCO-5A): nessun collegamento creato.
+
+        anonimo, Basic                                 -> 401 su elenco e creazione (mount)
+        GET  ?property_id=<immobile altrui>            -> 404, A->B e B->A
+        POST con l'immobile altrui (corpo valido)      -> 404: mai un link su un'altra agenzia
+        POST con agency_id nel corpo                   -> 422 (corpo chiuso)
+    """
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in VISIT_BOOKING_LINKS_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = {} if metodo != "GET" else None
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"VISIT_BOOKING_LINKS-anonimo-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"VISIT_BOOKING_LINKS-basic-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        suo = (owned.get(altro) or {}).get("PROPERTY")
+        valore = (context.get("agencies") or {}).get(altro)
+        agenzia_altra = valore.get("id") if isinstance(valore, dict) else valore
+        if suo is None:
+            report.note(f"VISIT_BOOKING_LINKS-elenco-{etichetta}-non-vede-{altro}",
+                        f"nessun immobile di {altro} fra le risorse della matrice: prova non applicabile")
+            continue
+        risposta = http.request("GET", f"{base}?property_id={suo}", jar=jars[etichetta])
+        report.check(f"VISIT_BOOKING_LINKS-elenco-{etichetta}-non-vede-{altro}", risposta.status == 404,
+                     f"{etichetta}: GET {base}?property_id=<immobile di {altro}> -> {risposta.status} (atteso 404)")
+        corpo = {"property_id": suo, "assigned_user_id": 1, "owner_authorization": "per_visit"}
+        risposta = http.request("POST", base, jar=jars[etichetta], payload=corpo)
+        report.check(f"VISIT_BOOKING_LINKS-crea-{etichetta}-B" if etichetta == "A" else
+                     f"VISIT_BOOKING_LINKS-crea-{etichetta}-A", risposta.status in (403, 404),
+                     f"{etichetta}: POST {base} con l'immobile di {altro} -> {risposta.status} (atteso 404)")
+        risposta = http.request("POST", base, jar=jars[etichetta], payload={**corpo, "agency_id": agenzia_altra})
+        report.check(f"VISIT_BOOKING_LINKS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: POST {base} con agency_id di {altro} -> {risposta.status} (atteso 422)")
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:

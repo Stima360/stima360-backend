@@ -39,8 +39,8 @@ def test_migration_119_is_valid_additive_and_simulation_only():
 
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    last = tutte[-1]
-    assert last.version == "119_whatsapp_auto_reply_simulation"
+    # SENTINELLA AGGIORNATA DA BLOCCO-5A: la 120 segue la 119
+    last = next(m for m in tutte if m.version == "119_whatsapp_auto_reply_simulation")
     assert last.down_available and runner.validate_migration(last) == []
     up = (ROOT / "migrations" / "119_whatsapp_auto_reply_simulation.sql").read_text(encoding="utf-8")
     executable = "\n".join(r for r in up.splitlines() if not r.lstrip().startswith("--"))

@@ -1701,3 +1701,10 @@ a.census-unit-main { text-decoration: none; }
 .wa-auto-decision p { margin: 0; font-size: 13px; }
 .wa-auto-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .wa-auto-text { margin: 0; padding: 6px 8px; background: var(--surface-2, rgba(0,0,0,0.04)); border-radius: 6px; font-size: 13px; overflow-wrap: anywhere; }
+/* BLOCCO-5A: collegamenti di prenotazione online delle visite. */
+.visit-booking-links { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 10px; display: grid; gap: 8px; min-width: 0; }
+.visit-booking-links h3 { margin: 0; font-size: 15px; }
+.visit-booking-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.visit-booking-list li { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.visit-booking-form { display: grid; gap: 8px; max-width: 560px; }
+.visit-booking-links code { overflow-wrap: anywhere; display: block; }

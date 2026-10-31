@@ -2170,6 +2170,30 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 200, b'{"decisions": "di un\'altra agenzia"}')
         return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
 
+    def _visit_booking_links(self, method, path, agency, payload):
+        """BLOCCO-5A. Il doppio di `/api/visit-booking-links`: immobile cercato
+        nella PROPRIA agenzia, corpo chiuso (modello VERO). Rotto `isolation`:
+        l'elenco dell'immobile altrui risponde 200, e la matrice deve fallire."""
+        import re as _re
+
+        from visit_booking.router import LinkCreate
+
+        rotto = self._broken("isolation", "visit_booking_links")
+        if method == "POST":
+            try:
+                corpo = LinkCreate(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            pid = corpo.property_id
+        else:
+            trovato = _re.search(r"property_id=(\d+)", path)
+            pid = int(trovato.group(1)) if trovato else 0
+        riga = self.rows.get(pid)
+        visibile = bool(riga) and riga["prefix"] == "/api/property" and (riga["agency"] == agency or rotto)
+        if not visibile:
+            return self._reply(method, path, 404, b'{"detail":{"code":"PROPERTY_NOT_FOUND"}}')
+        return self._reply(method, path, 200, b'{"items": []}')
+
     def _inbound_messages(self, method, path, agency, payload):
         """BLOCCO-4A. Il doppio di `/api/inbound-messages`: elenco della sola
         agenzia della sessione, corpo dell'associazione chiuso (modello VERO).
@@ -2601,6 +2625,10 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA BLOCCO-4C
         if path.startswith("/api/reply-suggestions"):
             return self._reply_suggestions(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-5A
+        if path.startswith("/api/visit-booking-links"):
+            return self._visit_booking_links(method, path, agency, payload)
 
         # SENTINELLA AGGIORNATA DA BLOCCO-4D
         if path.startswith("/api/auto-replies"):
@@ -3633,6 +3661,24 @@ def test_13u_an_auto_reply_conversation_of_another_agency_fails_the_matrix(monke
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("AUTO_REPLIES-conversazione-altrui-A-B") for i in falliti), falliti
+
+
+def test_13v_visit_booking_links_are_certified_rejections_only(monkeypatch):
+    """BLOCCO-5A: la sezione VISIT_BOOKING_LINKS gira e ogni prova e' un PASS."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("VISIT_BOOKING_LINKS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 2 + 2, righe
+
+
+def test_13w_a_visit_link_on_another_agency_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="visit_booking_links"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("VISIT_BOOKING_LINKS-elenco-A-non-vede-B") for i in falliti), falliti
 
 
 def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):

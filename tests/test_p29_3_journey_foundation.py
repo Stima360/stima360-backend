@@ -154,7 +154,11 @@ def test_01_la_071_e_valida_e_in_coda():
     # approvate; additiva), con la sua down.
     # SENTINELLA AGGIORNATA DA BLOCCO-4A: 118_whatsapp_inbound (ricezione WhatsApp; additiva),
     # con la sua down.
-    assert numeri[numeri.index(76):] == list(range(76, 119))
+    # SENTINELLA AGGIORNATA DA BLOCCO-4D: 119_whatsapp_auto_reply_simulation (registro della
+    # simulazione delle risposte automatiche; additiva), con la sua down.
+    # SENTINELLA AGGIORNATA DA BLOCCO-5A: 120_property_visit_booking (prenotazione online delle
+    # visite; additiva), con la sua down.
+    assert numeri[numeri.index(76):] == list(range(76, 121))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

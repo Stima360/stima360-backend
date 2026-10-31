@@ -63,6 +63,9 @@ def test_m01_la_100_e_valida_per_il_runner_e_l_ultima():
     # perdere documenti), ora l'ultima
     # SENTINELLA AGGIORNATA DA BLOCCO-4A: poi la sola 118 (ricezione WhatsApp: tre tabelle nuove,
     # nessun backfill, `whatsapp_incoming` non toccata, down che rifiuta di perdere messaggi), ora l'ultima
+    # SENTINELLA AGGIORNATA DA BLOCCO-4D/5A: dopo la 118 vengono la 119 (simulazione delle
+    # risposte automatiche) e la 120 (prenotazione delle visite); la catena qui si legge fino alla 118.
+    tutte = [m for m in tutte if m.number <= 118]
     assert tutte[-1].version == "118_whatsapp_inbound"
     assert tutte[-2].version == "117_property_valuation_pdfs"
     assert tutte[-3].version == "116_property_valuations"

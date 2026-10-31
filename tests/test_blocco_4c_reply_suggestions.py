@@ -189,8 +189,8 @@ def test_the_module_never_sends_writes_or_calls_an_external_service():
 def test_no_migration_for_suggestions():
     names = [p.name for p in (ROOT / "migrations").glob("*.sql")]
     assert not any("suggest" in n for n in names)
-    # SENTINELLA AGGIORNATA DA BLOCCO-4D: la 119 e' del motore 4D, non dei suggerimenti
-    assert max(n for n in names if re.match(r"\d{3}_", n)).startswith("119_whatsapp_auto_reply")
+    # SENTINELLA AGGIORNATA DA BLOCCO-5A: le migrazioni successive (119, 120) sono di altri blocchi
+    assert not any("reply_suggest" in n for n in names)
 
 
 def test_route_is_mounted_behind_the_operator_session():

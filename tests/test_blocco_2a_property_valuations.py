@@ -686,6 +686,9 @@ def test_h_migration_116_is_valid_for_the_runner_and_additive():
     # SENTINELLA AGGIORNATA DA BLOCCO-2B: la 117 segue la 116.
     m116 = next(m for m in tutte if m.version == "116_property_valuations")
     # SENTINELLA AGGIORNATA DA BLOCCO-4A: poi la 118 (ricezione WhatsApp).
+    # SENTINELLA AGGIORNATA DA BLOCCO-4D/5A: dopo la 118 vengono la 119 (simulazione delle
+    # risposte automatiche) e la 120 (prenotazione delle visite); la catena qui si legge fino alla 118.
+    tutte = [m for m in tutte if m.number <= 118]
     assert tutte[-1].version == "118_whatsapp_inbound"
     assert runner.validate_migration(m116) == []
     up = (ROOT / "migrations" / "116_property_valuations.sql").read_text(encoding="utf-8")

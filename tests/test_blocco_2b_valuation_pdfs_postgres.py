@@ -237,6 +237,9 @@ def test_m_migration_is_valid_for_the_runner():
     # SENTINELLA AGGIORNATA DA BLOCCO-2B
     # SENTINELLA AGGIORNATA DA BLOCCO-4A: la 118 (ricezione WhatsApp) segue la 117.
     m117 = next(m for m in tutte if m.version == "117_property_valuation_pdfs")
+    # SENTINELLA AGGIORNATA DA BLOCCO-4D/5A: dopo la 118 vengono la 119 (simulazione delle
+    # risposte automatiche) e la 120 (prenotazione delle visite); la catena qui si legge fino alla 118.
+    tutte = [m for m in tutte if m.number <= 118]
     assert tutte[-1].version == "118_whatsapp_inbound"
     assert runner.validate_migration(m117) == []
 

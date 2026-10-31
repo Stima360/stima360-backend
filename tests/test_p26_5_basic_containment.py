@@ -109,6 +109,18 @@ PUBLIC_BY_DESIGN = {
     ("GET", "/api/public/booking/{token}"),
     ("GET", "/api/public/booking/{token}/slots"),
     ("POST", "/api/public/booking/{token}/submit"),
+    # SENTINELLA AGGIORNATA DA BLOCCO-5A: la prenotazione online di UNA visita
+    # per immobile. Autenticata dal token opaco del link (solo SHA-256 nel
+    # database) o dalla chiave di gestione della prenotazione (solo impronte);
+    # agenzia e immobile dal link, mai dal client; ogni rifiuto e' la stessa
+    # risposta neutra; scritture tramite `SystemAgencyContext(origin="public_booking")`.
+    ("GET", "/api/public/visit-booking/{token}"),
+    ("GET", "/api/public/visit-booking/{token}/slots"),
+    ("POST", "/api/public/visit-booking/{token}/book"),
+    ("GET", "/api/public/visit-booking/manage/{key}"),
+    ("GET", "/api/public/visit-booking/manage/{key}/slots"),
+    ("POST", "/api/public/visit-booking/manage/{key}/cancel"),
+    ("POST", "/api/public/visit-booking/manage/{key}/reschedule"),
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (F04/F07, `public_submissions`,
     # `stima_pdf`). Le ricevute degli invii pubblici: autenticate dall'identita'
     # dell'invio (UUID) piu' la prova `X-Receipt-Key`, di cui nel database vive
@@ -370,6 +382,9 @@ TENANT_PREFIXES = (
     # SENTINELLA AGGIORNATA DA BLOCCO-4D: il motore delle risposte automatiche
     # (solo simulazione). Agenzia dalla sessione, corpo chiuso: cookie e SOLO cookie.
     "/api/auto-replies",
+    # SENTINELLA AGGIORNATA DA BLOCCO-5A: i collegamenti di prenotazione delle
+    # visite, lato operatore (agenzia dalla sessione, corpo chiuso).
+    "/api/visit-booking-links",
 )
 
 

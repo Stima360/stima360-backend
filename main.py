@@ -55,6 +55,9 @@ from appointments_legacy.site_hook import safe_import_for_detail
 # require_authenticated_operator: qui non c'e' un operatore, c'e' il client
 # pubblico che apre un link.
 from public_booking.public_router import router as public_booking_router
+# BLOCCO-5A: prenotazione online delle visite di un immobile con incarico.
+from visit_booking.router import public_router as visit_booking_public_router
+from visit_booking.router import router as visit_booking_router
 from public_booking.page import PAGE_PREFIX as PUBLIC_BOOKING_PAGE_PREFIX, PublicBookingPage
 from calendar_sync.router import router as calendar_sync_router
 from seller_intelligence import service as seller_intelligence_service
@@ -227,6 +230,9 @@ app.include_router(communication_public_router)
 # A30-12: PUBBLICA per natura - chi apre il link non e' un operatore -
 # esattamente come communication_public_router sopra.
 app.include_router(public_booking_router)
+# BLOCCO-5A: pubblico come `/api/public/booking`; ogni rifiuto del link e' la stessa risposta neutra.
+app.include_router(visit_booking_public_router)
+app.include_router(visit_booking_router, dependencies=[Depends(require_authenticated_operator)])
 
 # P27-1 - LA SUPERFICIE PLATFORM. UNA PORTA DIVERSA, NON UNA PORTA PIU' LARGA.
 #
@@ -415,6 +421,13 @@ app.mount(
 # qualunque token e parla solo con `/api/public/booking/...` (vedi
 # `public_booking/page.py`).
 app.mount(PUBLIC_BOOKING_PAGE_PREFIX, PublicBookingPage(), name="public-booking-page")
+# BLOCCO-5A: le pagine della prenotazione di una visita (`/visita/{token}`) e
+# della sua gestione (`/visita-gestione/{chiave}`): stessa classe, stesse
+# intestazioni di privacy, file in `static/visit_booking/`.
+app.mount("/visita-gestione", PublicBookingPage(Path(__file__).resolve().parent / "static" / "visit_booking"),
+          name="visit-booking-manage-page")
+app.mount("/visita", PublicBookingPage(Path(__file__).resolve().parent / "static" / "visit_booking"),
+          name="visit-booking-page")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
