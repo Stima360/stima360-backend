@@ -282,6 +282,22 @@ HOOK_DOPO_INVIO = (
 )
 
 
+def prima_della_chiusura(cur, message: dict[str, Any]) -> None:
+    """Il lock del contatto, PRIMA di toccare il messaggio, nel ramo `sent`.
+
+    Gli eventi di `dopo_invio` hanno una chiave esterna verso `contacts`, e
+    inserirli chiede `FOR KEY SHARE` sulla riga del contatto. Chiesto DOPO
+    l'aggiornamento del messaggio, invertiva l'ordine del tick e dei writer del
+    consenso (prima il contatto, poi il resto): due giri sovrapposti andavano
+    in deadlock e PostgreSQL annullava la registrazione di un invio partito
+    davvero. Lo stesso lock, preso per primo: l'ordine resta uno solo, e le
+    normali modifiche del contatto (che non toccano la chiave) non aspettano.
+    """
+    if message.get("contact_id") is not None:
+        cur.execute("SELECT id FROM contacts WHERE id = %s AND agency_id = %s FOR KEY SHARE",
+                    (message["contact_id"], message["agency_id"]))
+
+
 def dopo_invio(cur, message: dict[str, Any]) -> None:
     """Il seguito di un `sent`, sul cursore della sua transazione.
 

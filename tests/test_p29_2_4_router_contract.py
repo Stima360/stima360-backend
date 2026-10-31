@@ -145,6 +145,12 @@ def tracciato(monkeypatch):
     # lo si annota, cosi' se un giorno smettesse di essere invocato si vede.
     monkeypatch.setattr(dispatcher.integrations, "dopo_invio",
                         lambda cur, message: eventi.append(("dopo_invio", message["id"])))
+    # SENTINELLA AGGIORNATA DA V3: prima della finalizzazione di un `sent` il
+    # dispatcher prende il lock del contatto (ordine dei lock del tick); senza
+    # database non c'e' niente da bloccare. Non si annota: la sequenza misurata
+    # qui resta claim, gate, provider, finalizzazione (l'ordine reale dei lock
+    # lo prova `tests/test_v3_ordine_lock_postgres.py`).
+    monkeypatch.setattr(dispatcher.integrations, "prima_della_chiusura", lambda cur, message: None)
     for nome in ("finalize_sent", "finalize_failed", "finalize_indeterminate",
                  "finalize_suppressed"):
         monkeypatch.setattr(service, nome, finalizzatore(nome))

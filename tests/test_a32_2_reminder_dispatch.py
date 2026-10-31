@@ -128,6 +128,9 @@ def mondo(monkeypatch):
     # BLOCCO-6: senza database il divieto di contatto si dichiara, come il consenso
     monkeypatch.setattr(dispatcher, "_divieto_di_contatto", lambda ctx, message: False)
     monkeypatch.setattr(dispatcher.integrations, "dopo_invio", lambda cur, msg: None)
+    # SENTINELLA AGGIORNATA DA V3: il lock del contatto prima della chiusura
+    # di un `sent` vuole un database; qui il cursore e' finto.
+    monkeypatch.setattr(dispatcher.integrations, "prima_della_chiusura", lambda cur, msg: None)
     monkeypatch.setattr(dispatcher, "can_send_marketing",
                         lambda ctx, contact_id, *, channel: m.consenso)  # C1/C2: per canale
     monkeypatch.setattr(revalidation, "communication_cursor", cursore)
