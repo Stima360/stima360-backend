@@ -69,7 +69,9 @@ def test_03_nessuno_importa_il_package_fuori_dai_test():
             continue
         # SENTINELLA AGGIORNATA DA A32-2: gli UNICI due importatori ammessi -
         # il mount della rotta e la revalida finale nel dispatcher.
-        if relativo in ("main.py", "communication/dispatcher.py"):
+        # SENTINELLA AGGIORNATA DA CRON-TECNICO: la rotta interna del cron, che
+        # esegue lo stesso giro dei promemoria della rotta di A32-2.
+        if relativo in ("main.py", "communication/dispatcher.py", "communication/cron_router.py"):
             continue
         assert "appointment_reminders" not in file.read_text(encoding="utf-8",
                                                              errors="ignore"), relativo

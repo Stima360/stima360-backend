@@ -943,6 +943,13 @@ def test_29_the_self_authenticating_routers_are_the_known_two_families():
         # mai dal client. Stessa forma di `communication_public_router`
         # sopra: invisibile a G5 per la stessa ragione strutturale.
         "public_booking_router",
+        # SENTINELLA AGGIORNATA DA CRON-TECNICO: il giro del cron delle
+        # comunicazioni monta senza dipendenze di sessione PER PROGETTO - chi
+        # chiama e' un processo, non un operatore - e si autentica da solo con
+        # il segreto di servizio (confronto a tempo costante, spento senza
+        # segreto). L'agenzia deve stare nell'elenco del SERVER e il contesto
+        # e' `SystemAgencyContext(origin="communication_dispatch")`.
+        "communication_cron_router",
     }
     assert unguarded - self_authenticating == FROZEN_UNSCOPED_SELF_AUTH_ROUTERS, (
         sorted(unguarded - self_authenticating)
