@@ -77,7 +77,8 @@ PASSWORD = "Blocco2c-prova-locale!"
 # (prenotazione online delle visite) si aggiungono in coda.
 NUOVE = ("115_agency_logos", "116_property_valuations", "117_property_valuation_pdfs", "118_whatsapp_inbound",
          "119_whatsapp_auto_reply_simulation", "120_property_visit_booking", "121_visit_sheets",
-         "122_signature_requests", "123_whatsapp_auto_reply_send")
+         "122_signature_requests", "123_whatsapp_auto_reply_send",
+         "124_do_not_contact_and_link_revocation")
 BASE = {"characteristics": "Trilocale sintetico al secondo piano.",
         "surface": {"value": "85", "kind": "commerciale", "source": "planimetria"},
         "rationale": "Motivazione sintetica: stato buono, zona servita.",

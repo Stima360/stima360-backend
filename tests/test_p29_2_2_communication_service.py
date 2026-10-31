@@ -616,4 +616,7 @@ def test_n9_la_superficie_pubblica_del_service_e_dichiarata():
         "enqueue", "cancel", "send_now", "get_message", "list_for_contact",
         "claim_due", "claim_message", "finalize_sent", "finalize_failed", "finalize_indeterminate",
         "finalize_suppressed", "recover_stale", "list_attempts",
+        # SENTINELLA AGGIORNATA DA BLOCCO-4D/6: `queued_unclaimed`, sola lettura degli id
+        # in coda mai presi in carico (ripresa del motore, chiusura a finestra scaduta).
+        "queued_unclaimed",
     }, sorted(pubbliche)

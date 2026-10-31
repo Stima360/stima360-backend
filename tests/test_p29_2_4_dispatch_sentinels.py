@@ -408,6 +408,11 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
         "/api/communication/contacts/{contact_id}/consent/link",
         "/api/communication/contacts/{contact_id}/consent/link/disable",
         "/api/communication/contacts/{contact_id}/consent/refusal",
+        # SENTINELLA AGGIORNATA DA BLOCCO-6: il divieto totale di contatto
+        # (stato, registrazione, revoca), sullo STESSO router e dietro la
+        # stessa ammissione di livello mount.
+        "/api/communication/contacts/{contact_id}/do-not-contact",
+        "/api/communication/contacts/{contact_id}/do-not-contact/lift",
         "/api/communication/contacts/{contact_id}/journey",
         "/api/communication/contacts/{contact_id}/messages",
         "/api/communication/dispatch",

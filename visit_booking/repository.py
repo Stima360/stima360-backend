@@ -46,19 +46,50 @@ def link_by_token_hash(cur, token_hash: str) -> dict | None:
     return dict(row) if row else None
 
 
-def disable_link(cur, agency_id: int, link_id: int, user_id: int) -> dict | None:
+def disable_link(cur, agency_id: int, link_id: int, user_id: int, *, reason: str = "operator",
+                 note: str | None = None) -> dict | None:
     """Disattiva il collegamento e, con lui, i collegamenti DEDICATI emessi da
     lui ancora attivi (stesso autore, stessa ora): revocare il padre revoca
-    anche cio' che e' gia' stato inviato."""
+    anche cio' che e' gia' stato inviato. Dalla 124 si registra anche il
+    motivo ('operator', 'owner_authorization_revoked') e la nota; i figli
+    prendono 'parent_disabled'."""
+    with_reason = revocation_installed(cur)
+    extra = ", disabled_reason = %s, disabled_note = %s" if with_reason else ""
+    params = (user_id, *((reason, note) if with_reason else ()), link_id, agency_id)
     cur.execute(f"UPDATE property_visit_booking_links SET status = 'disabled', disabled_at = NOW(), "
-                f"disabled_by_user_id = %s WHERE id = %s AND agency_id = %s AND status = 'active' "
-                f"RETURNING {LINK_COLUMNS}", (user_id, link_id, agency_id))
+                f"disabled_by_user_id = %s{extra} WHERE id = %s AND agency_id = %s AND status = 'active' "
+                f"RETURNING {LINK_COLUMNS}", params)
     row = cur.fetchone()
     if dedicated_installed(cur):
-        cur.execute("UPDATE property_visit_booking_links SET status = 'disabled', disabled_at = NOW(), "
-                    "disabled_by_user_id = %s WHERE parent_link_id = %s AND agency_id = %s AND status = 'active'",
-                    (user_id, link_id, agency_id))
+        child_extra = ", disabled_reason = 'parent_disabled'" if with_reason else ""
+        cur.execute(f"UPDATE property_visit_booking_links SET status = 'disabled', disabled_at = NOW(), "
+                    f"disabled_by_user_id = %s{child_extra} WHERE parent_link_id = %s AND agency_id = %s "
+                    "AND status = 'active'", (user_id, link_id, agency_id))
     return dict(row) if row else None
+
+
+def revocation_installed(cur) -> bool:
+    cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' "
+                "AND table_name = 'property_visit_booking_links' AND column_name = 'disabled_reason') AS presente")
+    return bool(cur.fetchone()["presente"])
+
+
+def revocation(cur, agency_id: int, link_ids: list[int]) -> dict[int, dict]:
+    if not link_ids or not revocation_installed(cur):
+        return {}
+    cur.execute("SELECT id, disabled_reason, disabled_note, disabled_by_user_id FROM property_visit_booking_links "
+                "WHERE agency_id = %s AND id = ANY(%s)", (agency_id, link_ids))
+    return {r["id"]: dict(r) for r in cur.fetchall()}
+
+
+def pending_owner_requests(cur, agency_id: int, link_id: int) -> int:
+    """Le visite ancora «richieste» (in attesa dell'assenso) nate da questo
+    collegamento o dai suoi dedicati: dopo una revoca restano da gestire."""
+    cur.execute("SELECT count(*) AS n FROM property_visit_bookings b JOIN appointments a ON a.id = b.appointment_id "
+                "JOIN property_visit_booking_links l ON l.id = b.link_id WHERE b.agency_id = %s "
+                "AND (l.id = %s OR (to_jsonb(l)->>'parent_link_id')::bigint = %s) AND a.status = 'requested'",
+                (agency_id, link_id, link_id))
+    return int(cur.fetchone()["n"])
 
 
 def dedicated_installed(cur) -> bool:

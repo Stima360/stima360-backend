@@ -66,11 +66,33 @@ export async function mountVisitBookingLinks(container, { propertyId }) {
       item.setAttribute('data-visit-booking-link', String(link.id));
       item.append(el('strong', null, link.status === 'active' ? 'Attivo' : 'Disattivato'),
         el('span', 'muted', ` · ${link.duration_minutes} min, orari ogni ${link.step_minutes} min, spostamento ${link.travel_minutes} min · ${link.owner_authorization_label}`));
+      if (link.status !== 'active' && link.disabled_reason === 'owner_authorization_revoked') {
+        item.appendChild(el('p', 'muted', `Autorizzazione revocata dal proprietario: ${link.disabled_note || ''}`));
+      }
       if (link.status === 'active') {
         const off = button('Disattiva', 'ghost', 'data-visit-booking-disable');
-        off.addEventListener('click', async () => {
-          off.disabled = true;
-          try { await apiPost(`${API}/${link.id}/disable`, {}); await load(); } catch (error) { item.appendChild(el('div', 'error-box', errorText(error))); }
+        off.addEventListener('click', () => {
+          // BLOCCO-6: il motivo si registra; la revoca del proprietario vuole una nota
+          const form = el('div', 'visit-booking-disable-form');
+          const reason = el('select', 'input'); reason.name = 'disabled_reason';
+          for (const [v, label] of [['operator', 'Scelta dell’agenzia'], ['owner_authorization_revoked', 'Il proprietario ha revocato l’autorizzazione alle visite']]) {
+            const o = el('option', null, label); o.value = v; reason.appendChild(o);
+          }
+          const note = el('input', 'input'); note.name = 'disabled_note'; note.maxLength = 1000;
+          note.placeholder = 'Come e quando (obbligatoria se il proprietario ha revocato)';
+          const confirm = button('Conferma disattivazione', 'danger', 'data-visit-booking-disable-confirm');
+          confirm.addEventListener('click', async () => {
+            confirm.disabled = true;
+            try {
+              const res = await apiPost(`${API}/${link.id}/disable`, { reason: reason.value, note: note.value || null });
+              const msg = res && res.pending_owner_requests
+                ? el('div', 'error-box', `Collegamento disattivato. Restano ${res.pending_owner_requests} visite richieste in attesa: gestiscile in Agenda.`)
+                : null;
+              await load(msg);
+            } catch (error) { confirm.disabled = false; form.appendChild(el('div', 'error-box', errorText(error))); }
+          });
+          form.append(reason, note, confirm);
+          off.replaceWith(form);
         });
         item.appendChild(off);
       }

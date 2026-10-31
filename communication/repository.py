@@ -899,3 +899,21 @@ def list_attempts(cur, ctx, message_id: int) -> list[dict[str, Any]]:
         params + [message_id],
     )
     return [dict(r) for r in cur.fetchall()]
+
+
+def queued_unclaimed_ids(cur, ctx, *, channel: str, reason_codes: list[str], closes_before=None,
+                         limit: int = 200) -> list[int]:
+    """BLOCCO-4D/6: i messaggi dell'agenzia di un canale e di questi motivi
+    ancora in coda e MAI presi in carico (`attempt_count = 0`); con
+    `closes_before`, solo quelli la cui finestra (`metadata.window_closes_at`)
+    chiude entro quell'istante. Sola lettura: chi li prende passa dal claim."""
+    source, scope_params = communication_scoped_source(ctx, "communication_messages", "m")
+    sql = (f"SELECT m.id FROM {source} AND m.channel = %s AND m.reason_code = ANY(%s) "
+           "AND m.status = %s AND m.attempt_count = 0")
+    params = scope_params + [channel, list(reason_codes), INITIAL_STATUS]
+    if closes_before is not None:
+        sql += (" AND (m.metadata->>'window_closes_at') IS NOT NULL "
+                "AND (m.metadata->>'window_closes_at')::timestamptz <= %s")
+        params.append(closes_before)
+    cur.execute(sql + " ORDER BY m.id LIMIT %s", params + [limit])
+    return [row["id"] for row in cur.fetchall()]

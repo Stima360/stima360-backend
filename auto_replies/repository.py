@@ -146,22 +146,13 @@ def insert_dispatch(cur, *, agency_id: int, decision_id: int, communication_mess
 
 
 def dispatches_for_decisions(cur, agency_id: int, decision_ids: list[int]) -> dict[int, dict]:
+    """Le righe d'invio delle decisioni (lo stato del messaggio si legge dal
+    registro delle comunicazioni, non da qui)."""
     if not decision_ids or not send_installed(cur):
         return {}
-    cur.execute("SELECT d.decision_id, d.task_id, d.communication_message_id, m.status, m.sent_at, m.suppressed_reason, "
-                "m.error_code FROM whatsapp_auto_reply_dispatches d "
-                "LEFT JOIN communication_messages m ON m.id = d.communication_message_id "
-                "WHERE d.agency_id = %s AND d.decision_id = ANY(%s)", (agency_id, decision_ids))
+    cur.execute("SELECT decision_id, task_id, communication_message_id FROM whatsapp_auto_reply_dispatches "
+                "WHERE agency_id = %s AND decision_id = ANY(%s)", (agency_id, decision_ids))
     return {r["decision_id"]: dict(r) for r in cur.fetchall()}
-
-
-def resumable_message_ids(cur, agency_id: int, limit: int) -> list[int]:
-    """Risposte automatiche accodate e MAI prese in carico (un giro interrotto
-    fra l'accodamento e il claim). `sending` e `indeterminate` non ripartono."""
-    cur.execute("SELECT id FROM communication_messages WHERE agency_id = %s AND reason_code = 'auto_reply' "
-                "AND channel = 'whatsapp' AND status = 'queued' AND attempt_count = 0 ORDER BY id LIMIT %s",
-                (agency_id, limit))
-    return [r["id"] for r in cur.fetchall()]
 
 
 def inbound_phone_number_id(cur, agency_id: int, message_id: int) -> str | None:

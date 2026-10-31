@@ -138,6 +138,9 @@ def tracciato(monkeypatch):
         yield None, None
 
     monkeypatch.setattr(dispatcher, "communication_cursor", cursore_finto)
+    # BLOCCO-6: senza database il divieto di contatto si dichiara, come il gate:
+    # nessun divieto qui (le prove del divieto sono in test_blocco_6_*).
+    monkeypatch.setattr(dispatcher, "_divieto_di_contatto", lambda ctx, message: False)
     # E il seguito di un `sent` non ha niente da scrivere senza un database:
     # lo si annota, cosi' se un giorno smettesse di essere invocato si vede.
     monkeypatch.setattr(dispatcher.integrations, "dopo_invio",

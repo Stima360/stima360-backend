@@ -18,8 +18,12 @@ Un `agent` prende 403. Vedi `communication/dependencies.py` per il perche'.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from typing import Literal
 
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
+
+from consent import do_not_contact
 from consent import exceptions as consent_exceptions
 from consent import operator_service as consent_operator
 from core.exceptions import PermissionDenied
@@ -170,6 +174,40 @@ def contact_consent(
         consent_operator.recognize_site_consents(ctx, contact_id)
         return consent_operator.marketing_state(ctx, contact_id)
     return _tradotto_consenso(leggi)
+
+
+class DoNotContactRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    source: Literal["subject_request", "agency_decision"]
+    reason: str = Field(..., min_length=5, max_length=1000)
+
+
+class DoNotContactLiftRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    note: str = Field(..., min_length=5, max_length=1000)
+
+
+@router.get("/contacts/{contact_id}/do-not-contact")
+def contact_do_not_contact(contact_id: int, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    """BLOCCO-6: il divieto totale di contatto (distinto dal consenso marketing)."""
+    return _tradotto_consenso(lambda: do_not_contact.state(ctx, contact_id))
+
+
+@router.post("/contacts/{contact_id}/do-not-contact", status_code=201)
+def contact_do_not_contact_set(contact_id: int, payload: DoNotContactRequest,
+                               ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    """Registra il divieto: da adesso nessuna comunicazione, di nessun tipo."""
+    return _tradotto_consenso(lambda: do_not_contact.set_ban(ctx, contact_id, source=payload.source,
+                                                             reason=payload.reason))
+
+
+@router.post("/contacts/{contact_id}/do-not-contact/lift")
+def contact_do_not_contact_lift(contact_id: int, payload: DoNotContactLiftRequest,
+                                ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    """Revoca il divieto, con una nota che dice perche'."""
+    return _tradotto_consenso(lambda: do_not_contact.lift_ban(ctx, contact_id, note=payload.note))
 
 
 @router.post("/contacts/{contact_id}/consent/grant", status_code=201)

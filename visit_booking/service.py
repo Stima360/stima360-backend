@@ -205,19 +205,46 @@ def list_links(ctx, property_id: int) -> dict:
         _require_installed(cur)
         prop = _managed_property(cur, ctx, property_id)
         links = repository.links_for_property(cur, agency_id, prop["id"])
-    return {"items": [_link_view(link) for link in links]}
+        reasons = repository.revocation(cur, agency_id, [link["id"] for link in links])
+    items = []
+    for link in links:
+        view = _link_view(link)
+        extra = reasons.get(link["id"], {})
+        view["disabled_reason"] = extra.get("disabled_reason")
+        view["disabled_note"] = extra.get("disabled_note")
+        items.append(view)
+    return {"items": items}
 
 
-def disable_link(ctx, link_id: int) -> dict:
+DISABLE_REASONS = ("operator", "owner_authorization_revoked")
+
+
+def disable_link(ctx, link_id: int, *, reason: str = "operator", note: str | None = None) -> dict:
+    """Disattiva un collegamento. BLOCCO-6: con `owner_authorization_revoked`
+    (il proprietario ha revocato l'autorizzazione alle visite) la nota e'
+    obbligatoria e resta registrata con chi e quando; le visite ancora
+    «richieste» non cambiano stato da sole: si contano e si restituiscono."""
     agency_id = ctx.require_agency()
+    if reason not in DISABLE_REASONS:
+        raise ValidationError(f"Motivo non valido: {', '.join(DISABLE_REASONS)}.")
+    note = (note or "").strip() or None
+    if reason == "owner_authorization_revoked" and (note is None or len(note) < 5):
+        raise ValidationError("Indica come e quando il proprietario ha revocato l'autorizzazione.")
     with core_cursor(commit=True) as (_, cur):
         _require_installed(cur)
         link = repository.link_by_id(cur, agency_id, link_id, lock=True)
         if link is None:
             raise NotFound("LINK_NOT_FOUND", "Collegamento non trovato.")
         _managed_property(cur, ctx, link["property_id"])
-        done = repository.disable_link(cur, agency_id, link_id, ctx.user_id) or link
-    return _link_view(done)
+        if reason != "operator" and not repository.revocation_installed(cur):
+            raise VisitBookingError("REVOCATION_NOT_INSTALLED", "La registrazione della revoca richiede la migrazione 124.")
+        done = repository.disable_link(cur, agency_id, link_id, ctx.user_id, reason=reason, note=note) or link
+        pending = repository.pending_owner_requests(cur, agency_id, link_id)
+        extra = repository.revocation(cur, agency_id, [link_id]).get(link_id, {})
+    view = _link_view(done)
+    view.update({"disabled_reason": extra.get("disabled_reason"), "disabled_note": extra.get("disabled_note"),
+                 "pending_owner_requests": pending})
+    return view
 
 
 # ---------------------------------------------------------------------------

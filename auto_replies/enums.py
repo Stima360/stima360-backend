@@ -23,7 +23,7 @@ PROVIDER_LABEL = "meta_whatsapp_cloud"
 
 #: Versione delle regole: una decisione per (messaggio, versione). Cambiare
 #: regole o testi (anche quelli del 4C) vuol dire cambiare questa stringa.
-RULES_VERSION = "5b-3"          # modo d'invio: attivita' reale assegnata, collegamento dedicato
+RULES_VERSION = "5b-4"          # divieto di contatto (BLOCCO-6)
 
 #: Quanti messaggi al massimo per giro e per agenzia.
 TICK_LIMIT = 50
@@ -41,6 +41,7 @@ SKIP_REASONS = {
     "operator_replied": "Un operatore ha risposto a mano nelle ultime 24 ore: la conversazione la segue una persona.",
     "no_contact": "Mittente non associato a un contatto: serve un operatore.",
     "attachment": "Allegato o messaggio non di testo: non viene interpretato, serve un operatore.",
+    "do_not_contact": "Il contatto ha un divieto di contatto attivo: nessuna risposta, di nessun tipo.",
 }
 DECISION_LABELS = {
     "answer": "Risposta proposta",

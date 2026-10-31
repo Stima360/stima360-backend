@@ -40,6 +40,7 @@ from typing import Any
 
 from appointment_reminders import revalidation as revalida_promemoria
 from consent.exceptions import NotFoundError as ConsentNotFoundError
+from consent import do_not_contact
 from consent.guard import can_send_marketing
 from operator_auth.context import SystemAgencyContext
 
@@ -135,6 +136,19 @@ def _consenso_nega(ctx, message: dict[str, Any]) -> str | None:
     except ConsentNotFoundError:
         return REASON_CONTATTO_ASSENTE
     return None if decisione.allowed else decisione.reason
+
+
+def _divieto_di_contatto(ctx, message: dict[str, Any]) -> bool:
+    """BLOCCO-6: True se il contatto del messaggio ha un divieto di contatto
+    aperto, o se non si riesce a saperlo (fail closed)."""
+    if message.get("contact_id") is None:
+        return False
+    try:
+        with communication_cursor() as (_conn, cur):
+            return do_not_contact.active(cur, ctx.require_agency(), message["contact_id"])
+    except Exception:  # noqa: BLE001 - nel dubbio non si manda
+        logger.exception("do_not_contact_check_failed message_id=%s", message.get("id"))
+        return True
 
 
 def _esito_del_provider(risultato, capabilities) -> tuple[str, dict[str, Any]]:
@@ -281,6 +295,14 @@ def dispatch_batch(ctx_operatore, *, channel: str,
         # configurazione a meta' giro). Fuori elenco: non parte, mai.
         if test_recipients.blocked(message, test_recipients.allowed()):
             esito = service.finalize_suppressed(ctx, message["id"], token, reason=test_recipients.REASON)
+            conteggi["suppressed" if esito is not None else "lost"] += 1
+            continue
+
+        # BLOCCO-6: il divieto totale di contatto, subito prima di ogni altro
+        # percorso d'invio (journey compresa) e per ogni tipo, servizio
+        # compreso. Letto adesso dal database; una lettura fallita non manda.
+        if _divieto_di_contatto(ctx, message):
+            esito = service.finalize_suppressed(ctx, message["id"], token, reason=do_not_contact.REASON)
             conteggi["suppressed" if esito is not None else "lost"] += 1
             continue
 

@@ -27,6 +27,7 @@
 
 import { apiGet, apiPost } from '../core/api-client.js';
 import { escapeHtml, formatDate, formatDateTime, renderBadge } from './st-table.js';
+import { mountDoNotContact } from './do-not-contact.js';
 
 const TONI_STATO = {
   queued: 'blue', sending: 'blue', sent: 'green', failed: 'red',
@@ -480,6 +481,8 @@ export function mountCommunications(mount, contactId, { readOnly = false } = {})
       mount.innerHTML = renderCommunications({ status: 'error', message: errore.message });
     }
     if (readOnly) soloLettura();
+    // BLOCCO-6: il divieto di contatto, in testa (componente a sé, via DOM)
+    mountDoNotContact(mount, contactId, { readOnly }).catch(() => {});
   }
 
   // CESTINO-CONTATTI-1: per un contatto nel Cestino lo storico resta

@@ -45,6 +45,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from communication import service as communication
+from consent import do_not_contact
 from core.database import core_cursor
 from inbound_messages import repository as inbound_repository
 from inbound_messages import routing
@@ -56,6 +57,7 @@ from . import transport as transport_module
 from .enums import (
     CONFIRM_REQUIRED_MESSAGE,
     CREDENTIALS_MISSING_MESSAGE,
+    DO_NOT_CONTACT_MESSAGE,
     DELIVERY_LABELS,
     EMPTY_TEXT_MESSAGE,
     GRAPH_VERSION_MISSING_MESSAGE,
@@ -140,6 +142,9 @@ def _conversation(cur, ctx, sender_phone: str) -> dict:
         blocks.append(("SENDER_NOT_CONFIGURED", SENDER_NOT_CONFIGURED_MESSAGE))
     if last["contact_id"] is None:
         blocks.append(("NO_CONTACT", NO_CONTACT_MESSAGE))
+    elif do_not_contact.active(cur, agency_id, last["contact_id"]):
+        # BLOCCO-6: divieto totale di contatto, anche per una risposta di servizio
+        blocks.append(("DO_NOT_CONTACT", DO_NOT_CONTACT_MESSAGE))
     if not window_open:
         blocks.append(("WINDOW_CLOSED", WINDOW_CLOSED_MESSAGE))
     return {"last": last, "closes_at": closes_at, "window_open": window_open, "stop_at": stop_at, "blocks": blocks}
@@ -322,3 +327,37 @@ def resume_reply(ctx, sender_phone: str, reply_id: int, confirmed: bool) -> dict
     state = _state_with(ctx, sender_phone, message["id"])
     state["created"] = False
     return state
+
+
+# ---------------------------------------------------------------------------
+# BLOCCO-6: risposte in coda che non possono piu' partire
+# ---------------------------------------------------------------------------
+
+#: Il motivo registrato sulla risposta chiusa: la finestra di 24 ore aperta dal
+#: cliente e' finita mentre era ancora in coda, mai presa in carico.
+WINDOW_EXPIRED_REASON = "window_expired"
+EXPIRY_REASONS = ("operator_reply", "auto_reply")
+
+
+def expire_closed_window_replies(agency_id: int, *, now=None, limit: int = 200) -> int:
+    """Chiude come «non inviata» ogni risposta WhatsApp (manuale o automatica)
+    dell'agenzia ancora in coda, MAI presa in carico, la cui finestra e' chiusa
+    (con lo stesso margine di sicurezza dell'invio). Passa per il claim, cosi'
+    una richiesta che la sta prendendo adesso vince e nulla parte due volte;
+    `sending` e `indeterminate` non si toccano mai. Restituisce quante ne chiude."""
+    from operator_auth.context import SystemAgencyContext
+
+    now = now or _now()
+    cutoff = now + timedelta(minutes=WINDOW_SAFETY_MINUTES)
+    sys_ctx = SystemAgencyContext(agency_id=agency_id, origin="whatsapp_inbound")
+    ids = communication.queued_unclaimed(sys_ctx, channel=CHANNEL, reason_codes=EXPIRY_REASONS,
+                                         closes_before=cutoff, limit=limit)
+    closed = 0
+    for message_id in ids:
+        claimed = communication.claim_message(sys_ctx, message_id, provider=PROVIDER_LABEL, channel=CHANNEL)
+        if claimed is None:
+            continue
+        communication.finalize_suppressed(sys_ctx, message_id, claimed["message"]["claim_token"],
+                                          reason=WINDOW_EXPIRED_REASON)
+        closed += 1
+    return closed

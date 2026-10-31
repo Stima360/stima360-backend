@@ -46,12 +46,14 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from communication import service as communication
+from consent import do_not_contact
 from consent import repository as consent_repository
 from core.database import core_cursor
 from appointments import repository as appointment_repository
 from inbound_messages import repository as inbound_repository
 from inbound_messages import routing
 from inbound_messages.service import INBOUND_ORIGIN
+from message_replies import service as replies_service
 from message_replies import transport as transport_module
 from message_replies.enums import WINDOW_HOURS, WINDOW_SAFETY_MINUTES
 from message_replies.transport import SendResult
@@ -212,6 +214,8 @@ def decide(cur, agency_id: int, message: dict, *, now=None) -> dict:
         return skipped("attachment")
     if contact is None:
         return skipped("no_contact")
+    if do_not_contact.active(cur, agency_id, contact["id"]):
+        return skipped("do_not_contact")
 
     s = suggestions.compute(cur, agency_id, message)
     decision = {**base, "decision": s["outcome"], "reason_code": (s["handoff"] or {}).get("code"),
@@ -354,6 +358,8 @@ def _send_time_check(agency_id: int, message: dict, *, now=None) -> tuple[str | 
         for address in {sender, (contact or {}).get("phone_normalized")} - {None, ""}:
             if consent_repository.latest_platform_optout(cur, "whatsapp", address) is not None:
                 return "platform_optout", None
+        if do_not_contact.active(cur, agency_id, message["contact_id"]):
+            return do_not_contact.REASON, None
         if repository.open_pause(cur, agency_id, sender) is not None:
             return "conversation_paused", None
         sys_ctx = SystemAgencyContext(agency_id=agency_id, origin=INBOUND_ORIGIN)
@@ -423,7 +429,10 @@ def run_for_agency(agency_id: int) -> dict:
     consegna di cio' che si e' appena accodato o era rimasto in coda."""
     summary = {"status": "stopped", "mode": MODE_OFF, "processed": 0, "recorded": 0, "duplicates": 0,
                "by_decision": {}, "rules_version": RULES_VERSION, "sent": 0, "queued": 0,
-               "suppressed": 0, "failed": 0, "indeterminate": 0, "lost": 0}
+               "suppressed": 0, "failed": 0, "indeterminate": 0, "lost": 0, "expired": 0}
+    # BLOCCO-6: pulizia SEMPRE, anche col motore fermo (non invia nulla): le
+    # risposte in coda con la finestra ormai chiusa si chiudono come non inviate.
+    summary["expired"] = replies_service.expire_closed_window_replies(agency_id)
     with core_cursor() as (_, cur):
         _require_installed(cur)
         conf = repository.settings(cur, agency_id) or {"mode": MODE_OFF, "enabled_at": None}
@@ -440,7 +449,9 @@ def run_for_agency(agency_id: int) -> dict:
     summary["status"] = "sending" if mode == MODE_SEND else "simulated"
     with core_cursor() as (_, cur):
         ids = repository.pending_message_ids(cur, agency_id, conf["enabled_at"], RULES_VERSION, TICK_LIMIT)
-        resumable = repository.resumable_message_ids(cur, agency_id, TICK_LIMIT) if mode == MODE_SEND else []
+    resumable = (communication.queued_unclaimed(SystemAgencyContext(agency_id=agency_id, origin=INBOUND_ORIGIN),
+                                                channel="whatsapp", reason_codes=[COMMUNICATION_REASON],
+                                                limit=TICK_LIMIT) if mode == MODE_SEND else [])
     to_deliver = []
     for message_id in ids:
         try:
@@ -550,6 +561,11 @@ def conversation_state(ctx, sender_phone: str) -> dict:
         rows = _visible_conversation(cur, ctx, sender_phone)
         decisions = repository.decisions_for_messages(cur, agency_id, [r["id"] for r in rows])
         dispatches = repository.dispatches_for_decisions(cur, agency_id, [d["id"] for d in decisions])
+        sys_ctx = SystemAgencyContext(agency_id=agency_id, origin=INBOUND_ORIGIN)
+        for row in dispatches.values():
+            if row.get("communication_message_id"):
+                m = communication.get_message(sys_ctx, row["communication_message_id"], cur=cur)
+                row.update({k: m.get(k) for k in ("status", "sent_at", "suppressed_reason", "error_code")})
         pause = repository.open_pause(cur, agency_id, sender_phone)
         conf = repository.settings(cur, agency_id)
         ready = repository.send_installed(cur)
