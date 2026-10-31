@@ -101,6 +101,12 @@ PUBLIC_BY_DESIGN = {
     # dal link dell'email, senza login. Servita solo se il file nel
     # repository ha l'impronta attesa (`communication.guida_pdf`).
     ("GET", "/api/public/communication/guida-vendere-casa-2026.pdf"),
+    # SENTINELLA AGGIORNATA DA CRON-TECNICO: il giro del cron delle
+    # comunicazioni. Non una sessione: un SEGRETO DI SERVIZIO nelle variabili
+    # protette di Render, confrontato a tempo costante, nell'intestazione
+    # dedicata (non `Authorization`). Spenta senza segreto (503); solo le
+    # agenzie consentite dal server; esegue solo tick, promemoria e dispatch.
+    ("POST", "/api/internal/communication/cron/run"),
     # A30-12: il booking pubblico a link singolo-agente. Autenticato dal
     # token opaco del link (SOLO il suo SHA-256 vive nel database), non da
     # una sessione: chi apre il link non e' un operatore. Le tre rotte

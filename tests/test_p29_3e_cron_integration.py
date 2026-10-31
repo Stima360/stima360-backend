@@ -502,7 +502,11 @@ def test_22_il_cron_chiama_TRE_rotte_e_nessun_altra():
     assert rotte == {"/api/operator-auth/login", "/api/operator-auth/logout",
                      "/api/communication/journeys/tick",
                      "/api/communication/reminders/tick",
-                     "/api/communication/dispatch"}, sorted(rotte)
+                     "/api/communication/dispatch",
+                     # SENTINELLA AGGIORNATA DA CRON-TECNICO: con il segreto di
+                     # servizio il giro e' UNA rotta interna (tick, promemoria,
+                     # dispatch sul server); niente provision, niente activate.
+                     "/api/internal/communication/cron/run"}, sorted(rotte)
 
 
 def test_23_il_cron_resta_un_client_HTTP_e_non_importa_il_dominio():

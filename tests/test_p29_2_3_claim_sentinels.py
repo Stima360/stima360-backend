@@ -79,6 +79,10 @@ FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py
                     # limite dei destinatari marketing del collaudo. Il nucleo
                     # non li importa (li usano registro, tick e dispatcher).
                     "followup_v3_texts.py", "guida_pdf.py", "test_recipients.py",
+                    # SENTINELLA AGGIORNATA DA CRON-TECNICO: la rotta interna del
+                    # cron (segreto di servizio). Chiama tick e dispatcher come
+                    # la continuita' centrale; il nucleo non la importa.
+                    "cron_router.py",
                     # FOLLOW-UP FASE B (108): la platea e le regole della
                     # journey sul contatto. Il nucleo non li importa.
                     "audience.py", "followup_rules.py",

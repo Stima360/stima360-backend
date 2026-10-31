@@ -140,6 +140,18 @@ class Config:
     #: `JourneyTickRequest`, e qui si rifiuta prima di partire invece di
     #: scoprirlo con un 422 a meta' giro.
     journey_limit: int = 500
+    #: Il segreto di servizio del cron (`COMMUNICATION_CRON_TOKEN`) e l'agenzia
+    #: del giro (`COMMUNICATION_CRON_AGENCY_ID`). Presenti: un'identita'
+    #: TECNICA, senza password di nessuna persona. Assenti: il login di prima.
+    token: str | None = None
+    agency_id: int | None = None
+
+
+#: L'intestazione del segreto di servizio e la rotta interna che la legge
+#: (`communication/cron_router.py`). Non `Authorization`: quella resta della
+#: sessione, e il Basic chiuso da P26-5 non deve sembrare riaperto.
+CRON_TOKEN_HEADER = "X-Stima360-Cron-Token"
+ROTTA_GIRO_INTERNO = "/api/internal/communication/cron/run"
 
 
 #: I canali che il dominio conosce. Tenuti qui come letterali e non importati da
@@ -175,11 +187,20 @@ def load_config() -> Config:
     email = os.getenv("COMMUNICATION_DISPATCH_EMAIL") or ""
     password = os.getenv("COMMUNICATION_DISPATCH_PASSWORD") or ""
     channel = (os.getenv("COMMUNICATION_DISPATCH_CHANNEL") or "email").strip()
+    token = (os.getenv("COMMUNICATION_CRON_TOKEN") or "").strip() or None
+    agency_id = None
 
     parsed = urlparse(base_url)
     if not base_url or parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise ConfigurationError("COMMUNICATION_DISPATCH_BASE_URL")
-    if not email or not password:
+    if token is not None:
+        # Identita' tecnica: nessuna email, nessuna password di operatore.
+        grezzo = (os.getenv("COMMUNICATION_CRON_AGENCY_ID") or "").strip()
+        if not grezzo.isdigit() or int(grezzo) <= 0:
+            raise ConfigurationError("COMMUNICATION_CRON_AGENCY_ID")
+        agency_id = int(grezzo)
+        email = password = ""
+    elif not email or not password:
         raise ConfigurationError("COMMUNICATION_DISPATCH credentials")
     if channel not in CANALI:
         raise ConfigurationError("COMMUNICATION_DISPATCH_CHANNEL")
@@ -195,6 +216,8 @@ def load_config() -> Config:
             _seconds("COMMUNICATION_READ_TIMEOUT_SECONDS", 120),
         ),
         _integer("COMMUNICATION_JOURNEY_TICK_LIMIT", 500, minimum=1, maximum=2000),
+        token,
+        agency_id,
     )
 
 
@@ -477,6 +500,9 @@ def run_once(config: Config, sessione: requests.Session | None = None) -> dict:
     con accanto `journey_status` e, se il tick e' arrivato in fondo,
     `journey_errors` e `journey_queued`.
     """
+    if config.token is not None:
+        return _run_with_token(config, sessione)
+
     started = time.monotonic()
     propria = sessione is None
     sessione = sessione or requests.Session()
@@ -556,6 +582,101 @@ def run_once(config: Config, sessione: requests.Session | None = None) -> dict:
                           timeout=config.timeout)
         except requests.RequestException:
             pass
+        if propria:
+            sessione.close()
+
+
+#: Gli esiti dei passi che la rotta interna restituisce, tradotti in quelli
+#: del runner: le righe di log e il codice di uscita restano quelli di sempre.
+_STATI_DEL_GIRO = {"completed": TICK_COMPLETATO, "not_migrated": TICK_NON_MIGRATA,
+                   "failed": TICK_FALLITO, "skipped": TICK_SALTATO}
+
+#: I rifiuti della rotta interna, per nome: un 401 e' un segreto sbagliato,
+#: non "la rete".
+_RIFIUTI_DEL_GIRO = {401: "token_rejected", 403: "agency_not_allowed",
+                     409: "agency_not_active", 503: "token_not_configured_on_server"}
+
+
+def _esito_del_passo(dati, nomi: tuple[str, ...], phase: str, durata: int) -> dict:
+    """Un passo (tick o promemoria) come lo ha raccontato la rotta interna."""
+    stato = _STATI_DEL_GIRO.get(dati.get("status")) if isinstance(dati, dict) else None
+    conteggi = dati.get("counts") if isinstance(dati, dict) else None
+    if stato == TICK_COMPLETATO and (not isinstance(conteggi, dict) or any(
+            type(conteggi.get(chiave)) is not int or conteggi[chiave] < 0 for chiave in nomi)):
+        stato, conteggi = TICK_FALLITO, None
+    motivo = {TICK_NON_MIGRATA: NON_MIGRATA, TICK_SALTATO: "channel"}.get(stato)
+    if stato is None:
+        stato, conteggi, motivo = TICK_FALLITO, None, "invalid_json"
+    elif stato == TICK_FALLITO:
+        conteggi = None
+        motivo = motivo or (dati.get("reason") if isinstance(dati.get("reason"), str) else "failed")
+    _log("completed" if stato == TICK_COMPLETATO else
+         "skipped" if stato in (TICK_NON_MIGRATA, TICK_SALTATO) else "failed",
+         durata, motivo, counts=conteggi, phase=phase, nomi=nomi)
+    return {"status": stato, "counts": conteggi, "reason": motivo}
+
+
+def _run_with_token(config: Config, sessione: requests.Session | None = None) -> dict:
+    """UN giro con l'identita' tecnica: una sola chiamata, nessun login.
+
+    Il server esegue tick, promemoria e dispatch per l'agenzia del giro, se
+    e' fra quelle che consente; qui si leggono gli esiti e si scrivono le
+    stesse righe di log del giro con login. Il segreto non finisce nel log.
+    """
+    started = time.monotonic()
+    propria = sessione is None
+    sessione = sessione or requests.Session()
+
+    def durata() -> int:
+        return int((time.monotonic() - started) * 1000)
+
+    try:
+        try:
+            risposta = sessione.post(
+                f"{config.base_url}{ROTTA_GIRO_INTERNO}",
+                headers={CRON_TOKEN_HEADER: config.token},
+                json={"agency_id": config.agency_id, "channel": config.channel,
+                      "limit": config.limit, "journey_limit": config.journey_limit},
+                timeout=config.timeout,
+            )
+        except requests.Timeout:
+            _log("failed", durata(), "timeout", channel=config.channel)
+            raise TechnicalError("timeout") from None
+        except requests.RequestException:
+            _log("failed", durata(), "http_or_network", channel=config.channel)
+            raise TechnicalError("http_or_network") from None
+
+        stato = getattr(risposta, "status_code", None)
+        if not isinstance(stato, int) or stato >= 400:
+            motivo = _RIFIUTI_DEL_GIRO.get(stato, f"http_{stato}")
+            _log("failed", durata(), motivo, channel=config.channel)
+            raise TechnicalError(motivo)
+
+        try:
+            corpo = risposta.json()
+        except ValueError:
+            corpo = None
+        invio = corpo.get("dispatch") if isinstance(corpo, dict) else None
+        if not isinstance(invio, dict) or any(
+                type(invio.get(chiave)) is not int or invio[chiave] < 0 for chiave in CONTEGGI):
+            _log("failed", durata(), "invalid_json", channel=config.channel)
+            raise TechnicalError("invalid_json")
+
+        journey = _esito_del_passo(corpo.get("journey"), CONTEGGI_TICK, "journey_tick", durata())
+        promemoria = _esito_del_passo(corpo.get("reminder"), CONTEGGI_PROMEMORIA,
+                                      "reminder_tick", durata())
+        dati = dict(invio)
+        _log("completed", durata(), counts=dati, channel=config.channel)
+        dati["journey_status"] = journey["status"]
+        if journey["counts"] is not None:
+            dati["journey_errors"] = journey["counts"]["errors"]
+            dati["journey_queued"] = journey["counts"]["queued"]
+        dati["reminder_status"] = promemoria["status"]
+        if promemoria["counts"] is not None:
+            dati["reminder_errors"] = promemoria["counts"]["errors"]
+            dati["reminder_queued"] = promemoria["counts"]["queued"]
+        return dati
+    finally:
         if propria:
             sessione.close()
 

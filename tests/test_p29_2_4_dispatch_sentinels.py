@@ -431,6 +431,10 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
         # stesso prefisso e dietro la stessa ammissione di livello mount,
         # con la soglia del dispatch (`require_dispatch_context`).
         "/api/communication/reminders/tick",
+        # SENTINELLA AGGIORNATA DA CRON-TECNICO: il giro del cron con il segreto
+        # di servizio (non una sessione), una rotta sola, agenzie consentite dal
+        # server (`communication/cron_router.py`).
+        "/api/internal/communication/cron/run",
         # SENTINELLA AGGIORNATA DA C3: la pagina pubblica del consenso (token
         # opaco del link, non una sessione), sul router pubblico.
         "/api/public/communication/consent/confirm/{token}",

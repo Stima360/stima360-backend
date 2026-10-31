@@ -264,7 +264,9 @@ def test_s12_il_cron_chiama_i_promemoria_prima_del_dispatch_e_solo_per_email():
         "COMMUNICATION_DISPATCH_BASE_URL", "COMMUNICATION_DISPATCH_EMAIL",
         "COMMUNICATION_DISPATCH_PASSWORD", "COMMUNICATION_DISPATCH_CHANNEL",
         "COMMUNICATION_DISPATCH_LIMIT", "COMMUNICATION_CONNECT_TIMEOUT_SECONDS",
-        "COMMUNICATION_READ_TIMEOUT_SECONDS", "COMMUNICATION_JOURNEY_TICK_LIMIT"}
+        "COMMUNICATION_READ_TIMEOUT_SECONDS", "COMMUNICATION_JOURNEY_TICK_LIMIT",
+        # SENTINELLA AGGIORNATA DA CRON-TECNICO: l'identita' tecnica del cron.
+        "COMMUNICATION_CRON_TOKEN", "COMMUNICATION_CRON_AGENCY_ID"}
     # resta un client HTTP: nessun import del dominio
     for vietato in ("appointment_reminders", "communication.", "psycopg2"):
         assert vietato not in "\n".join(

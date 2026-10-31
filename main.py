@@ -71,6 +71,7 @@ from next_best_action.router import router as next_best_action_router
 from communication import service as communication_service
 from communication.router import router as communication_router
 from communication.public_router import router as communication_public_router
+from communication.cron_router import router as communication_cron_router
 from communication import consent_page as communication_consent_page
 from appointment_reminders.router import router as appointment_reminders_router
 # STIMA Voice Fase 7: il router dei comandi vocali (spento finche' non e' acceso ogni livello).
@@ -235,6 +236,10 @@ app.include_router(esign_router, dependencies=[Depends(require_authenticated_ope
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.
 app.include_router(communication_public_router)
+# Il cron delle comunicazioni: autenticato da un SEGRETO DI SERVIZIO (vedi
+# `communication/cron_router.py`), non da una sessione di operatore. Una rotta
+# sola, per le agenzie consentite dal server; spenta senza segreto.
+app.include_router(communication_cron_router)
 # A30-12: PUBBLICA per natura - chi apre il link non e' un operatore -
 # esattamente come communication_public_router sopra.
 app.include_router(public_booking_router)
