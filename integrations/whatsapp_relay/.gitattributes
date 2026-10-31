@@ -1,0 +1,3 @@
+# Le righe di contesto riproducono main.py di produzione, spazi finali compresi:
+# servono perche' la patch si applichi.
+main_webhook.patch -whitespace
