@@ -12,9 +12,12 @@ COMUNICABILI (colonna di `properties` o tabella collegata, e come si dice)
     elevator                 ascensore (si / no; vuoto = non registrato)
     energy_class             classe energetica
     property_accessories     pertinenze registrate (balcone, terrazzo, box...)
-    commercial_status        SOLO `active` si comunica, come «risulta
-                             disponibile»: ogni altro stato passa all'agente,
-                             senza dire quale sia
+    commercial_status        SOLO come condizione: i dati si comunicano solo
+                             per un immobile `active`; ogni altro stato passa
+                             all'agente, senza dire quale sia. La disponibilita'
+                             NON si afferma mai (BLOCCO-4D): `active` e'
+                             un'etichetta manuale («Attivo») senza data ne'
+                             verifica, non la prova che l'immobile sia libero
 
 ESCLUSI, mai letti da questo modulo: note interne e pubbliche, prezzo minimo,
 dati e contatti del proprietario, indirizzo e numero civico, mandato,

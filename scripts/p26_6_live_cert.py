@@ -745,6 +745,18 @@ DOMAINS = (
              "POST -> 405, nessun invio",
     ),
     Domain(
+        "AUTO_REPLIES", "/api/auto-replies",
+        # BLOCCO-4D. SOLO RIFIUTI: la matrice non fa MAI girare il motore e non
+        # cambia il modo dell'agenzia. Anonimo e Basic -> 401; la conversazione
+        # dell'altra agenzia -> 404 (503 se la 119 manca); un `agency_id` o un
+        # modo d'invio nel corpo -> 422.
+        certifier="auto_replies",
+        depends_on=None,
+        api_delete=False,
+        note="tre rotte sondate: anonimo e Basic -> 401, conversazione altrui -> 404, "
+             "agency_id o modo d'invio nel corpo -> 422, nessun giro eseguito",
+    ),
+    Domain(
         "LEGACY_ADMIN", "/api/admin",
         listing="/api/admin/stime?day=oggi",
         note="le sette route /api/admin che toccano dati di tenant, migrate "
@@ -7589,6 +7601,59 @@ def certify_reply_suggestions(report, http, cert, domain, jars, owned, context) 
         risposta = http.request("POST", percorso, jar=jars[etichetta], payload={})
         report.check(f"REPLY_SUGGESTIONS-nessuna-scrittura-{etichetta}", risposta.status == 405,
                      f"{etichetta}: POST {percorso} -> {risposta.status} (atteso 405, la rotta non scrive)")
+
+
+AUTO_REPLIES_OPERAZIONI = (("GET", "/settings"), ("PUT", "/settings"), ("POST", "/tick"))
+
+
+def _ultimo_mittente(http, jar) -> str | None:
+    """Il telefono dell'ultima conversazione visibile alla sessione, se c'e'."""
+    risposta = http.request("GET", "/api/inbound-messages/conversations", jar=jar)
+    try:
+        voci = (risposta.json() or {}).get("items") or []
+    except Exception:
+        return None
+    for voce in voci if isinstance(voci, list) else []:
+        telefono = (voce or {}).get("sender_phone")
+        if isinstance(telefono, str) and telefono.isdigit():
+            return telefono
+    return None
+
+
+def certify_auto_replies(report, http, cert, domain, jars, owned, context) -> None:
+    """AUTO_REPLIES (BLOCCO-4D): nessun giro, nessun cambio di modo.
+
+        anonimo, Basic                            -> 401 su settings e tick (mount)
+        GET conversazione dell'ALTRA agenzia      -> 404 (o 503 senza la 119), A->B e B->A
+        PUT settings con agency_id altrui         -> 422 (corpo chiuso)
+        PUT settings con un modo d'invio          -> 422 (non esiste)
+    """
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in AUTO_REPLIES_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = None if metodo == "GET" else {}
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"AUTO_REPLIES-anonimo-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"AUTO_REPLIES-basic-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        valore = (context.get("agencies") or {}).get(altro)
+        agenzia_altra = valore.get("id") if isinstance(valore, dict) else valore
+        telefono = _ultimo_mittente(http, jars[altro]) or "390000000001"
+        percorso = f"{base}/conversations/{telefono}"
+        risposta = http.request("GET", percorso, jar=jars[etichetta])
+        report.check(f"AUTO_REPLIES-conversazione-altrui-{etichetta}-{altro}", risposta.status in (404, 503),
+                     f"{etichetta}: GET {percorso} (conversazione di {altro}) -> {risposta.status} (atteso 404)")
+        risposta = http.request("PUT", base + "/settings", jar=jars[etichetta],
+                                payload={"mode": "off", "agency_id": agenzia_altra})
+        report.check(f"AUTO_REPLIES-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: PUT {base}/settings con agency_id di {altro} -> {risposta.status} (atteso 422)")
+        risposta = http.request("PUT", base + "/settings", jar=jars[etichetta], payload={"mode": "send"})
+        report.check(f"AUTO_REPLIES-nessun-invio-{etichetta}", risposta.status == 422,
+                     f"{etichetta}: PUT {base}/settings con modo d'invio -> {risposta.status} (atteso 422)")
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:

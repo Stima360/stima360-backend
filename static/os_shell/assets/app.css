@@ -1694,3 +1694,10 @@ a.census-unit-main { text-decoration: none; }
 .wa-suggestion p { margin: 0; font-size: 13px; }
 .wa-suggestion textarea { width: 100%; box-sizing: border-box; }
 .wa-suggestion-sources { margin: 0; padding-left: 18px; font-size: 13px; }
+/* BLOCCO-4D: motore delle risposte automatiche (solo simulazione). */
+.wa-auto-panel { border: 1px dashed var(--border); border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; margin-bottom: 10px; min-width: 0; }
+.wa-auto-panel p { margin: 0; font-size: 13px; }
+.wa-auto-decision { border-left: 3px dashed var(--border); padding: 4px 0 4px 10px; display: grid; gap: 4px; min-width: 0; }
+.wa-auto-decision p { margin: 0; font-size: 13px; }
+.wa-auto-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.wa-auto-text { margin: 0; padding: 6px 8px; background: var(--surface-2, rgba(0,0,0,0.04)); border-radius: 6px; font-size: 13px; overflow-wrap: anywhere; }

@@ -73,7 +73,8 @@ HANDOFF_REASONS = {
     "visit": "Richiesta di visita: giorno e orario li concorda l'agente, nessun orario è confermato.",
     "ambiguous": "Domanda non riconosciuta o ambigua: la legge l'agente.",
     "property_unavailable": "Lo stato commerciale dell'immobile non permette di comunicarne i dati: la segue l'agente.",
-    "missing_data": "Alcuni dati richiesti non sono registrati nella scheda: li fornisce l'agente.",
+    "missing_data": "Alcuni dati richiesti non sono registrati nella scheda, o non sono verificabili "
+                    "(la disponibilità non lo è): li fornisce l'agente.",
 }
 REFERENCE_REASONS = {
     "no_property": "Il messaggio non è collegato a un immobile.",
@@ -82,13 +83,22 @@ REFERENCE_REASONS = {
 }
 
 GREETING = "Buongiorno, grazie per il messaggio."
+#: BLOCCO-4D: nessun testo promette «l'agente la ricontatterà» se non esiste
+#: un'attivita' aperta e assegnata per quel contatto (`followup_assigned`).
+#: Senza, il testo dice solo cio' che e' vero: il messaggio e' arrivato.
 TEXTS = {
-    "handoff": "Buongiorno, grazie per il messaggio. La sua richiesta la segue direttamente l'agente, "
-               "che la ricontatterà al più presto.",
-    "visit": "Buongiorno, grazie per l'interesse. Per la visita la ricontatterà l'agente per concordare "
-             "insieme giorno e orario.",
+    "handoff": "Buongiorno, grazie per il messaggio: l'abbiamo ricevuto.",
+    "visit": "Buongiorno, grazie per l'interesse. Abbiamo ricevuto la sua richiesta di visita: "
+             "al momento nessun appuntamento è fissato.",
     "ask_reference": "Buongiorno, grazie per il messaggio. Per risponderle con precisione, ci indica il "
                      "riferimento dell'annuncio (codice o link) dell'immobile che le interessa?",
+    "missing_tail": "Al momento non abbiamo un dato da comunicarle su: {what}.",
+}
+TEXTS_FOLLOWUP = {
+    "handoff": "Buongiorno, grazie per il messaggio. La sua richiesta è affidata all'agente, che la ricontatterà.",
+    "visit": "Buongiorno, grazie per l'interesse. Abbiamo ricevuto la sua richiesta di visita: "
+             "al momento nessun appuntamento è fissato. L'agente la ricontatterà per concordare giorno e orario.",
+    "ask_reference": TEXTS["ask_reference"],
     "missing_tail": "Per {what} la ricontatterà l'agente.",
 }
 
@@ -177,33 +187,36 @@ def _facts_for(topic: str, p: dict, accessories: list[dict], norm: str = "") -> 
                  for k in kinds]
         listed = ", ".join(names)
         return [Fact("accessories", FIELD_LABELS["accessories"], listed)], f"tra le pertinenze risultano: {listed}"
-    if topic == "availability" and p.get("commercial_status") == AVAILABLE_STATUS:
-        return ([Fact("commercial_status", FIELD_LABELS["commercial_status"], "Disponibile")],
-                "l'immobile risulta disponibile")
+    # BLOCCO-4D: «availability» non ha mai una frase. `commercial_status` e'
+    # un'etichetta impostata a mano («Attivo»), senza data ne' verifica: non
+    # dimostra che l'immobile sia disponibile OGGI, quindi non si afferma.
     return [], None
 
 
-def decide(message: dict, prop: dict | None, accessories: list[dict], *, reference_problem: str | None) -> Suggestion:
+def decide(message: dict, prop: dict | None, accessories: list[dict], *, reference_problem: str | None,
+           followup_assigned: bool = False) -> Suggestion:
     """Il suggerimento per UN messaggio. `prop` e' l'immobile collegato a QUEL
-    messaggio (mai l'ultimo della conversazione), gia' letto nell'agenzia."""
+    messaggio (mai l'ultimo della conversazione), gia' letto nell'agenzia.
+    `followup_assigned`: esiste un'attivita' aperta e assegnata per il contatto."""
+    texts = TEXTS_FOLLOWUP if followup_assigned else TEXTS
     if message.get("message_type") != "text":
-        return Suggestion(HANDOFF, TEXTS["handoff"], "not_text", HANDOFF_REASONS["not_text"])
+        return Suggestion(HANDOFF, texts["handoff"], "not_text", HANDOFF_REASONS["not_text"])
     text = message.get("text_body")
     if normalize(text).strip() == "stop":
         return Suggestion(NONE, None, "stop", HANDOFF_REASONS["stop"])
     asked = topics(text)
     special = handoff_topic(text)
     if special in ("negotiation", "technical_legal"):
-        return Suggestion(HANDOFF, TEXTS["handoff"], special, HANDOFF_REASONS[special], topics=asked)
+        return Suggestion(HANDOFF, texts["handoff"], special, HANDOFF_REASONS[special], topics=asked)
     if special == "visit":
-        return Suggestion(HANDOFF, TEXTS["visit"], "visit", HANDOFF_REASONS["visit"], topics=asked)
+        return Suggestion(HANDOFF, texts["visit"], "visit", HANDOFF_REASONS["visit"], topics=asked)
     if not asked:
-        return Suggestion(HANDOFF, TEXTS["handoff"], "ambiguous", HANDOFF_REASONS["ambiguous"])
+        return Suggestion(HANDOFF, texts["handoff"], "ambiguous", HANDOFF_REASONS["ambiguous"])
     if reference_problem is not None or prop is None:
         code = reference_problem or "no_property"
-        return Suggestion(ASK_REFERENCE, TEXTS["ask_reference"], code, REFERENCE_REASONS[code], topics=asked)
+        return Suggestion(ASK_REFERENCE, texts["ask_reference"], code, REFERENCE_REASONS[code], topics=asked)
     if prop.get("commercial_status") != AVAILABLE_STATUS:
-        return Suggestion(HANDOFF, TEXTS["handoff"], "property_unavailable", HANDOFF_REASONS["property_unavailable"],
+        return Suggestion(HANDOFF, texts["handoff"], "property_unavailable", HANDOFF_REASONS["property_unavailable"],
                           topics=asked)
 
     facts, sentences, missing = [], [], []
@@ -215,13 +228,14 @@ def decide(message: dict, prop: dict | None, accessories: list[dict], *, referen
             facts.extend(f)
             sentences.append(sentence)
     if not sentences:
-        return Suggestion(HANDOFF, TEXTS["handoff"], "missing_data", HANDOFF_REASONS["missing_data"], topics=asked,
+        return Suggestion(HANDOFF, texts["handoff"], "missing_data", HANDOFF_REASONS["missing_data"], topics=asked,
                           missing=missing)
-    ref = prop.get("code") or prop.get("title") or f"n. {prop['id']}"
-    body = f"{GREETING} Per l'immobile {ref}: " + "; ".join(sentences) + "."
+    # BLOCCO-4D: nessun codice interno (IMM-*) ne' titolo nel testo per il
+    # cliente: non esiste un riferimento pubblico verificato dell'annuncio.
+    body = f"{GREETING} Per l'immobile di cui ci scrive: " + "; ".join(sentences) + "."
     if missing:
         what = ", ".join(TOPIC_NAMES[t] for t in missing)
-        body += " " + TEXTS["missing_tail"].format(what=what)
+        body += " " + texts["missing_tail"].format(what=what)
         return Suggestion(HANDOFF, body, "missing_data", HANDOFF_REASONS["missing_data"], topics=asked, facts=facts,
                           missing=missing)
     return Suggestion(ANSWER, body, None, None, topics=asked, facts=facts)

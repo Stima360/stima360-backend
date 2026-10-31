@@ -52,18 +52,14 @@ def _fingerprint(payload: dict) -> str:
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def suggest(ctx, message_id: int) -> dict:
-    agency_id = ctx.require_agency()
-    with core_cursor() as (_, cur):
-        if not inbound_repository.installed(cur):
-            raise NotFound("NOT_FOUND", NOT_FOUND_MESSAGE)
-        message = inbound_repository.get_message(cur, agency_id, message_id, agent_user_id=_agent_scope(ctx))
-        if message is None:
-            raise NotFound("NOT_FOUND", NOT_FOUND_MESSAGE)
-        prop = (repository.communicable_property(cur, agency_id, message["property_id"])
-                if message.get("property_id") else None)
-        acc = repository.accessories(cur, prop["id"]) if prop else []
-        cited = repository.properties_by_codes(cur, agency_id, rules.cited_codes(message.get("text_body")))
+def compute(cur, agency_id: int, message: dict) -> dict:
+    """Il suggerimento per un messaggio GIA' letto nello scope di chi chiede.
+    Riusato dal motore del 4D, che opera come sistema dell'agenzia."""
+    prop = (repository.communicable_property(cur, agency_id, message["property_id"])
+            if message.get("property_id") else None)
+    acc = repository.accessories(cur, prop["id"]) if prop else []
+    cited = repository.properties_by_codes(cur, agency_id, rules.cited_codes(message.get("text_body")))
+    followup = repository.followup_assigned(cur, agency_id, message.get("contact_id"))
 
     problem = None
     if message.get("property_id") and prop is None:
@@ -71,7 +67,7 @@ def suggest(ctx, message_id: int) -> dict:
     elif prop is not None and rules.conflicting_reference(message.get("text_body"), prop.get("code"),
                                                           [c["code"] for c in cited]):
         problem = "conflicting_reference"
-    s = rules.decide(message, prop, acc, reference_problem=problem)
+    s = rules.decide(message, prop, acc, reference_problem=problem, followup_assigned=followup)
 
     sources = [{"field": f.field, "label": f.label, "value": f.value,
                 "source": f"Scheda immobile {prop.get('code') or prop['id']} · {f.label}"} for f in s.facts]
@@ -88,7 +84,19 @@ def suggest(ctx, message_id: int) -> dict:
         "sources": sources,
         "property": ({"id": prop["id"], "code": prop.get("code"), "title": prop.get("title")} if prop else None),
         "cited_properties": [{"id": c["id"], "code": c["code"]} for c in cited],
+        "followup_assigned": followup,
         "fingerprint": _fingerprint(used),
         "computed_at": datetime.now(timezone.utc).isoformat(),
         "sending": "manual_only",
     }
+
+
+def suggest(ctx, message_id: int) -> dict:
+    agency_id = ctx.require_agency()
+    with core_cursor() as (_, cur):
+        if not inbound_repository.installed(cur):
+            raise NotFound("NOT_FOUND", NOT_FOUND_MESSAGE)
+        message = inbound_repository.get_message(cur, agency_id, message_id, agent_user_id=_agent_scope(ctx))
+        if message is None:
+            raise NotFound("NOT_FOUND", NOT_FOUND_MESSAGE)
+        return compute(cur, agency_id, message)

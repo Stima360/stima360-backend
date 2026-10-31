@@ -177,9 +177,10 @@ def test_migration_118_is_valid_additive_and_keeps_whatsapp_incoming():
 
     tutte = runner.discover_migrations()
     runner.verify_contiguous(tutte)
-    # SENTINELLA AGGIORNATA DA BLOCCO-4A
-    assert tutte[-1].version == "118_whatsapp_inbound"
-    assert tutte[-1].down_available and runner.validate_migration(tutte[-1]) == []
+    # SENTINELLA AGGIORNATA DA BLOCCO-4D: la 118 non e' piu' l'ultima (119:
+    # registro della simulazione delle risposte automatiche). La 118 resta valida.
+    m118 = next(m for m in tutte if m.version == "118_whatsapp_inbound")
+    assert m118.down_available and runner.validate_migration(m118) == []
     up = (ROOT / "migrations" / "118_whatsapp_inbound.sql").read_text(encoding="utf-8")
     executable = "\n".join(r for r in up.splitlines() if not r.lstrip().startswith("--"))
     assert "whatsapp_incoming" not in executable

@@ -96,9 +96,11 @@ def test_d_simple_question_uses_only_communicable_fields_with_sources(wa):
     assert r.status_code == 200, r.text
     s = r.json()
     assert s["outcome"] == "answer" and s["handoff"] is None and s["sending"] == "manual_only"
-    assert s["text"] == (f"Buongiorno, grazie per il messaggio. Per l'immobile {code}: il prezzo richiesto è "
-                         "€ 185.000; la superficie commerciale è di 92,5 mq e la superficie è di 80 mq; "
+    # BLOCCO-4D: nessun codice interno nel testo per il cliente (resta nelle fonti per l'operatore)
+    assert s["text"] == ("Buongiorno, grazie per il messaggio. Per l'immobile di cui ci scrive: il prezzo richiesto "
+                         "è € 185.000; la superficie commerciale è di 92,5 mq e la superficie è di 80 mq; "
                          "c'è l'ascensore.")
+    assert code not in s["text"]
     assert [src["field"] for src in s["sources"]] == ["asking_price", "commercial_surface_sqm", "surface_sqm",
                                                        "elevator"]
     assert all(src["source"].startswith(f"Scheda immobile {code}") for src in s["sources"])
@@ -112,7 +114,8 @@ def test_d_missing_values_are_never_invented(wa):
     s = wa["login"]("owner_a").get(f"{API}/{mid}").json()
     assert s["outcome"] == "handoff" and s["handoff"]["code"] == "missing_data"
     assert s["missing"] == ["il piano", "l'ascensore", "la classe energetica"]
-    assert "€ 185.000" in s["text"] and "la ricontatterà l'agente" in s["text"]
+    assert "€ 185.000" in s["text"] and "non abbiamo un dato da comunicarle su" in s["text"]
+    assert "ricontatt" not in s["text"]                     # nessuna attivita' assegnata: nessuna promessa
     assert "c'è l'ascensore" not in s["text"] and "classe energetica è" not in s["text"]
     assert [src["field"] for src in s["sources"]] == ["asking_price"]
 
@@ -130,13 +133,16 @@ def test_d_an_accessory_not_registered_is_not_denied(wa):
     assert s["outcome"] == "answer" and "balcone (2)" in s["text"]
 
 
-def test_d_availability_only_for_an_active_property_and_never_a_visit(wa):
+def test_d_availability_is_never_affirmed_and_data_need_an_active_property(wa):
+    """BLOCCO-4D: `active` non prova la disponibilita' di oggi: mai affermata."""
     pid, code = _property(wa, "a")
     mid, _, contact = _incoming(wa, "È ancora disponibile?")
     _link(wa, mid, contact, pid)
     s = wa["login"]("owner_a").get(f"{API}/{mid}").json()
-    assert s["outcome"] == "answer" and "risulta disponibile" in s["text"]
+    assert s["outcome"] == "handoff" and s["handoff"]["code"] == "missing_data" and "disponibile" not in s["text"]
     assert "visit" not in s["text"].lower() and "orari" not in s["text"].lower()
+    mid, _, contact = _incoming(wa, "Quanto costa?")
+    _link(wa, mid, contact, pid)
     for status in ("reserved", "under_offer", "sold", "draft", "withdrawn"):
         _q(wa, "UPDATE properties SET commercial_status = %s WHERE id = %s", (status, pid))
         s = wa["login"]("owner_a").get(f"{API}/{mid}").json()
@@ -175,7 +181,7 @@ def test_a_two_agencies_and_unassigned_agent_cannot_read(wa):
     mid_b, _, contact_b = _incoming(wa, "Quanto costa?", agency="b", number=NUMBER_B, sender=sender)
     _link(wa, mid_b, contact_b, pid_b, who="owner_b")
     s_b = wa["login"]("owner_b").get(f"{API}/{mid_b}").json()
-    assert "€ 99.000" in s_b["text"] and code_b in s_b["text"]
+    assert "€ 99.000" in s_b["text"] and code_b not in s_b["text"] and s_b["property"]["code"] == code_b
     assert wa["login"]("owner_a").get(f"{API}/{mid_b}").status_code == 404
     assert wa["login"]("owner_b").post(f"{API}/{mid_b}", json={}).status_code == 405
 
@@ -263,8 +269,9 @@ def test_v_visits_negotiation_technical_and_ambiguous_go_to_the_agent(wa, text, 
     s = wa["login"]("owner_a").get(f"{API}/{mid}").json()
     assert s["outcome"] == "handoff" and s["handoff"]["code"] == code and s["sources"] == []
     assert "185.000" not in s["text"]
+    assert "ricontatt" not in s["text"]                      # nessuna attivita' assegnata
     if code == "visit":
-        assert "concordare insieme giorno e orario" in s["text"]
+        assert "nessun appuntamento è fissato" in s["text"]
         assert "10" not in s["text"] and "sabato" not in s["text"].lower() and "confermat" not in s["text"].lower()
 
 
@@ -290,6 +297,18 @@ def test_n_a_suggestion_never_queues_or_sends(wa, monkeypatch):
     for _ in range(3):
         assert owner.get(f"{API}/{mid}").status_code == 200
     assert _counts(wa) == before
+
+
+def test_n_a_callback_is_promised_only_with_an_open_assigned_task(wa):
+    pid, _ = _property(wa, "a")
+    mid, _, contact = _incoming(wa, "Il prezzo è trattabile?")
+    _link(wa, mid, contact, pid)
+    owner = wa["login"]("owner_a")
+    assert "ricontatt" not in owner.get(f"{API}/{mid}").json()["text"]
+    _q(wa, "INSERT INTO tasks (agency_id, contact_id, title, status, assigned_to) VALUES (%s, %s, 'Richiamare', "
+           "'open', 'Agente Sintetico')", (wa["ids"]["a"], contact))
+    s = owner.get(f"{API}/{mid}").json()
+    assert s["followup_assigned"] is True and "ricontatterà" in s["text"]
 
 
 def test_n_fingerprint_changes_when_the_data_changes(wa):

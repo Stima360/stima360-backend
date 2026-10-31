@@ -40,13 +40,32 @@ def _decide(text, prop=PROPERTY, accessories=ACCESSORIES, problem=None, kind="te
     ("Classe energetica?", "la classe energetica è C"),
     ("Ha il balcone?", "tra le pertinenze risultano: balcone (2)"),
     ("Che pertinenze ha?", "tra le pertinenze risultano: balcone (2), garage / box"),   # «altro» non si nomina
-    ("È ancora disponibile?", "l'immobile risulta disponibile"),
 ])
 def test_simple_questions_are_answered_from_the_card(text, expected):
     s = _decide(text)
     assert s.outcome == rules.ANSWER and s.reason_code is None
-    assert s.text == f"Buongiorno, grazie per il messaggio. Per l'immobile IMM-4: {expected}."
-    assert s.facts
+    # BLOCCO-4D: nessun codice interno nel testo per il cliente
+    assert s.text == f"Buongiorno, grazie per il messaggio. Per l'immobile di cui ci scrive: {expected}."
+    assert s.facts and "IMM-4" not in s.text and "Trilocale" not in s.text
+
+
+def test_availability_is_never_affirmed_from_the_commercial_status():
+    """BLOCCO-4D: `active` e' un'etichetta manuale senza verifica: non prova
+    che l'immobile sia disponibile oggi."""
+    s = _decide("È ancora disponibile?")
+    assert s.outcome == rules.HANDOFF and s.reason_code == "missing_data" and s.facts == []
+    assert "disponibile" not in s.text and s.missing == ["availability"]
+
+
+def test_no_promise_of_a_callback_without_an_assigned_task():
+    for text in ("Il prezzo è trattabile?", "Posso vederlo domani?", "Ciao"):
+        plain = rules.decide({"message_type": "text", "text_body": text}, PROPERTY, ACCESSORIES, reference_problem=None)
+        assert "ricontatt" not in plain.text, text
+        assigned = rules.decide({"message_type": "text", "text_body": text}, PROPERTY, ACCESSORIES,
+                                reference_problem=None, followup_assigned=True)
+        assert "ricontatterà" in assigned.text, text
+    s = _decide("Quanto costa e che classe energetica ha?", prop={**PROPERTY, "energy_class": None})
+    assert "ricontatt" not in s.text
 
 
 def test_the_surface_always_carries_its_type():
@@ -68,7 +87,8 @@ def test_missing_values_are_never_invented(field, question, topic):
 def test_a_partial_answer_says_what_the_agent_will_provide():
     s = _decide("Quanto costa e che classe energetica ha?", prop={**PROPERTY, "energy_class": None})
     assert s.outcome == rules.HANDOFF and s.reason_code == "missing_data"
-    assert s.text.endswith("il prezzo richiesto è € 185.000. Per la classe energetica la ricontatterà l'agente.")
+    assert s.text.endswith("il prezzo richiesto è € 185.000. Al momento non abbiamo un dato da comunicarle su: "
+                           "la classe energetica.")
 
 
 def test_an_accessory_not_registered_is_neither_affirmed_nor_denied():
@@ -147,7 +167,7 @@ def test_only_communicable_columns_are_read():
     repo = _code("repository.py")
     assert "SELECT *" not in repo and "p.*" not in repo
     for column in ("minimum_price", "internal_notes", "public_notes", "address", "civic_number", "mandate",
-                   "assigned_to", "metadata", "owner", "valuation", "document"):
+                   "metadata", "owner", "valuation", "document"):
         for name in ("repository.py", "service.py"):
             assert column not in _code(name), (name, column)
     # le regole leggono dall'immobile soltanto i campi comunicabili
@@ -169,7 +189,8 @@ def test_the_module_never_sends_writes_or_calls_an_external_service():
 def test_no_migration_for_suggestions():
     names = [p.name for p in (ROOT / "migrations").glob("*.sql")]
     assert not any("suggest" in n for n in names)
-    assert max(n for n in names if re.match(r"\d{3}_", n)).startswith("118_")
+    # SENTINELLA AGGIORNATA DA BLOCCO-4D: la 119 e' del motore 4D, non dei suggerimenti
+    assert max(n for n in names if re.match(r"\d{3}_", n)).startswith("119_whatsapp_auto_reply")
 
 
 def test_route_is_mounted_behind_the_operator_session():

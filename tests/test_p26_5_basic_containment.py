@@ -367,6 +367,9 @@ TENANT_PREFIXES = (
     # GET, agenzia e visibilita' dalla sessione (`require_operator`): dichiara
     # il cookie e SOLO il cookie, come verifica il test 6.
     "/api/reply-suggestions",
+    # SENTINELLA AGGIORNATA DA BLOCCO-4D: il motore delle risposte automatiche
+    # (solo simulazione). Agenzia dalla sessione, corpo chiuso: cookie e SOLO cookie.
+    "/api/auto-replies",
 )
 
 

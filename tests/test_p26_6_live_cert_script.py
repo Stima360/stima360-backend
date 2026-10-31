@@ -2154,6 +2154,22 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 200, b'{"text": "suggerimento di un\'altra agenzia"}')
         return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
 
+    def _auto_replies(self, method, path, agency, payload):
+        """BLOCCO-4D. Il doppio di `/api/auto-replies`: corpo delle impostazioni
+        chiuso (modello VERO), conversazione altrui 404. Rotto `isolation`: la
+        conversazione dell'altra agenzia risponde 200, e la matrice deve fallire."""
+        from auto_replies.router import SettingsRequest
+
+        if method == "PUT":
+            try:
+                SettingsRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            return self._reply(method, path, 200, b'{"mode": "off"}')
+        if "/conversations/" in path and self._broken("isolation", "auto_replies"):
+            return self._reply(method, path, 200, b'{"decisions": "di un\'altra agenzia"}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
+
     def _inbound_messages(self, method, path, agency, payload):
         """BLOCCO-4A. Il doppio di `/api/inbound-messages`: elenco della sola
         agenzia della sessione, corpo dell'associazione chiuso (modello VERO).
@@ -2585,6 +2601,10 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA BLOCCO-4C
         if path.startswith("/api/reply-suggestions"):
             return self._reply_suggestions(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-4D
+        if path.startswith("/api/auto-replies"):
+            return self._auto_replies(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3594,6 +3614,25 @@ def test_13s_a_suggestion_of_another_agency_fails_the_matrix(monkeypatch):
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("REPLY_SUGGESTIONS-messaggio-altrui-A-B") for i in falliti), falliti
+
+
+def test_13t_auto_replies_are_certified_rejections_only(monkeypatch):
+    """BLOCCO-4D: la sezione AUTO_REPLIES gira e ogni prova e' un PASS:
+    3 rotte anonime + 3 Basic + 3 domande per agenzia; nessun giro eseguito."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("AUTO_REPLIES-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 3 + 3 + 3 * 2, righe
+
+
+def test_13u_an_auto_reply_conversation_of_another_agency_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="auto_replies"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("AUTO_REPLIES-conversazione-altrui-A-B") for i in falliti), falliti
 
 
 def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):

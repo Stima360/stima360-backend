@@ -36,3 +36,14 @@ def properties_by_codes(cur, agency_id: int, codes: list[str]) -> list[dict]:
                 f"AND upper(regexp_replace(p.code, '[_ ]', '-', 'g')) = ANY(%s) AND {_LIVE_CRM} ORDER BY p.id",
                 (agency_id, codes))
     return [dict(r) for r in cur.fetchall()]
+
+
+def followup_assigned(cur, agency_id: int, contact_id: int | None) -> bool:
+    """BLOCCO-4D: esiste un'attivita' APERTA e ASSEGNATA a qualcuno per il
+    contatto? Solo allora un testo puo' promettere che l'agente ricontattera'."""
+    if contact_id is None:
+        return False
+    cur.execute("SELECT 1 FROM tasks t WHERE t.agency_id = %s AND t.contact_id = %s "
+                "AND t.status IN ('open', 'in_progress') AND NULLIF(btrim(t.assigned_to), '') IS NOT NULL LIMIT 1",
+                (agency_id, contact_id))
+    return cur.fetchone() is not None
