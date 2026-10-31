@@ -85,8 +85,10 @@ def _view(row: dict) -> dict:
     out["simulation"] = row["provider"] == providers.SIMULATED
     env = row.get("provider_environment")
     out["environment_label"] = ENVIRONMENT_LABELS.get(env, env)
-    # una firma VALIDA solo da un fornitore reale, nel suo ambiente reale: una
-    # firma dell'ambiente di prova (sandbox) resta di prova
+    # condizione TECNICA (non legale): firmata presso un fornitore reale, nel
+    # suo ambiente reale. Una firma dell'ambiente di prova (sandbox) resta di
+    # prova. La validita' legale dipende dal tipo di firma, dal fornitore e dal
+    # documento: non la stabilisce questo campo (vedi BLOCCO-5_FIRMA_FORNITORI)
     out["valid_signature"] = (row["status"] == "signed" and row["provider"] != providers.SIMULATED
                               and env == "production")
     out["has_document"] = row.get("received_document_sha256") is not None

@@ -5,8 +5,9 @@
 -- tutte dell'adattatore `simulated` e prendono l'ambiente 'simulation'.
 --
 --   signature_requests.provider_environment   'simulation' | 'sandbox' |
---       'production'. Una firma VALIDA esiste solo in 'production': una firma
---       ottenuta nell'ambiente di prova di un fornitore resta di prova.
+--       'production'. Solo in 'production' una richiesta puo' contare come
+--       firma: e' una condizione TECNICA, non una prova di validita' legale.
+--       Una firma ottenuta nell'ambiente di prova di un fornitore resta di prova.
 --       `simulated` <-> 'simulation' (vincolo). Immutabile.
 --   signature_requests.signature_level        'ses' | 'aes' | 'qes', come
 --       DICHIARATO dal fornitore per una richiesta firmata (mai dedotto).

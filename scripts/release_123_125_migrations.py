@@ -50,7 +50,7 @@ NEW = {
         "60928f8a41d8dad4c410d81bbacedc76815ab91c0b108395864b036b3785eaf7",
         "70e6c80f558cc3d84000deb119bc7f64bc22bc4e0d39cbc5d019f3495875070b"),
     "125_signature_provider_readiness": (
-        "2047ee3e160b6a586e3fba1bf5058975bab68c95a31b90f1fe227eaa15cdc888",
+        "18ae7e31d956bf1d17c25836221df17b7c4eddbef00e0f33307d3cd7f4e7ea8f",
         "392f97873c1d7e55470e749d57e756cb80a264d945a4dfd9d595042da8fb26fd"),
 }
 TABLES = ("whatsapp_auto_reply_dispatches", "contact_do_not_contact", "signature_provider_events")

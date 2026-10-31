@@ -72,7 +72,10 @@ export function signatureLine(r) {
   if (r.simulation) parts.unshift('SIMULAZIONE — nessuna firma valida');
   // BLOCCO-5: una firma dell'ambiente di prova del fornitore non e' valida
   else if (r.provider_environment === 'sandbox') parts.unshift('AMBIENTE DI PROVA DEL FORNITORE — nessuna firma valida');
-  if (r.status === 'signed') parts.push(r.valid_signature ? `firma valida (${(r.signature_level || '').toUpperCase()})` : 'firma NON valida');
+  // condizione tecnica, non giudizio legale
+  if (r.status === 'signed') parts.push(r.valid_signature
+    ? `firmata nell'ambiente reale del fornitore (livello dichiarato: ${(r.signature_level || '').toUpperCase()})`
+    : 'firma di prova, non utilizzabile');
   return parts.join(' · ');
 }
 
