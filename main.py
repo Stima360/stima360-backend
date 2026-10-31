@@ -94,6 +94,8 @@ from reply_suggestions.router import router as reply_suggestions_router
 from auto_replies.router import router as auto_replies_router
 # BLOCCO-6A: fogli visita (`/api/visit-sheets`).
 from visit_sheets.router import router as visit_sheets_router
+# BLOCCO-6B: richieste di firma (`/api/signature-requests`), oggi solo adattatore simulato.
+from esign.router import router as esign_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
@@ -227,6 +229,8 @@ app.include_router(reply_suggestions_router, dependencies=[Depends(require_authe
 app.include_router(auto_replies_router, dependencies=[Depends(require_authenticated_operator)])
 # BLOCCO-6A: stesso montaggio; visibilita' dell'Agenda, nessuna pubblicazione al proprietario.
 app.include_router(visit_sheets_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-6B: stesso montaggio; nessuna firma valida finche' non si integra un fornitore reale.
+app.include_router(esign_router, dependencies=[Depends(require_authenticated_operator)])
 # P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.

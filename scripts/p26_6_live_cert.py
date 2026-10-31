@@ -768,6 +768,17 @@ DOMAINS = (
              "nessun foglio generato",
     ),
     Domain(
+        "SIGNATURE_REQUESTS", "/api/signature-requests",
+        # BLOCCO-6B. SOLO RIFIUTI: la matrice non crea richieste di firma. Un
+        # foglio inesistente o altrui -> 404; un campo ignoto -> 422; anonimo e
+        # Basic -> 401.
+        certifier="signature_requests",
+        depends_on=None,
+        api_delete=False,
+        note="due rotte sondate: anonimo e Basic -> 401, foglio altrui -> 404, corpo chiuso -> 422, "
+             "nessuna richiesta creata",
+    ),
+    Domain(
         "AUTO_REPLIES", "/api/auto-replies",
         # BLOCCO-4D. SOLO RIFIUTI: la matrice non fa MAI girare il motore e non
         # cambia il modo dell'agenzia. Anonimo e Basic -> 401; la conversazione
@@ -7754,6 +7765,42 @@ def certify_visit_sheets(report, http, cert, domain, jars, owned, context) -> No
         risposta = http.request("GET", f"{base}?property_id={suo}", jar=jars[etichetta])
         report.check(f"VISIT_SHEETS-elenco-{etichetta}-non-vede-{altro}", risposta.status in (404, 503),
                      f"{etichetta}: GET {base}?property_id=<immobile di {altro}> -> {risposta.status} (atteso 404)")
+
+
+SIGNATURE_REQUESTS_OPERAZIONI = (("GET", "?visit_sheet_id=999999999"), ("POST", ""))
+
+
+def certify_signature_requests(report, http, cert, domain, jars, owned, context) -> None:
+    """SIGNATURE_REQUESTS (BLOCCO-6B): nessuna richiesta creata dalla matrice.
+
+        anonimo, Basic                                -> 401 (mount)
+        GET  ?visit_sheet_id=<inesistente>            -> 404 (o 503 senza la 122), A->B e B->A
+        POST con un campo ignoto (agency_id)          -> 422 (corpo chiuso)
+    """
+    import uuid as _uuid
+
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in SIGNATURE_REQUESTS_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = None if metodo == "GET" else {}
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"SIGNATURE_REQUESTS-anonimo-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"SIGNATURE_REQUESTS-basic-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        valore = (context.get("agencies") or {}).get(altro)
+        agenzia_altra = valore.get("id") if isinstance(valore, dict) else valore
+        risposta = http.request("GET", f"{base}?visit_sheet_id=999999999", jar=jars[etichetta])
+        report.check(f"SIGNATURE_REQUESTS-foglio-{etichetta}-non-vede-{altro}", risposta.status in (404, 503),
+                     f"{etichetta}: GET {base}?visit_sheet_id=999999999 -> {risposta.status} (atteso 404)")
+        risposta = http.request("POST", base, jar=jars[etichetta], payload={
+            "visit_sheet_id": 999999999, "signer_name": "x", "signer_contact": "x@x.invalid",
+            "idempotency_key": str(_uuid.uuid4()), "agency_id": agenzia_altra})
+        report.check(f"SIGNATURE_REQUESTS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: POST {base} con agency_id di {altro} -> {risposta.status} (atteso 422)")
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:

@@ -76,7 +76,8 @@ PASSWORD = "Blocco2c-prova-locale!"
 # SENTINELLA AGGIORNATA DA BLOCCO-4D/5A: la 119 (simulazione delle risposte automatiche) e la 120
 # (prenotazione online delle visite) si aggiungono in coda.
 NUOVE = ("115_agency_logos", "116_property_valuations", "117_property_valuation_pdfs", "118_whatsapp_inbound",
-         "119_whatsapp_auto_reply_simulation", "120_property_visit_booking", "121_visit_sheets")
+         "119_whatsapp_auto_reply_simulation", "120_property_visit_booking", "121_visit_sheets",
+         "122_signature_requests")
 BASE = {"characteristics": "Trilocale sintetico al secondo piano.",
         "surface": {"value": "85", "kind": "commerciale", "source": "planimetria"},
         "rationale": "Motivazione sintetica: stato buono, zona servita.",

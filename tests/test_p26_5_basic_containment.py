@@ -387,6 +387,8 @@ TENANT_PREFIXES = (
     "/api/visit-booking-links",
     # SENTINELLA AGGIORNATA DA BLOCCO-6A: i fogli visita (visibilita' dell'Agenda).
     "/api/visit-sheets",
+    # SENTINELLA AGGIORNATA DA BLOCCO-6B: le richieste di firma (oggi solo simulate).
+    "/api/signature-requests",
 )
 
 

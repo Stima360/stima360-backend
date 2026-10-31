@@ -2208,6 +2208,21 @@ class FakeHttp(cert.HttpProbe):
                 return self._reply(method, path, 200, b'{"items": []}')
         return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
 
+    def _signature_requests(self, method, path, agency, payload):
+        """BLOCCO-6B. Il doppio di `/api/signature-requests`: corpo chiuso
+        (modello VERO), foglio inesistente 404. Rotto `isolation`: l'elenco
+        risponde 200 per un foglio non suo, e la matrice deve fallire."""
+        from esign.router import CreateRequest
+
+        if method == "POST":
+            try:
+                CreateRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+        if self._broken("isolation", "signature_requests"):
+            return self._reply(method, path, 200, b'{"items": []}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"SHEET_NOT_FOUND"}}')
+
     def _inbound_messages(self, method, path, agency, payload):
         """BLOCCO-4A. Il doppio di `/api/inbound-messages`: elenco della sola
         agenzia della sessione, corpo dell'associazione chiuso (modello VERO).
@@ -2639,6 +2654,10 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA BLOCCO-4C
         if path.startswith("/api/reply-suggestions"):
             return self._reply_suggestions(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-6B
+        if path.startswith("/api/signature-requests"):
+            return self._signature_requests(method, path, agency, payload)
 
         # SENTINELLA AGGIORNATA DA BLOCCO-6A
         if path.startswith("/api/visit-sheets"):
@@ -3714,6 +3733,23 @@ def test_13y_visit_sheets_of_another_agency_fail_the_matrix(monkeypatch):
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("VISIT_SHEETS-elenco-A-non-vede-B") for i in falliti), falliti
+
+
+def test_13z_signature_requests_are_certified_rejections_only(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("SIGNATURE_REQUESTS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 4 + 2 * 2, righe
+
+
+def test_13za_a_signature_request_of_another_agency_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="signature_requests"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("SIGNATURE_REQUESTS-foglio-A-non-vede-B") for i in falliti), falliti
 
 
 def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):

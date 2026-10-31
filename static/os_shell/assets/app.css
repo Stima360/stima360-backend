@@ -1713,3 +1713,6 @@ a.census-unit-main { text-decoration: none; }
 .visit-sheets h3 { margin: 0; font-size: 15px; }
 .visit-sheets-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
 .visit-sheet-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; }
+/* BLOCCO-6B: richieste di firma (simulazione). */
+.visit-sign { display: grid; gap: 4px; padding-left: 12px; border-left: 2px dashed var(--border); }
+.visit-sign-form { display: grid; gap: 6px; max-width: 420px; }
