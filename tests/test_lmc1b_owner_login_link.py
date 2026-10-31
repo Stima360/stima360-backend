@@ -17,6 +17,10 @@ Mappa:
 
 from __future__ import annotations
 
+from tests.migration_inventory import latest_check_values  # noqa: E402
+
+from tests.migration_inventory import APPROVED_VERSIONS, approved_series  # noqa: E402,F401
+
 import logging
 import re
 from pathlib import Path
@@ -394,7 +398,9 @@ def test_e1_il_reason_code_esiste_nell_enum():
     # `appointment_reminder` (gate A32-0/A32-0B). Il conteggio resta esatto:
     # un undicesimo valore farebbe ancora fallire.
     assert communication_enums.REASON_APPOINTMENT_REMINDER == "appointment_reminder"
-    assert len(communication_enums.REASON_CODES) == 10
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: non un conteggio fisso ma l'uguaglianza
+    # esatta con l'ULTIMO CHECK della serie approvata (ogni valore in piu' o in meno fallisce).
+    assert communication_enums.REASON_CODES == latest_check_values('communication_messages_reason_code_chk')
 
 
 def test_e2_gli_altri_reason_code_sono_intatti():
@@ -508,7 +514,8 @@ def test_e3_la_067_esiste_ed_e_conforme_al_runner(runner):
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: poi la 093 (PDF privato della stima, F07) e la 094 (ricevute degli invii pubblici, F04); la 094 e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
-    assert numeri[-1] == 95 and numeri[-2] == 94 and numeri[-3] == 93 and numeri[-4] == 92 and numeri[-5] == 91 and numeri[-6] == 90 and numeri[-7] == 89 and numeri[-8] == 88 and numeri[-9] == 87 and numeri[-10] == 86 and numeri[-11] == 85 and numeri[-12] == 84 and numeri[-13] == 83 and numeri[-14] == 82 and numeri[-15] == 81 and numeri[-16] == 80 and numeri[-17] == 79 and numeri[-18] == 78 and numeri[-19] == 77 and numeri[-20] == 76, numeri[-4:]
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: la serie esatta e contigua sta in tests/migration_inventory.py
+    approved_series()
 
 
 def test_e4_la_up_altera_solo_il_check_del_reason_code(runner):
@@ -549,7 +556,10 @@ def test_e6_l_enum_e_il_check_effettivo_coincidono(runner):
         r"CONSTRAINT communication_messages_reason_code_chk\s*CHECK \(([^)]*\))",
         runner.strip_sql_comments(up_064) + runner.strip_sql_comments(up_067)
         + runner.strip_sql_comments(up_079))[-1]
-    assert set(re.findall(r"'([a-z_0-9]+)'", ultimo)) == communication_enums.REASON_CODES
+    assert "owner_login_link" in set(re.findall(r"'([a-z_0-9]+)'", ultimo))
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: dopo la 079 il CHECK e' stato ridefinito
+    # (097, 108, 110, 123): l'enum si confronta con l'ULTIMA definizione della serie approvata.
+    assert latest_check_values('communication_messages_reason_code_chk') == communication_enums.REASON_CODES
 
 
 # ---------------------------------------------------------------------------

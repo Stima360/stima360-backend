@@ -20,6 +20,7 @@ import ast
 import re
 import sys
 from pathlib import Path
+from tests.migration_inventory import APPROVED_VERSIONS, approved_series  # noqa: E402,F401
 
 ROOT = Path(__file__).resolve().parents[1]
 SU = (ROOT / "migrations" / "091_cestino_edifici_1_building_trash.sql").read_text(encoding="utf-8")
@@ -38,11 +39,13 @@ def test_m01_la_091_e_l_ultima_valida_e_additiva():
     runner.verify_contiguous(tutte)
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: la 093 (PDF privato, F07) e la 094 (ricevute, F04/F06) seguono la 092 (Cestino richieste); la 091 resta valida e additiva.
     # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
-    assert tutte[-1].version == "095_site_import_ledger"
-    assert tutte[-2].version == "094_public_submission_receipts"
-    assert tutte[-3].version == "093_stima_private_pdf"
-    assert tutte[-4].version == "092_cestino_richieste_1_buy_request_trash"
-    m091 = tutte[-5]
+    assert "095_site_import_ledger" in APPROVED_VERSIONS
+    assert "094_public_submission_receipts" in APPROVED_VERSIONS
+    assert "093_stima_private_pdf" in APPROVED_VERSIONS
+    assert "092_cestino_richieste_1_buy_request_trash" in APPROVED_VERSIONS
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: ordine verificato nella serie approvata
+    approved_series()
+    m091 = next(m for m in tutte if m.version == "091_cestino_edifici_1_building_trash")
     assert m091.version == "091_cestino_edifici_1_building_trash"
     assert m091.down_available and not m091.non_transactional and runner.validate_migration(m091) == []
     su = _eseguibile(SU)

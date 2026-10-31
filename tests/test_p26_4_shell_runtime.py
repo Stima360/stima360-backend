@@ -265,6 +265,9 @@ byId['login-form'].appendChild(submit);
 globalThis.document = {
   getElementById: (id) => byId[id] || null,
   createElement: (tag) => new El(tag),
+  // BLOCCO 1 PRE-COLLAUDO: `main.js` disegna le icone della sidebar con
+  // createElementNS (SVG); lo stub condiviso lo rende come un nodo normale.
+  createElementNS: (_ns, tag) => new El(tag),
   addEventListener() {},
   body: new El('body'),
 };

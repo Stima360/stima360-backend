@@ -26,6 +26,8 @@ finta. La catena vera - stima, tick, M1 in coda, dispatch, email - e' in
 """
 from __future__ import annotations
 
+from tests import design_doc  # noqa: E402
+
 import hashlib
 import importlib
 import re
@@ -653,7 +655,8 @@ def test_28_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
 
     tutti_nuovi = FILE_NUOVI | NUOVI_3G | NUOVI_FGS | NUOVI_A30
     tutti_modificati = FILE_MODIFICATI | MOD_3G | MOD_FGS | MOD_A30 | tutti_nuovi
-    assert nuovi - tutti_nuovi == {"P29_2_0_COMMUNICATION_DESIGN.md"}, \
+    # BLOCCO 1 PRE-COLLAUDO: il documento P29-2.0 compare solo dove la copia locale esiste
+    assert nuovi - tutti_nuovi == ({"P29_2_0_COMMUNICATION_DESIGN.md"} if design_doc.present() else set()), \
         sorted(nuovi - tutti_nuovi)
     assert modificati <= tutti_modificati, \
         sorted(modificati - tutti_modificati)
@@ -669,6 +672,7 @@ def test_28_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
 
 
 def test_29_il_documento_di_design_non_e_stato_toccato():
+    design_doc.require()  # BLOCCO 1 PRE-COLLAUDO: documento mai versionato
     percorso = ROOT / "P29_2_0_COMMUNICATION_DESIGN.md"
     assert hashlib.md5(percorso.read_bytes()).hexdigest() == \
         "37b3066fc5cf41b905964e1f31fe93f4"

@@ -18,6 +18,8 @@ Mappa:
 
 from __future__ import annotations
 
+from tests.migration_inventory import APPROVED_VERSIONS, approved_series  # noqa: E402,F401
+
 import ast
 import hashlib
 import inspect
@@ -715,34 +717,8 @@ def test_g2_nessuna_migration_in_lmc3():
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: poi la 092 (Cestino richieste); la finestra si allarga di uno.
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: poi la 093 (PDF privato della stima, F07) e la 094 (ricevute degli invii pubblici, F04); la finestra si allarga di due.
     # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
-    assert migrazioni[-28:] == ["068_lmc10_owner_home_overrides.sql",
-                               "069_lmc12_owner_home_notifications.sql",
-                               "070_lmc15_acquisition_bridge.sql",
-                               "071_p29_3_journey_automation.sql",
-                               "072_a30_1_appointments.sql",
-                               "073_a30_2p_lmc15_facade.sql",
-                               "074_a30_9a_calendar_sync.sql",
-                               "075_a30_10_calendar_inbound.sql",
-                               "076_a30_11_working_hours.sql",
-                               "077_a30_12_public_booking.sql",
-                               "078_a31_2_buyer_visits_projection.sql",
-                               "079_a32_1_appointment_reminders.sql",
-                               "080_crm_ops_2_property_form.sql",
-                               "081_crm_ops_3_acquisitions.sql",
-                               "082_crm_ops_4_property_interactions.sql",
-                               "083_censimento_1_buildings_units.sql",
-                               "084_delete_arch_1a_mistakes.sql",
-                               "085_delete_arch_2b1_property_trash.sql",
-                               "086_delete_arch_2b2_property_trash_guards.sql",
-                               "087_catalogo_canonico_1_site_attributes.sql",
-                               "088_catalogo_canonico_1b_site_inbox.sql",
-                               "089_pertinenze_1_unit_nature.sql",
-                               "090_cestino_contatti_1_contact_trash.sql",
-                               "091_cestino_edifici_1_building_trash.sql",
-                               "092_cestino_richieste_1_buy_request_trash.sql",
-                               "093_stima_private_pdf.sql",
-                               "094_public_submission_receipts.sql",
-                               "095_site_import_ledger.sql"], migrazioni[-28:]
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: la serie esatta e contigua sta in tests/migration_inventory.py
+    approved_series()
     # SENTINELLA AGGIORNATA DA CENSIMENTO-1: la 083 crea `buildings` e
     # `property_accessories` e aggiunge a `properties` le colonne NULLABLE del
     # censimento (edificio, pertinenza, catasto, record_kind); additiva, nessun

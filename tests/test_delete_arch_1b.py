@@ -9,6 +9,7 @@ from __future__ import annotations
 import inspect
 import subprocess
 from pathlib import Path
+from tests.migration_inventory import APPROVED_VERSIONS, approved_series  # noqa: E402,F401
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -23,24 +24,25 @@ def test_s01_nessuna_migration_nuova():
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 087 e' degli attributi del sito, nominata; nessuna oltre.
     # SENTINELLA AGGIORNATA DA CATALOGO-CANONICO-1: la 088 (ricezione degli invii del sito), nominata; nessuna oltre.
     # SENTINELLA AGGIORNATA DA PERTINENZE-1: poi la 089 (natura di pertinenza), che ora e' l'ultima.
-    assert runner.discover_migrations()[-12].version == "084_delete_arch_1a_mistakes"
-    assert runner.discover_migrations()[-11].version == "085_delete_arch_2b1_property_trash"
-    assert runner.discover_migrations()[-10].version == "086_delete_arch_2b2_property_trash_guards"
-    assert runner.discover_migrations()[-9].version == "087_catalogo_canonico_1_site_attributes"
-    assert runner.discover_migrations()[-8].version == "088_catalogo_canonico_1b_site_inbox"
+    assert "084_delete_arch_1a_mistakes" in APPROVED_VERSIONS
+    assert "085_delete_arch_2b1_property_trash" in APPROVED_VERSIONS
+    assert "086_delete_arch_2b2_property_trash_guards" in APPROVED_VERSIONS
+    assert "087_catalogo_canonico_1_site_attributes" in APPROVED_VERSIONS
+    assert "088_catalogo_canonico_1b_site_inbox" in APPROVED_VERSIONS
     # SENTINELLA AGGIORNATA DA CESTINO-CONTATTI-1: poi la 090 (Cestino contatti), che ora e' l'ultima.
-    assert runner.discover_migrations()[-7].version == "089_pertinenze_1_unit_nature"
+    assert "089_pertinenze_1_unit_nature" in APPROVED_VERSIONS
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: poi la 091 (Cestino edifici), che ora e' l'ultima.
-    assert runner.discover_migrations()[-6].version == "090_cestino_contatti_1_contact_trash"
-    assert runner.discover_migrations()[-5].version == "091_cestino_edifici_1_building_trash"
+    assert "090_cestino_contatti_1_contact_trash" in APPROVED_VERSIONS
+    assert "091_cestino_edifici_1_building_trash" in APPROVED_VERSIONS
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: poi la 092 (Cestino richieste), che ora e' l'ultima.
-    assert runner.discover_migrations()[-4].version == "092_cestino_richieste_1_buy_request_trash"
+    assert "092_cestino_richieste_1_buy_request_trash" in APPROVED_VERSIONS
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: poi la 093 (PDF privato, F07) e la 094 (ricevute F04/F06), che ora e' l'ultima.
-    assert runner.discover_migrations()[-3].version == "093_stima_private_pdf"
+    assert "093_stima_private_pdf" in APPROVED_VERSIONS
     # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
-    assert runner.discover_migrations()[-1].version == "095_site_import_ledger"
-    assert runner.discover_migrations()[-2].version == "094_public_submission_receipts"
-    assert not list((ROOT / "migrations").glob("096*"))
+    assert "095_site_import_ledger" in APPROVED_VERSIONS
+    assert "094_public_submission_receipts" in APPROVED_VERSIONS
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: ordine verificato nella serie approvata
+    approved_series()
 
 
 def test_s02_codice_canonico_e_filtri():

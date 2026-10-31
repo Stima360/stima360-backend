@@ -103,16 +103,20 @@ def test_02_agenda_e_una_voce_normale_di_sections_una_sola_volta():
     # (palazzine ed edifici con le loro unita'). L'elenco resta esatto.
     # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA: "zona" (la mappa del territorio) subito
     # prima di "edifici". L'elenco resta esatto.
-    assert re.findall(r"name:\s*'([a-z]+)'", sezioni) == [
-        "oggi", "agenda", "contatti", "zona", "edifici", "immobili", "venditori", "acquisizioni", "incarichi", "acquirenti",
-        "abbinamenti", "attivita", "automazioni", "cestino"]
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: "stime" e "stime-dettagliate" dopo
+    # "contatti", "messaggi" (BLOCCO-4A) prima di "cestino". Il nome puo' avere un trattino.
+    assert re.findall(r"name:\s*'([a-z-]+)'", sezioni) == [
+        "oggi", "agenda", "contatti", "stime", "stime-dettagliate", "zona", "edifici", "immobili", "venditori",
+        "acquisizioni", "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni", "messaggi", "cestino"]
     assert sezioni.count("{ name: 'agenda', label: 'Agenda' },") == 1
     # la costante del workaround non esiste piu', in nessuna forma
     assert "SEZIONE_AGENDA" not in main
     assert "SECTIONS.push" not in main
     assert len(re.findall(r"name:\s*'agenda'", main)) == 1
     # il titolo passa dalla stessa ricerca di prima dell'Agenda
-    assert ("const active = [...SECTIONS, SEZIONE_RETE].find((s) => s.name === name);"
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: la stessa ricerca, estesa
+    # alle sezioni Voce e Agenzia (fuori dalla sidebar) e con il nome normalizzato.
+    assert ("const active = [...SECTIONS, SEZIONE_RETE, SEZIONE_VOCE, SEZIONE_AGENZIA].find((s) => s.name === nome);"
             in main)
     # la home tenant resta la prima voce, e la prima voce resta "Oggi"
     assert "const ROTTA_TENANT_INIZIALE = SECTIONS[0].name;" in main
@@ -128,6 +132,9 @@ def test_03_main_js_contiene_solo_import_voce_e_rotta():
         "import { renderAgenda } from './views/agenda/agenda-page.js';",
         "{ name: 'agenda', label: 'Agenda' },",
         "registerRoute('agenda', (container, params = []) => renderAgenda(container, params));",
+        # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: l'icona SVG della voce
+        # nella sidebar (solo tracciati grafici, nessuna logica dell'Agenda).
+        "agenda: ['M4 5h16v16H4z', 'M4 9h16', 'M8 3v4', 'M16 3v4', 'M8 13h3', 'M14 13h2', 'M8 17h3'],",
     ]
     # nessun riferimento all'API dal bootstrap
     assert "appointments" not in _testo(MAIN_JS)
@@ -918,9 +925,9 @@ def test_s1_un_tenant_vede_agenda_una_volta_subito_dopo_oggi(shell_staged):
     # discreta. L'elenco resta esatto.
     # SENTINELLA AGGIORNATA DA EDIFICI-1: "edifici" subito prima di "immobili".
     # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA: "zona" (la mappa) subito prima di "edifici".
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "zona", "edifici", "immobili", "venditori", "acquisizioni",
-                                "incarichi", "acquirenti", "abbinamenti", "attivita",
-                                "automazioni", "cestino"], out["navRoutes"]
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO (stime, stime-dettagliate, messaggi)
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "stime", "stime-dettagliate", "zona", "edifici", "immobili", "venditori", "acquisizioni",
+                                "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni", "messaggi", "cestino"], out["navRoutes"]
     assert out["navRoutes"].count("agenda") == 1
     assert out["nav"].count("Agenda") == 1
     # Rete resta assente per un tenant
@@ -953,8 +960,11 @@ def test_s3_agenda_aperta_a_mano_ha_titolo_agenda_e_voce_attiva(shell_staged):
     # la pagina parla solo con /api/appointments (oltre alla sessione) - E,
     # da A30-9B (in un modo dichiarato: e' esattamente cio' che quel gate
     # aggiunge), con `/api/calendar/google` per il pannello di stato.
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: all'avvio la Shell chiede anche
+    # `/api/voice/status` (GET, sola lettura) per decidere se mostrare la voce di menu.
     assert [u for u in out["urls"] if not u.startswith(
-        ("/api/operator-auth", "/api/appointments", "/api/calendar/google"))] == [], out["urls"]
+        ("/api/operator-auth", "/api/appointments", "/api/calendar/google"))
+        and u != "/api/voice/status"] == [], out["urls"]
     assert any(u.startswith("/api/appointments") for u in out["urls"]), out["urls"]
     assert any(u.startswith("/api/calendar/google") for u in out["urls"]), out["urls"]
 

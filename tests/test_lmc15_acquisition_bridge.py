@@ -18,6 +18,8 @@ corrispondenza non e' una relazione, e LMC-15A lo ha messo per iscritto.
 """
 from __future__ import annotations
 
+from tests import design_doc  # noqa: E402
+
 import ast
 import inspect
 import subprocess
@@ -25,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from tests.migration_inventory import APPROVED_VERSIONS, approved_series  # noqa: E402,F401
 
 ROOT = Path(__file__).resolve().parents[1]
 MIGRAZIONE = ROOT / "migrations" / "070_lmc15_acquisition_bridge.sql"
@@ -421,7 +424,8 @@ def test_19_la_070_e_valida_per_il_runner_e_in_coda_alla_serie():
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: poi la 093 (PDF privato della stima, F07) e la 094 (ricevute degli invii pubblici, F04); la 094 e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
-    assert numeri[-1] == 95 and numeri[-2] == 94 and numeri[-3] == 93 and numeri[-4] == 92 and numeri[-5] == 91 and numeri[-6] == 90 and numeri[-7] == 89 and numeri[-8] == 88 and numeri[-9] == 87 and numeri[-10] == 86 and numeri[-11] == 85 and numeri[-12] == 84 and numeri[-13] == 83 and numeri[-14] == 82 and numeri[-15] == 81 and numeri[-16] == 80 and numeri[-17] == 79 and numeri[-18] == 78 and numeri[-19] == 77 and numeri[-20] == 76 and numeri[-21] == 75 and numeri[-22] == 74
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: la serie esatta e contigua sta in tests/migration_inventory.py
+    approved_series()
     assert len(numeri) == len(set(numeri))
 
 
@@ -925,12 +929,14 @@ def test_41_i_file_toccati_sono_solo_quelli_dichiarati():
              - MODIFICATI_A30_M)
     assert fuori == set(), sorted(fuori)
     assert not any(n.startswith("migrations/070_") for n in modificati | nuovi)
-    assert "P29_2_0_COMMUNICATION_DESIGN.md" in nuovi
+    # BLOCCO 1 PRE-COLLAUDO: il documento P29-2.0 compare solo dove la copia locale esiste
+    assert ("P29_2_0_COMMUNICATION_DESIGN.md" in nuovi) == design_doc.present()
 
 
 def test_42_il_documento_di_p29_2_0_resta_fuori_dall_indice():
     """Un vincolo permanente del progetto, ricordato qui perche' LMC-15 e' la
     prima fase che tocca `main.py` dopo che e' stato posto."""
+    design_doc.require()  # BLOCCO 1 PRE-COLLAUDO: documento mai versionato
     stato = subprocess.run(
         ["git", "--no-optional-locks", "status", "--porcelain", "--",
          "P29_2_0_COMMUNICATION_DESIGN.md"],

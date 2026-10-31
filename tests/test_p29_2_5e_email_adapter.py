@@ -30,6 +30,7 @@ from communication import dispatcher
 from communication.providers import base as provider_base
 from communication.providers import email_smtp
 from communication.providers import null as provider_null
+from tests.migration_inventory import APPROVED_VERSIONS, approved_series  # noqa: E402,F401
 
 ROOT = Path(__file__).resolve().parents[1]
 PACCHETTO = ROOT / "communication"
@@ -468,7 +469,8 @@ def test_N4_nessuna_migration_nuova():
     # SENTINELLA AGGIORNATA DA CESTINO-EDIFICI-1: la 091 (Cestino edifici), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: 093 (PDF privato, F07) e 094 (ricevute, F04/F06), additive, seguono la 092 (Cestino richieste).
     # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
-    assert numeri[-20:] == list(range(76, 96)), "la coda contiene migrazioni diverse da quelle autorizzate fino alla 095"
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: la serie esatta e contigua sta in tests/migration_inventory.py
+    approved_series()
     assert 64 in numeri
 
 

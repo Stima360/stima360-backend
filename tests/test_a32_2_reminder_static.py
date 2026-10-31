@@ -12,6 +12,8 @@ nessuna 080, il cron chiama i promemoria prima del dispatch e mai per WhatsApp.
 """
 from __future__ import annotations
 
+from tests.migration_inventory import APPROVED_VERSIONS, approved_series  # noqa: E402,F401
+
 import ast
 import re
 import subprocess
@@ -231,7 +233,8 @@ def test_s10_nessuna_migration_080():
     # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
     assert [m for m in migrazioni if m.startswith("095")] == [
         "095_site_import_ledger.sql", "095_site_import_ledger_down.sql"]
-    assert migrazioni[-1] == "095_site_import_ledger_down.sql"
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: la serie esatta e contigua sta in tests/migration_inventory.py
+    approved_series()
     assert [m for m in migrazioni if m.startswith("079")] == [
         "079_a32_1_appointment_reminders.sql", "079_a32_1_appointment_reminders_down.sql"]
 

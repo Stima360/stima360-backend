@@ -11,6 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from tests.migration_inventory import APPROVED_VERSIONS, approved_series  # noqa: E402,F401
 
 ROOT = Path(__file__).resolve().parents[1]
 SU = (ROOT / "migrations/072_a30_1_appointments.sql").read_text(encoding="utf-8")
@@ -105,7 +106,8 @@ def test_01_la_072_e_valida_per_il_runner_ed_e_in_coda_alla_serie():
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: poi la 093 (PDF privato della stima, F07) e la 094 (ricevute degli invii pubblici, F04); la 094 e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
-    assert numeri[-1] == 95 and numeri[-2] == 94 and numeri[-3] == 93 and numeri[-4] == 92 and numeri[-5] == 91 and numeri[-6] == 90 and numeri[-7] == 89 and numeri[-8] == 88 and numeri[-9] == 87 and numeri[-10] == 86 and numeri[-11] == 85 and numeri[-12] == 84 and numeri[-13] == 83 and numeri[-14] == 82 and numeri[-15] == 81 and numeri[-16] == 80 and numeri[-17] == 79 and numeri[-18] == 78 and numeri[-19] == 77 and numeri[-20] == 76 and numeri[-21] == 75 and numeri[-22] == 74
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: la serie esatta e contigua sta in tests/migration_inventory.py
+    approved_series()
     assert len(numeri) == len(set(numeri))
 
 

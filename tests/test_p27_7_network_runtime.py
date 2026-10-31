@@ -183,7 +183,9 @@ TENANT = {
 }
 
 PLATFORM_ME = {
-    "user_id": 1, "is_platform_admin": True, "agency_id": None,
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: la Rete e' del Super Admin
+    # generale designato (`components/network.js`, `platformMe.is_super_admin`).
+    "user_id": 1, "is_platform_admin": True, "is_super_admin": True, "agency_id": None,
     "session_expires_at": "2030-01-01T00:00:00Z",
 }
 VIETATO = {"status": 403, "body": {"detail": "Superficie riservata all'amministrazione di piattaforma."}}
@@ -323,8 +325,10 @@ def test_a3_an_anonymous_visitor_has_no_network_entry(staged):
     # di SECTIONS (discreta, in fondo); "rete" resta assente. L'elenco resta esatto.
     # SENTINELLA AGGIORNATA DA EDIFICI-1: "edifici" subito prima di "immobili".
     # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA: "zona" (la mappa) subito prima di "edifici".
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "zona", "edifici", "immobili", "venditori", "acquisizioni",
-                                "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni", "cestino"]
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: "stime" e "stime-dettagliate" dopo
+    # "contatti", "messaggi" (BLOCCO-4A) prima di "cestino"; "rete" resta assente.
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "stime", "stime-dettagliate", "zona", "edifici", "immobili", "venditori", "acquisizioni",
+                                "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni", "messaggi", "cestino"]
 
 
 def test_a4_the_entry_disappears_when_the_session_changes(staged):

@@ -543,7 +543,9 @@ def test_17_isolamento_nessuna_agenzia_nessun_authorization_solo_cookie(staged):
     fuori = {re.sub(r"\?.*", "", c["url"]) for c in out["calls"]
              if not c["url"].startswith(("/api/appointments", "/api/operator-auth",
                                           "/api/calendar/google"))}
-    assert fuori == {"/api/core/contacts", "/api/core/leads", "/api/property/properties"}
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: `/api/voice/status` e' la
+    # lettura d'avvio della Shell (voce di menu), GET e solo cookie come le altre.
+    assert fuori == {"/api/core/contacts", "/api/core/leads", "/api/property/properties", "/api/voice/status"}
     assert all(c["m"] == "GET" for c in out["calls"]
                if not c["url"].startswith("/api/appointments"))
 

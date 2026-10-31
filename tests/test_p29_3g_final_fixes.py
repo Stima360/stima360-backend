@@ -24,6 +24,8 @@ l'iscrizione che non si muove di un campo - stanno nel modulo gemello
 """
 from __future__ import annotations
 
+from tests import design_doc  # noqa: E402
+
 import hashlib
 import inspect
 import re
@@ -420,6 +422,7 @@ def test_20_i_file_toccati_sono_quelli_dichiarati_e_P29_2_0_resta_fuori():
 
 
 def test_21_il_documento_di_design_non_e_stato_toccato():
+    design_doc.require()  # BLOCCO 1 PRE-COLLAUDO: documento mai versionato
     percorso = ROOT / "P29_2_0_COMMUNICATION_DESIGN.md"
     assert hashlib.md5(percorso.read_bytes()).hexdigest() == "37b3066fc5cf41b905964e1f31fe93f4"
 

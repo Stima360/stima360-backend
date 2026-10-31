@@ -24,6 +24,8 @@ Mappa:
 
 from __future__ import annotations
 
+from tests.migration_inventory import approved_up_sql  # noqa: E402
+
 import inspect
 import re
 from pathlib import Path
@@ -31,6 +33,7 @@ from pathlib import Path
 import pytest
 
 from communication import enums, repository, scope, service
+from tests.migration_inventory import APPROVED_VERSIONS, approved_series  # noqa: E402,F401
 from communication.exceptions import (
     CommunicationError,
     ConflictError,
@@ -99,12 +102,10 @@ def dati_validi(**override):
 #: legge l'ultima definizione della serie e non la prima: confrontare l'enum con
 #: la sola 064 direbbe che il codice ha un valore di troppo, mentre e' la 064 ad
 #: avere un valore in meno.
-EMENDAMENTI = tuple(
-    (ROOT / "migrations" / f"{v}.sql").read_text(encoding="utf-8")
-    # SENTINELLA AGGIORNATA DA A32-1: la 079 e' il secondo emendamento del
-    # CHECK di `reason_code` (`appointment_reminder`, gate A32-0/A32-0B).
-    for v in ("067_lmc1b_owner_login_reason", "079_a32_1_appointment_reminders")
-)
+# SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: gli emendamenti sono TUTTE le
+# migrazioni approvate dopo la 064, nell'ordine della serie (tests/migration_inventory.py):
+# un CHECK ridefinito da una migrazione successiva non sfugge piu' al confronto.
+EMENDAMENTI = tuple(approved_up_sql(after=64))
 
 
 def valori_del_check(nome: str) -> set[str]:
@@ -580,7 +581,8 @@ def test_n7_nessuna_migration_nuova():
     # SENTINELLA AGGIORNATA DA CESTINO-RICHIESTE-1: la 092 (Cestino richieste), additiva, e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1: poi la 093 (PDF privato della stima, F07) e la 094 (ricevute degli invii pubblici, F04); la 094 e' ora l'ultima.
     # SENTINELLA AGGIORNATA DA SITE-IMPORT-1: la 095 (registro dell'importazione dal sito, site_import_records), additiva, e' ora l'ultima.
-    assert numeri[-1] == 95 and numeri[-2] == 94 and numeri[-3] == 93 and numeri[-4] == 92 and numeri[-5] == 91 and numeri[-6] == 90 and numeri[-7] == 89 and numeri[-8] == 88 and numeri[-9] == 87 and numeri[-10] == 86 and numeri[-11] == 85 and numeri[-12] == 84 and numeri[-13] == 83 and numeri[-14] == 82 and numeri[-15] == 81 and numeri[-16] == 80 and numeri[-17] == 79 and numeri[-18] == 78 and numeri[-19] == 77 and numeri[-20] == 76, "la serie si e' fermata o e' andata oltre la 087"
+    # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: la serie esatta e contigua sta in tests/migration_inventory.py
+    approved_series()
     assert 64 in numeri, "la 064 di P29-2.1 non c'e' piu'"
 
 
