@@ -358,6 +358,7 @@ def dispatch_batch(ctx_operatore, *, channel: str,
             # `sending` senza che nessuno abbia nemmeno provato a mandarli.
             try:
                 with communication_cursor(commit=True) as (_conn, cur_finale):
+                    integrations.prima_della_chiusura(cur_finale, message)
                     esito = service.finalize_sent(ctx, message["id"], token,
                                                   cur=cur_finale, **campi)
                     if esito is not None:
