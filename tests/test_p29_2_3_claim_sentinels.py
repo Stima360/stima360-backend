@@ -367,6 +367,9 @@ def test_A2_la_superficie_pubblica_e_quella_prevista():
         # SENTINELLA AGGIORNATA DA BLOCCO-4B: il claim di UN messaggio preciso,
         # per la risposta WhatsApp manuale. Stessa transizione di `claim_due`.
         "claim_message",
+        # SENTINELLA AGGIORNATA DA BLOCCO-4D/6: sola lettura degli id in coda mai
+        # presi in carico; chi li prende passa comunque da `claim_message`.
+        "queued_unclaimed",
     }, sorted(pubbliche)
 
 

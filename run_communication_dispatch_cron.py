@@ -140,6 +140,12 @@ class Config:
     #: `JourneyTickRequest`, e qui si rifiuta prima di partire invece di
     #: scoprirlo con un 422 a meta' giro.
     journey_limit: int = 500
+    #: BLOCCO-4D: il giro delle risposte automatiche WhatsApp, SOLO con
+    #: `COMMUNICATION_AUTO_REPLY_TICK=1`. Spento per impostazione predefinita:
+    #: senza la variabile il runner fa esattamente cio' che faceva prima. Anche
+    #: acceso, il motore resta fermo finche' l'ambiente (`WHATSAPP_AUTO_REPLY_MODE`)
+    #: e l'agenzia non lo consentono: questo passo lo CHIAMA, non lo attiva.
+    auto_reply_tick: bool = False
     #: Il segreto di servizio del cron (`COMMUNICATION_CRON_TOKEN`) e l'agenzia
     #: del giro (`COMMUNICATION_CRON_AGENCY_ID`). Presenti: un'identita'
     #: TECNICA, senza password di nessuna persona. Assenti: il login di prima.
@@ -216,6 +222,7 @@ def load_config() -> Config:
             _seconds("COMMUNICATION_READ_TIMEOUT_SECONDS", 120),
         ),
         _integer("COMMUNICATION_JOURNEY_TICK_LIMIT", 500, minimum=1, maximum=2000),
+        (os.getenv("COMMUNICATION_AUTO_REPLY_TICK") or "").strip() == "1",
         token,
         agency_id,
     )
@@ -241,6 +248,10 @@ CONTEGGI_PROMEMORIA = ("scanned", "due", "queued", "queued_idempotent", "not_due
 
 #: A32-2: il solo canale per cui il giro dei promemoria ha senso.
 CANALE_PROMEMORIA = "email"
+
+#: BLOCCO-4D: i conteggi che `auto-replies/tick` restituisce, per NOME.
+CONTEGGI_RISPOSTE = ("processed", "recorded", "duplicates", "queued", "sent", "suppressed", "failed",
+                     "indeterminate", "lost")
 
 
 def _log(status: str, duration_ms: int, reason: str | None = None,
@@ -334,7 +345,52 @@ def _application_failure(data: dict) -> bool:
     """
     if any(int(data.get(chiave, 0) or 0) > 0 for chiave in CONTEGGI_DI_GUASTO):
         return True
-    return _journey_failure(data) or _reminder_failure(data)
+    return _journey_failure(data) or _reminder_failure(data) or _auto_reply_failure(data)
+
+
+def _auto_reply_failure(data: dict) -> bool:
+    """BLOCCO-4D: giro delle risposte fallito, o una risposta rifiutata o con
+    esito incerto (da guardare: non viene ritentata). Assente: nessun guasto."""
+    if data.get("auto_reply_status") == TICK_FALLITO:
+        return True
+    return any(int(data.get(k, 0) or 0) > 0 for k in ("auto_reply_failed", "auto_reply_indeterminate"))
+
+
+def _auto_reply_tick(config: Config, sessione: requests.Session) -> dict:
+    """BLOCCO-4D: UN giro delle risposte automatiche, stessa sessione. Non
+    solleva; un 503 del motore non installato e' `not_migrated`."""
+    iniziato = time.monotonic()
+
+    def esito(stato, reason=None, counts=None):
+        _log("completed" if stato == TICK_COMPLETATO else
+             "skipped" if stato == TICK_NON_MIGRATA else "failed",
+             int((time.monotonic() - iniziato) * 1000), reason,
+             counts=counts, phase="auto_reply_tick", nomi=CONTEGGI_RISPOSTE)
+        return {"status": stato, "counts": counts, "reason": reason}
+
+    try:
+        try:
+            risposta = sessione.post(f"{config.base_url}/api/auto-replies/tick", timeout=config.timeout)
+        except requests.Timeout:
+            return esito(TICK_FALLITO, "timeout")
+        except requests.RequestException:
+            return esito(TICK_FALLITO, "http_or_network")
+        stato = getattr(risposta, "status_code", None)
+        if not isinstance(stato, int):
+            return esito(TICK_FALLITO, "invalid_response")
+        if stato == 503:
+            return esito(TICK_NON_MIGRATA, NON_MIGRATA)
+        if stato >= 400:
+            return esito(TICK_FALLITO, f"http_{stato}")
+        try:
+            dati = risposta.json()
+        except ValueError:
+            return esito(TICK_FALLITO, "invalid_json")
+        if not isinstance(dati, dict) or any(type(dati.get(k)) is not int or dati[k] < 0 for k in CONTEGGI_RISPOSTE):
+            return esito(TICK_FALLITO, "invalid_json")
+        return esito(TICK_COMPLETATO, counts=dati)
+    except Exception:  # noqa: BLE001 - l'isolamento e' il punto, come per le journey
+        return esito(TICK_FALLITO, "unexpected")
 
 
 def _reminder_failure(data: dict) -> bool:
@@ -532,6 +588,10 @@ def run_once(config: Config, sessione: requests.Session | None = None) -> dict:
         else:
             promemoria = {"status": TICK_SALTATO, "counts": None, "reason": "channel"}
 
+        # BLOCCO-4D: le risposte automatiche, solo se richiesto. Le manda il
+        # loro percorso dedicato (non il dispatch generico). Non solleva.
+        risposte = _auto_reply_tick(config, sessione) if config.auto_reply_tick else None
+
         try:
             risposta = sessione.post(
                 f"{config.base_url}/api/communication/dispatch",
@@ -573,6 +633,11 @@ def run_once(config: Config, sessione: requests.Session | None = None) -> dict:
         if promemoria["counts"] is not None:
             dati["reminder_errors"] = promemoria["counts"]["errors"]
             dati["reminder_queued"] = promemoria["counts"]["queued"]
+        if risposte is not None:
+            dati["auto_reply_status"] = risposte["status"]
+            if risposte["counts"] is not None:
+                for k in ("sent", "suppressed", "failed", "indeterminate"):
+                    dati[f"auto_reply_{k}"] = risposte["counts"][k]
         return dati
     finally:
         # Sempre, anche dopo un errore: una sessione abbandonata a ogni giro

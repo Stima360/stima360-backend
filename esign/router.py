@@ -14,16 +14,22 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from operator_auth.context import OperatorContext
 from operator_auth.dependencies import require_operator
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 
-from . import service
+from . import providers, service
 
 router = APIRouter(prefix="/api/signature-requests", tags=["signature-requests"])
+#: BLOCCO-5: gli eventi di un fornitore reale. Pubblico (lo chiama il
+#: fornitore), autenticato dalla firma del corpo; nessun fornitore e'
+#: configurato, quindi oggi risponde sempre 404 neutro.
+public_router = APIRouter(prefix="/api/public/esign", tags=["esign-public"])
+PROVIDER = Path(..., pattern=r"^[a-z][a-z0-9_]{1,29}$")
+MAX_EVENT_BYTES = 256 * 1024
 
 
 class CreateRequest(BaseModel):
@@ -78,3 +84,21 @@ def document(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(r
     out = _call(service.document, ctx, request_id)
     return Response(content=out["data"], media_type="application/pdf", headers={
         "Content-Disposition": f'attachment; filename="{out["filename"]}"', "Cache-Control": "no-store"})
+
+
+@router.get("/{request_id}/audit-trail")
+def audit_trail(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
+    out = _call(service.audit_trail, ctx, request_id)
+    return Response(content=out["data"], media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{out["filename"]}"', "Cache-Control": "no-store"})
+
+
+@public_router.post("/webhooks/{provider}")
+async def provider_event(request: Request, provider: str = PROVIDER):
+    raw = await request.body()
+    if len(raw) > MAX_EVENT_BYTES:
+        raise HTTPException(status_code=413, detail="Evento troppo grande")
+    try:
+        return _call(service.handle_provider_event, provider, dict(request.headers), raw)
+    except providers.InvalidEventSignature as exc:
+        raise HTTPException(status_code=401, detail="Evento non autentico") from exc

@@ -70,6 +70,12 @@ async function downloadFrom(url, filename, holder) {
 export function signatureLine(r) {
   const parts = [r.status_label, `firmatario indicato: ${r.signer_name}`];
   if (r.simulation) parts.unshift('SIMULAZIONE — nessuna firma valida');
+  // BLOCCO-5: una firma dell'ambiente di prova del fornitore non e' valida
+  else if (r.provider_environment === 'sandbox') parts.unshift('AMBIENTE DI PROVA DEL FORNITORE — nessuna firma valida');
+  // condizione tecnica, non giudizio legale
+  if (r.status === 'signed') parts.push(r.valid_signature
+    ? `firmata nell'ambiente reale del fornitore (livello dichiarato: ${(r.signature_level || '').toUpperCase()})`
+    : 'firma di prova, non utilizzabile');
   return parts.join(' · ');
 }
 
@@ -99,6 +105,11 @@ async function mountSignatures(holder, sheet) {
           });
           line.appendChild(b);
         }
+      }
+      if (r.audit_trail_sha256) {
+        const t = button('Scarica rapporto del fornitore', 'ghost', 'data-signature-audit');
+        t.addEventListener('click', () => downloadFrom(`${ESIGN}/${r.id}/audit-trail`, `rapporto-firma-richiesta-${r.id}.pdf`, box));
+        line.appendChild(t);
       }
       if (r.has_document) {
         const d = button(r.simulation ? 'Scarica ricevuta di simulazione' : 'Scarica documento', 'ghost', 'data-signature-document');

@@ -68,14 +68,15 @@ def pending_message_ids(cur, agency_id: int, since, rules_version: str, limit: i
     return [r["id"] for r in cur.fetchall()]
 
 
-def record_decision(cur, data: dict) -> dict | None:
+def record_decision(cur, data: dict, *, mode: str = "simulate") -> dict | None:
     """Inserisce la decisione; None se esiste gia' per (messaggio, versione):
-    un reinvio o un giro concorrente non la duplica."""
+    un reinvio o un giro concorrente non la duplica. `mode` e' quello in cui
+    e' stata presa ('simulate', o 'send' dalla migrazione 123)."""
     cur.execute(
         "INSERT INTO whatsapp_auto_reply_decisions (agency_id, inbound_message_id, rules_version, mode, decision, "
-        "reason_code, proposed_text, data_used, handoff) VALUES (%s, %s, %s, 'simulate', %s, %s, %s, %s, %s) "
+        "reason_code, proposed_text, data_used, handoff) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "ON CONFLICT (inbound_message_id, rules_version) DO NOTHING RETURNING *",
-        (data["agency_id"], data["inbound_message_id"], data["rules_version"], data["decision"],
+        (data["agency_id"], data["inbound_message_id"], data["rules_version"], mode, data["decision"],
          data.get("reason_code"), data.get("proposed_text"), Json(data.get("data_used") or {}),
          Json(data["handoff"]) if data.get("handoff") is not None else None))
     row = cur.fetchone()
@@ -103,3 +104,60 @@ def contact_row(cur, agency_id: int, contact_id: int) -> dict | None:
                 (contact_id, agency_id))
     row = cur.fetchone()
     return dict(row) if row else None
+
+
+# ---------------------------------------------------------------------------
+# modo d'invio (migrazione 123)
+# ---------------------------------------------------------------------------
+
+def send_installed(cur) -> bool:
+    cur.execute("SELECT to_regclass('public.whatsapp_auto_reply_dispatches') IS NOT NULL AS presente")
+    return bool(cur.fetchone()["presente"])
+
+
+def decision_exists(cur, inbound_message_id: int, rules_version: str) -> bool:
+    cur.execute("SELECT 1 FROM whatsapp_auto_reply_decisions WHERE inbound_message_id = %s AND rules_version = %s",
+                (inbound_message_id, rules_version))
+    return cur.fetchone() is not None
+
+
+def create_handoff_task(cur, *, agency_id: int, contact_id: int, title: str, description: str,
+                        assigned_name: str | None, assigned_user_id: int | None, inbound_message_id: int) -> dict:
+    """L'attivita' REALE per l'operatore, una per messaggio ricevuto (il
+    chiamante tiene il lock del messaggio). `assigned_to` e' il nome
+    dell'agente (lo stesso campo libero delle attivita' create a mano), l'id
+    resta in `metadata`. Senza agente attivo l'attivita' nasce non assegnata e
+    nessun testo promette un ricontatto (regola del 4C)."""
+    cur.execute(
+        "INSERT INTO tasks (agency_id, contact_id, title, description, task_type, priority, status, due_at, "
+        "assigned_to, created_by, metadata) VALUES (%s, %s, %s, %s, 'whatsapp_auto_reply_handoff', 'high', 'open', "
+        "NOW() + interval '4 hours', %s, 'system', jsonb_build_object('source', 'whatsapp_auto_reply', "
+        "'inbound_message_id', %s::bigint, 'assigned_user_id', %s::bigint)) RETURNING id, assigned_to",
+        (agency_id, contact_id, title, description, assigned_name, inbound_message_id, assigned_user_id))
+    return dict(cur.fetchone())
+
+
+def insert_dispatch(cur, *, agency_id: int, decision_id: int, communication_message_id: int | None,
+                    task_id: int | None) -> dict:
+    cur.execute("INSERT INTO whatsapp_auto_reply_dispatches (agency_id, decision_id, communication_message_id, "
+                "task_id) VALUES (%s, %s, %s, %s) RETURNING *",
+                (agency_id, decision_id, communication_message_id, task_id))
+    return dict(cur.fetchone())
+
+
+def dispatches_for_decisions(cur, agency_id: int, decision_ids: list[int]) -> dict[int, dict]:
+    """Le righe d'invio delle decisioni (lo stato del messaggio si legge dal
+    registro delle comunicazioni, non da qui)."""
+    if not decision_ids or not send_installed(cur):
+        return {}
+    cur.execute("SELECT decision_id, task_id, communication_message_id FROM whatsapp_auto_reply_dispatches "
+                "WHERE agency_id = %s AND decision_id = ANY(%s)", (agency_id, decision_ids))
+    return {r["decision_id"]: dict(r) for r in cur.fetchall()}
+
+
+def inbound_phone_number_id(cur, agency_id: int, message_id: int) -> str | None:
+    """Il numero aziendale (phone_number_id di Meta) che ha ricevuto il messaggio."""
+    cur.execute("SELECT phone_number_id FROM whatsapp_inbound_messages WHERE id = %s AND agency_id = %s",
+                (message_id, agency_id))
+    row = cur.fetchone()
+    return row["phone_number_id"] if row else None

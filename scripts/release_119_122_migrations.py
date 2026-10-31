@@ -81,7 +81,9 @@ def _sha(path: Path) -> str | None:
     return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() else None
 
 
-def files_gate(g: Gate) -> None:
+def files_gate(g: Gate, *, allow_later: bool = False) -> None:
+    """`allow_later`: in `verify` le migrazioni successive alla 122 (dalla 123,
+    con il proprio pacchetto di rilascio) non fermano la verifica delle 119-122."""
     g.need(_sha(RUNNER) == RUNNER_SHA, "runner ufficiale scripts/p26_migrate.py con lo SHA-256 verificato")
     mig = ROOT / "migrations"
     for v, s in PRE.items():
@@ -90,7 +92,10 @@ def files_gate(g: Gate) -> None:
         g.need(_sha(mig / f"{v}.sql") == up and _sha(mig / f"{v}_down.sql") == down,
                f"{v} (up + down) nel deploy con checksum attesi")
     extra = sorted(p.name for p in mig.glob("*.sql") if p.name[:3].isdigit() and int(p.name[:3]) > 122)
-    g.need(extra == [], "nessun file di migrazione oltre la 122 nel deploy")
+    if allow_later:
+        print("     file successivi alla 122 nel deploy: " + (", ".join(extra) or "nessuno"), flush=True)
+    else:
+        g.need(extra == [], "nessun file di migrazione oltre la 122 nel deploy")
 
 
 def _connect():
@@ -178,7 +183,7 @@ def main() -> int:
     args = parser.parse_args()
     g = Gate()
     print(f"== rilascio 119-122 su {EXPECTED_DB}: {args.mode} (operatore {OPERATOR})", flush=True)
-    files_gate(g)
+    files_gate(g, allow_later=args.mode == "verify")
     g.stop_if_failed("file del deploy non verificati")
     if args.mode == "verify":
         database_gate(g, args.expected_host, "post")

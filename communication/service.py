@@ -462,6 +462,19 @@ def claim_due(ctx, *, provider: str, channel: str, limit: int = DEFAULT_CLAIM_BA
         return _lavora(proprio)
 
 
+def queued_unclaimed(ctx, *, channel: str, reason_codes, closes_before=None, limit: int = 200,
+                     cur=None) -> list[int]:
+    """BLOCCO-4D/6: gli id in coda e mai presi in carico (vedi repository)."""
+    def _lavora(c):
+        return repository.queued_unclaimed_ids(c, ctx, channel=channel, reason_codes=list(reason_codes),
+                                               closes_before=closes_before, limit=limit)
+
+    if cur is not None:
+        return _lavora(cur)
+    with communication_cursor() as (_conn, proprio):
+        return _lavora(proprio)
+
+
 def claim_message(ctx, message_id: int, *, provider: str, channel: str, cur=None,
                   token_factory=_token) -> dict[str, Any] | None:
     """BLOCCO-4B: reclama UN messaggio preciso (un invio manuale appena accodato).

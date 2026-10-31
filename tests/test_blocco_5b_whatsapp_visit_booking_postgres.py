@@ -55,7 +55,7 @@ def test_a_visit_request_on_a_bookable_property_gets_the_link_and_no_confirmatio
     appointments_before = _q(vb5, "SELECT count(*) FROM appointments")[0][0]
     _tick(vb5)
     decision, reason, text, version, mode, data, handoff = _decision(vb5, mid)
-    assert (decision, reason, version, mode, handoff) == ("answer", "visit_booking_link", "5b-2", "simulate", None)
+    assert (decision, reason, version, mode, handoff) == ("answer", "visit_booking_link", "5b-4", "simulate", None)
     assert PLACEHOLDER in text and "fissato solo quando la pagina conferma" in text
     assert "confermat" not in text.replace("conferma la prenotazione", "")
     assert "/visita/" not in text and data["booking_link_id"] == link["id"]

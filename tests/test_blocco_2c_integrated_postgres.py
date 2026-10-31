@@ -73,11 +73,12 @@ OPERATORE = "blocco2c.collaudo"
 PASSWORD = "Blocco2c-prova-locale!"
 # SENTINELLA AGGIORNATA DA BLOCCO-4A: dopo la 117 la cartella reale contiene anche la
 # 118 (ricezione WhatsApp), applicata nello stesso passaggio dal runner.
-# SENTINELLA AGGIORNATA DA BLOCCO-4D/5A: la 119 (simulazione delle risposte automatiche) e la 120
+# SENTINELLA AGGIORNATA DA BLOCCO-4D (modo d'invio, 123) e prima da BLOCCO-4D/5A: la 119 (simulazione delle risposte automatiche) e la 120
 # (prenotazione online delle visite) si aggiungono in coda.
 NUOVE = ("115_agency_logos", "116_property_valuations", "117_property_valuation_pdfs", "118_whatsapp_inbound",
          "119_whatsapp_auto_reply_simulation", "120_property_visit_booking", "121_visit_sheets",
-         "122_signature_requests")
+         "122_signature_requests", "123_whatsapp_auto_reply_send",
+         "124_do_not_contact_and_link_revocation", "125_signature_provider_readiness")
 BASE = {"characteristics": "Trilocale sintetico al secondo piano.",
         "surface": {"value": "85", "kind": "commerciale", "source": "planimetria"},
         "rationale": "Motivazione sintetica: stato buono, zona servita.",

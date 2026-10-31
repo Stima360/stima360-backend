@@ -49,6 +49,12 @@ from public_booking import security
 
 from . import repository
 
+#: Lo stato commerciale con cui un collegamento DEDICATO resta usabile: lo
+#: stesso con cui il motore delle risposte lo propone (BLOCCO-4C/5B).
+ACTIVE_STATUS = "active"
+#: Validita' massima di un collegamento dedicato (mai oltre il padre).
+INVITE_VALIDITY_DAYS = 7
+
 PAGE_PATH = "/visita/"
 MANAGE_PATH = "/visita-gestione/"
 RATE_WINDOW_SECONDS = 60
@@ -199,19 +205,46 @@ def list_links(ctx, property_id: int) -> dict:
         _require_installed(cur)
         prop = _managed_property(cur, ctx, property_id)
         links = repository.links_for_property(cur, agency_id, prop["id"])
-    return {"items": [_link_view(link) for link in links]}
+        reasons = repository.revocation(cur, agency_id, [link["id"] for link in links])
+    items = []
+    for link in links:
+        view = _link_view(link)
+        extra = reasons.get(link["id"], {})
+        view["disabled_reason"] = extra.get("disabled_reason")
+        view["disabled_note"] = extra.get("disabled_note")
+        items.append(view)
+    return {"items": items}
 
 
-def disable_link(ctx, link_id: int) -> dict:
+DISABLE_REASONS = ("operator", "owner_authorization_revoked")
+
+
+def disable_link(ctx, link_id: int, *, reason: str = "operator", note: str | None = None) -> dict:
+    """Disattiva un collegamento. BLOCCO-6: con `owner_authorization_revoked`
+    (il proprietario ha revocato l'autorizzazione alle visite) la nota e'
+    obbligatoria e resta registrata con chi e quando; le visite ancora
+    «richieste» non cambiano stato da sole: si contano e si restituiscono."""
     agency_id = ctx.require_agency()
+    if reason not in DISABLE_REASONS:
+        raise ValidationError(f"Motivo non valido: {', '.join(DISABLE_REASONS)}.")
+    note = (note or "").strip() or None
+    if reason == "owner_authorization_revoked" and (note is None or len(note) < 5):
+        raise ValidationError("Indica come e quando il proprietario ha revocato l'autorizzazione.")
     with core_cursor(commit=True) as (_, cur):
         _require_installed(cur)
         link = repository.link_by_id(cur, agency_id, link_id, lock=True)
         if link is None:
             raise NotFound("LINK_NOT_FOUND", "Collegamento non trovato.")
         _managed_property(cur, ctx, link["property_id"])
-        done = repository.disable_link(cur, agency_id, link_id, ctx.user_id) or link
-    return _link_view(done)
+        if reason != "operator" and not repository.revocation_installed(cur):
+            raise VisitBookingError("REVOCATION_NOT_INSTALLED", "La registrazione della revoca richiede la migrazione 124.")
+        done = repository.disable_link(cur, agency_id, link_id, ctx.user_id, reason=reason, note=note) or link
+        pending = repository.pending_owner_requests(cur, agency_id, link_id)
+        extra = repository.revocation(cur, agency_id, [link_id]).get(link_id, {})
+    view = _link_view(done)
+    view.update({"disabled_reason": extra.get("disabled_reason"), "disabled_note": extra.get("disabled_note"),
+                 "pending_owner_requests": pending})
+    return view
 
 
 # ---------------------------------------------------------------------------
@@ -236,16 +269,57 @@ def _gate(link_id: int, kind: str, client_ip: str) -> None:
                 raise RateLimited()
 
 
+def _usable(cur, link: dict | None) -> bool:
+    return (link is not None and link["status"] == "active"
+            and (link["expires_at"] is None or link["expires_at"] > _now()))
+
+
+def _dedicated_usable(cur, link: dict) -> bool:
+    """Un collegamento DEDICATO (emesso da una risposta automatica) vale solo
+    finche' vale il collegamento dell'operatore da cui nasce, l'agente e' un
+    membro attivo e l'immobile e' ancora «Attivo»: le stesse condizioni con cui
+    e' stato proposto, verificate di nuovo a ogni uso."""
+    parent = repository.link_by_id(cur, link["agency_id"], link["parent_link_id"])
+    return (_usable(cur, parent)
+            and appointment_repository.active_membership(cur, link["agency_id"], link["assigned_user_id"])
+            and repository.commercial_status(cur, link["agency_id"], link["property_id"]) == ACTIVE_STATUS)
+
+
 def _resolve(cur, token: str) -> dict:
     """Il link prenotabile, o la stessa risposta neutra per ogni rifiuto."""
     if not repository.installed(cur):
         raise LinkNotBookable()
     link = repository.link_by_token_hash(cur, security.hash_token(token or ""))
-    if (link is None or link["status"] != "active"
-            or (link["expires_at"] is not None and link["expires_at"] <= _now())
+    if (not _usable(cur, link)
+            or (link.get("parent_link_id") is not None and not _dedicated_usable(cur, link))
             or not writes.mandate_open(cur, link["agency_id"], link["property_id"])):
         raise LinkNotBookable()
     return link
+
+
+def issue_dedicated_link(cur, agency_id: int, parent_link_id: int, *, decision_id: int, contact_id: int,
+                         now: datetime | None = None) -> str | None:
+    """Migrazione 123: emette il collegamento DEDICATO per UNA risposta, nella
+    transazione del chiamante, e restituisce il SOLO percorso con il token
+    (`/visita/<token>`), che il chiamante non deve registrare. None se non e'
+    emettibile adesso (padre non piu' valido, incarico chiuso, immobile non
+    «Attivo», agente non attivo, gia' emesso per questa decisione)."""
+    now = now or _now()
+    if not repository.dedicated_installed(cur):
+        return None
+    parent = repository.link_by_id(cur, agency_id, parent_link_id, lock=True)
+    if not _usable(cur, parent) or not writes.mandate_open(cur, agency_id, parent["property_id"]):
+        return None
+    if (not appointment_repository.active_membership(cur, agency_id, parent["assigned_user_id"])
+            or repository.commercial_status(cur, agency_id, parent["property_id"]) != ACTIVE_STATUS):
+        return None
+    expires = now + timedelta(days=INVITE_VALIDITY_DAYS)
+    if parent["expires_at"] is not None:
+        expires = min(expires, parent["expires_at"])
+    token = security.generate_token()
+    row = repository.insert_dedicated(cur, parent, token_hash=security.hash_token(token), decision_id=decision_id,
+                                      contact_id=contact_id, expires_at=expires)
+    return f"/visita/{token}" if row is not None else None
 
 
 def _public_property(cur, link) -> dict:

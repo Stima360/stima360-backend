@@ -11,6 +11,11 @@ LINK_COLUMNS = ("id, agency_id, property_id, assigned_user_id, status, duration_
                 "travel_minutes, min_notice_minutes, horizon_days, owner_authorization, owner_authorization_note, "
                 "owner_authorization_recorded_by, owner_authorization_recorded_at, created_by_user_id, created_at, "
                 "expires_at, disabled_at")
+#: Migrazione 123: il collegamento DEDICATO (figlio). Letto a parte, cosi' le
+#: query restano valide su un database con la sola 120.
+DEDICATED_COLUMNS = ("(to_jsonb(l)->>'parent_link_id')::bigint AS parent_link_id, "
+                     "(to_jsonb(l)->>'issued_decision_id')::bigint AS issued_decision_id")
+_OPERATOR_ONLY = "(to_jsonb(l)->>'parent_link_id') IS NULL"
 
 
 def insert_link(cur, data: dict) -> dict:
@@ -21,8 +26,9 @@ def insert_link(cur, data: dict) -> dict:
 
 
 def links_for_property(cur, agency_id: int, property_id: int) -> list[dict]:
-    cur.execute(f"SELECT {LINK_COLUMNS} FROM property_visit_booking_links WHERE agency_id = %s AND property_id = %s "
-                "ORDER BY created_at DESC, id DESC", (agency_id, property_id))
+    """I collegamenti dell'OPERATORE (i dedicati vivono sotto il loro padre)."""
+    cur.execute(f"SELECT {LINK_COLUMNS} FROM property_visit_booking_links l WHERE agency_id = %s AND property_id = %s "
+                f"AND {_OPERATOR_ONLY} ORDER BY created_at DESC, id DESC", (agency_id, property_id))
     return [dict(r) for r in cur.fetchall()]
 
 
@@ -34,17 +40,87 @@ def link_by_id(cur, agency_id: int, link_id: int, *, lock: bool = False) -> dict
 
 
 def link_by_token_hash(cur, token_hash: str) -> dict | None:
-    cur.execute(f"SELECT {LINK_COLUMNS} FROM property_visit_booking_links WHERE token_hash = %s", (token_hash,))
+    cur.execute(f"SELECT {LINK_COLUMNS}, {DEDICATED_COLUMNS} FROM property_visit_booking_links l "
+                "WHERE token_hash = %s", (token_hash,))
     row = cur.fetchone()
     return dict(row) if row else None
 
 
-def disable_link(cur, agency_id: int, link_id: int, user_id: int) -> dict | None:
+def disable_link(cur, agency_id: int, link_id: int, user_id: int, *, reason: str = "operator",
+                 note: str | None = None) -> dict | None:
+    """Disattiva il collegamento e, con lui, i collegamenti DEDICATI emessi da
+    lui ancora attivi (stesso autore, stessa ora): revocare il padre revoca
+    anche cio' che e' gia' stato inviato. Dalla 124 si registra anche il
+    motivo ('operator', 'owner_authorization_revoked') e la nota; i figli
+    prendono 'parent_disabled'."""
+    with_reason = revocation_installed(cur)
+    extra = ", disabled_reason = %s, disabled_note = %s" if with_reason else ""
+    params = (user_id, *((reason, note) if with_reason else ()), link_id, agency_id)
     cur.execute(f"UPDATE property_visit_booking_links SET status = 'disabled', disabled_at = NOW(), "
-                f"disabled_by_user_id = %s WHERE id = %s AND agency_id = %s AND status = 'active' "
-                f"RETURNING {LINK_COLUMNS}", (user_id, link_id, agency_id))
+                f"disabled_by_user_id = %s{extra} WHERE id = %s AND agency_id = %s AND status = 'active' "
+                f"RETURNING {LINK_COLUMNS}", params)
+    row = cur.fetchone()
+    if dedicated_installed(cur):
+        child_extra = ", disabled_reason = 'parent_disabled'" if with_reason else ""
+        cur.execute(f"UPDATE property_visit_booking_links SET status = 'disabled', disabled_at = NOW(), "
+                    f"disabled_by_user_id = %s{child_extra} WHERE parent_link_id = %s AND agency_id = %s "
+                    "AND status = 'active'", (user_id, link_id, agency_id))
+    return dict(row) if row else None
+
+
+def revocation_installed(cur) -> bool:
+    cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' "
+                "AND table_name = 'property_visit_booking_links' AND column_name = 'disabled_reason') AS presente")
+    return bool(cur.fetchone()["presente"])
+
+
+def revocation(cur, agency_id: int, link_ids: list[int]) -> dict[int, dict]:
+    if not link_ids or not revocation_installed(cur):
+        return {}
+    cur.execute("SELECT id, disabled_reason, disabled_note, disabled_by_user_id FROM property_visit_booking_links "
+                "WHERE agency_id = %s AND id = ANY(%s)", (agency_id, link_ids))
+    return {r["id"]: dict(r) for r in cur.fetchall()}
+
+
+def pending_owner_requests(cur, agency_id: int, link_id: int) -> int:
+    """Le visite ancora «richieste» (in attesa dell'assenso) nate da questo
+    collegamento o dai suoi dedicati: dopo una revoca restano da gestire."""
+    cur.execute("SELECT count(*) AS n FROM property_visit_bookings b JOIN appointments a ON a.id = b.appointment_id "
+                "JOIN property_visit_booking_links l ON l.id = b.link_id WHERE b.agency_id = %s "
+                "AND (l.id = %s OR (to_jsonb(l)->>'parent_link_id')::bigint = %s) AND a.status = 'requested'",
+                (agency_id, link_id, link_id))
+    return int(cur.fetchone()["n"])
+
+
+def dedicated_installed(cur) -> bool:
+    cur.execute("SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_schema = 'public' "
+                "AND table_name = 'property_visit_booking_links' AND column_name = 'parent_link_id') AS presente")
+    return bool(cur.fetchone()["presente"])
+
+
+def insert_dedicated(cur, parent: dict, *, token_hash: str, decision_id: int, contact_id: int,
+                     expires_at) -> dict | None:
+    """Un collegamento dedicato a UNA risposta (migrazione 123); None se per
+    quella decisione ne esiste gia' uno (mai un secondo collegamento)."""
+    cur.execute(
+        "INSERT INTO property_visit_booking_links (agency_id, property_id, assigned_user_id, token_hash, "
+        "duration_minutes, step_minutes, travel_minutes, min_notice_minutes, horizon_days, owner_authorization, "
+        "owner_authorization_note, owner_authorization_recorded_by, owner_authorization_recorded_at, "
+        "created_by_user_id, expires_at, parent_link_id, issued_decision_id, issued_contact_id) "
+        "SELECT agency_id, property_id, assigned_user_id, %s, duration_minutes, step_minutes, travel_minutes, "
+        "min_notice_minutes, horizon_days, owner_authorization, owner_authorization_note, "
+        "owner_authorization_recorded_by, owner_authorization_recorded_at, created_by_user_id, %s, id, %s, %s "
+        "FROM property_visit_booking_links WHERE id = %s "
+        f"ON CONFLICT (issued_decision_id) DO NOTHING RETURNING {LINK_COLUMNS}",
+        (token_hash, expires_at, decision_id, contact_id, parent["id"]))
     row = cur.fetchone()
     return dict(row) if row else None
+
+
+def commercial_status(cur, agency_id: int, property_id: int) -> str | None:
+    cur.execute("SELECT commercial_status FROM properties WHERE id = %s AND agency_id = %s", (property_id, agency_id))
+    row = cur.fetchone()
+    return row["commercial_status"] if row else None
 
 
 def booking_by_submission(cur, link_id: int, submission_key: str) -> dict | None:
@@ -106,8 +182,8 @@ def increment_and_check(cur, *, link_id, scope, window_start, limit, client_ip_h
 
 def active_link_for_property(cur, agency_id: int, property_id: int) -> dict | None:
     """BLOCCO-5B: il collegamento attivo (non scaduto) piu' recente dell'immobile."""
-    cur.execute(f"SELECT {LINK_COLUMNS} FROM property_visit_booking_links WHERE agency_id = %s AND property_id = %s "
-                "AND status = 'active' AND (expires_at IS NULL OR expires_at > NOW()) "
+    cur.execute(f"SELECT {LINK_COLUMNS} FROM property_visit_booking_links l WHERE agency_id = %s AND property_id = %s "
+                f"AND status = 'active' AND (expires_at IS NULL OR expires_at > NOW()) AND {_OPERATOR_ONLY} "
                 "ORDER BY created_at DESC, id DESC LIMIT 1", (agency_id, property_id))
     row = cur.fetchone()
     return dict(row) if row else None

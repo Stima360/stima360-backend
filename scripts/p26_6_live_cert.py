@@ -7685,9 +7685,12 @@ def certify_auto_replies(report, http, cert, domain, jars, owned, context) -> No
                                 payload={"mode": "off", "agency_id": agenzia_altra})
         report.check(f"AUTO_REPLIES-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
                      f"{etichetta}: PUT {base}/settings con agency_id di {altro} -> {risposta.status} (atteso 422)")
-        risposta = http.request("PUT", base + "/settings", jar=jars[etichetta], payload={"mode": "send"})
-        report.check(f"AUTO_REPLIES-nessun-invio-{etichetta}", risposta.status == 422,
-                     f"{etichetta}: PUT {base}/settings con modo d'invio -> {risposta.status} (atteso 422)")
+        # Dalla 123 `send` e' un modo valido: la certificazione non lo prova
+        # mai (cambierebbe davvero il modo dell'agenzia). Prova un modo che
+        # non esiste: il rifiuto e' a livello di schema, nessuno stato cambia.
+        risposta = http.request("PUT", base + "/settings", jar=jars[etichetta], payload={"mode": "meta"})
+        report.check(f"AUTO_REPLIES-modo-ignoto-{etichetta}", risposta.status == 422,
+                     f"{etichetta}: PUT {base}/settings con un modo inesistente -> {risposta.status} (atteso 422)")
 
 
 VISIT_BOOKING_LINKS_OPERAZIONI = (("GET", "?property_id=1"), ("POST", ""))

@@ -126,9 +126,18 @@ def eligible_agents(property_id: int = Query(..., ge=1), ctx: OperatorContext = 
     return _call(service.eligible_agents, ctx, property_id)
 
 
+class DisableRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: Literal["operator", "owner_authorization_revoked"] = "operator"
+    note: str | None = Field(None, max_length=1000)
+
+
 @router.post("/{link_id}/disable")
-def disable(link_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
-    return _call(service.disable_link, ctx, link_id)
+def disable(link_id: int = Path(..., ge=1), body: DisableRequest | None = None,
+            ctx: OperatorContext = Depends(require_operator)):
+    body = body or DisableRequest()
+    return _call(service.disable_link, ctx, link_id, reason=body.reason, note=body.note)
 
 
 @public_router.get("/manage/{key}")

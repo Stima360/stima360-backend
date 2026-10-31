@@ -96,6 +96,7 @@ from auto_replies.router import router as auto_replies_router
 # BLOCCO-6A: fogli visita (`/api/visit-sheets`).
 from visit_sheets.router import router as visit_sheets_router
 # BLOCCO-6B: richieste di firma (`/api/signature-requests`), oggi solo adattatore simulato.
+from esign.router import public_router as esign_public_router
 from esign.router import router as esign_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
@@ -232,6 +233,8 @@ app.include_router(auto_replies_router, dependencies=[Depends(require_authentica
 app.include_router(visit_sheets_router, dependencies=[Depends(require_authenticated_operator)])
 # BLOCCO-6B: stesso montaggio; nessuna firma valida finche' non si integra un fornitore reale.
 app.include_router(esign_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-5: eventi di un fornitore di firma (pubblici, autenticati dalla firma del corpo)
+app.include_router(esign_public_router)
 # P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.
@@ -662,40 +665,25 @@ def admin_whatsapp_messages(
     return [dict(zip(cols, r)) for r in rows]
 
 # ---------------------------------------------------------
-# ADMIN WHATSAPP — INVIO RISPOSTA
+# ADMIN WHATSAPP — INVIO RISPOSTA (DISATTIVATO)
 # ---------------------------------------------------------
+# Chiusura prima del rilascio 123-125: questa rotta mandava un WhatsApp di
+# testo libero a un numero qualsiasi, con qualsiasi sessione operatore, senza
+# isolamento dell'agenzia, finestra di 24 ore, divieto di contatto ne'
+# registro delle comunicazioni. Nessun consumatore nel CRM: la risposta
+# manuale passa da `POST /api/message-replies/conversations/{sender_phone}`
+# (BLOCCO-4B), che ha tutti quei controlli. La rotta resta montata dietro la
+# sessione (nessun accesso anonimo) e risponde sempre 410: non chiama Meta e
+# non scrive nulla.
+LEGACY_WHATSAPP_REPLY_GONE = ("Invio disattivato: le risposte WhatsApp si inviano dalla conversazione "
+                              "(POST /api/message-replies/conversations/{sender_phone}), con i controlli "
+                              "di agenzia, finestra, divieto di contatto e registro.")
+
+
 @app.post("/api/admin/whatsapp/reply", dependencies=[Depends(require_authenticated_operator)])
 def admin_whatsapp_reply(data: dict):
-
-    to = data.get("to")
-    text = data.get("text")
-
-    if not to or not text:
-        raise HTTPException(status_code=400, detail="Dati mancanti")
-
-    dest = normalizza_numero_whatsapp(to)
-
-    # 1️⃣ INVIO REALE WHATSAPP
-    try:
-        r = invia_whatsapp_text(dest, text)
-        print("META SEND:", r.status_code, r.text)
-    except Exception as e:
-        print("WHATSAPP SEND ERROR:", e)
-
-    # 2️⃣ SALVA NEL DB (STESSA TABELLA)
-    conn = get_connection()
-    cur = conn.cursor()
-    cur.execute("""
-        INSERT INTO whatsapp_incoming
-        (from_number, message_type, text, received_at, direction)
-        VALUES (%s, %s, %s, NOW(), 'out')
-    """, (dest, "text", text))
-
-    conn.commit()
-    cur.close()
-    conn.close()
-
-    return {"ok": True}
+    raise HTTPException(status_code=410, detail={"code": "LEGACY_SEND_DISABLED",
+                                                 "message": LEGACY_WHATSAPP_REPLY_GONE})
 
 # ---------------------------------------------------------
 # CANCELLA STIME (singole o multiple)

@@ -48,3 +48,7 @@ GRAPH_VERSION_MISSING_MESSAGE = ("La versione dell'API WhatsApp non è configura
 STOP_NOTICE = ("Il cliente ha scritto STOP: ha rinunciato alle comunicazioni promozionali su WhatsApp di questa "
                "agenzia. Non è un consenso a riceverne altre: la risposta è possibile solo perché ha scritto nelle "
                "ultime 24 ore, e deve riguardare soltanto la sua richiesta.")
+
+#: BLOCCO-6 (migrazione 124): il contatto ha un divieto totale di contatto.
+DO_NOT_CONTACT_MESSAGE = ("Il contatto ha un divieto di contatto attivo: nessuna comunicazione, nemmeno di servizio, "
+                          "finché non viene revocato nella sua scheda.")
