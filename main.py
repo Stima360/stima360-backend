@@ -107,7 +107,12 @@ BASE_DIR = Path(__file__).parent
 
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "https://stima360-backend.onrender.com")
 PUBLIC_SITE_BASE_URL = os.getenv("PUBLIC_SITE_BASE_URL", "https://www.stima360.it").rstrip("/")
-WHATSAPP_SERVICE_URL = os.getenv("WHATSAPP_SERVICE_URL", "https://stima360-whatsapp-webhook-test.onrender.com/send")
+# BLOCCO 1 PRE-COLLAUDO: nessun valore predefinito. Prima il default era il
+# servizio esterno che invia davvero il template WhatsApp della stima: un
+# ambiente senza la variabile (es. TEST) avrebbe fatto partire messaggi reali.
+# Senza variabile l'invio WhatsApp della stima non parte (preflight fallito,
+# registrato e recuperabile); dove serve va impostata esplicitamente.
+WHATSAPP_SERVICE_URL = (os.getenv("WHATSAPP_SERVICE_URL") or "").strip()
 logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------
@@ -494,7 +499,7 @@ def verify_whatsapp_signature(raw_body: bytes, signature: str | None) -> None:
     
 def invia_whatsapp(numero: str | None, p1: str, p2: str, p3: str):
     dest = normalizza_numero_whatsapp(numero)
-    if not dest:
+    if not dest or not WHATSAPP_SERVICE_URL:
         return False
     try:
         response = requests.post(
