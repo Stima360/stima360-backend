@@ -291,7 +291,7 @@ senza scegliere un fornitore e senza scrivere chiamate a API reali:
 
 | Constatazione | Stato |
 |---|---|
-| Una firma ottenuta in sandbox risulterebbe valida | Risolto: `provider_environment` (`simulation`/`sandbox`/`production`); `valid_signature` solo in `production` |
+| Una firma ottenuta in sandbox risulterebbe valida | Risolto: `provider_environment` (`simulation`/`sandbox`/`production`); `valid_signature` solo in `production`. È una condizione **tecnica**: non dimostra da sola la validità legale (tipo di firma, fornitore e documento, § 3) |
 | Nessuna deduplica degli eventi webhook | Risolto: `signature_provider_events`, unico per (fornitore, id evento), append-only |
 | Nessun UNIQUE su (provider, provider_reference) | Risolto: indice unico parziale |
 | Audit trail, livello di firma, data non conservati | Risolto: `audit_trail` (+ SHA-256), `signature_level` dichiarato, `signed_at`; il database rifiuta `signed` senza queste prove |

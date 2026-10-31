@@ -24,25 +24,32 @@ ripetuti.
    `to, p1, p2, p3`. Il nome del template, la lingua e le credenziali usate da
    quel servizio **non sono nel codice** di questo repository.
 2. In `main` esiste un webhook `/webhook/whatsapp` (firma `X-Hub-Signature-256`
-   verificata), ma la sua verifica GET legge parametri `hub_mode`/`hub_verify_token`
-   (trattino basso) mentre Meta invia `hub.mode`/`hub.verify_token` (punto):
-   **con il codice di `main`, in nessuna versione della sua storia, Meta avrebbe
-   potuto verificare questo URL**. È quindi probabile — ma NON verificato — che il
-   callback Meta attuale punti al servizio esterno e non a `main`. Il documento
-   `roadmap/BLOCCO-4D_ATTIVAZIONE.md` afferma invece che punta a `main`: le due
-   affermazioni sono in conflitto e vanno risolte guardando la console Meta.
+   verificata). **Difetto attuale:** la sua verifica GET legge parametri
+   `hub_mode`/`hub_verify_token` (trattino basso) mentre Meta invia
+   `hub.mode`/`hub.verify_token` (punto): con il codice di `main` **di oggi** una
+   nuova verifica Meta di questo URL non riuscirebbe. Questo **non** dimostra a quale
+   URL punti il callback né che non sia mai stato verificato: la verifica può essere
+   avvenuta con codice o componenti precedenti, o su un altro servizio. Dove punta il
+   callback e dove arrivano davvero le consegne restano **da verificare** (console
+   Meta, log dei servizi). `roadmap/BLOCCO-4D_ATTIVAZIONE.md` afferma che punta a
+   `main`: affermazione non verificata da questo documento.
 3. Il CRM (`core-0.1-test`) ha una ricezione affidabile (4A: tutti gli eventi,
    una transazione, idempotenza su `provider_message_id`, 200 solo dopo commit),
    instradamento per `phone_number_id` (`WHATSAPP_INBOUND_ROUTES`), risposte
    manuali (4B, spente salvo `WHATSAPP_OUTBOUND_MODE=meta`) e risposte automatiche
    solo simulate (4D). Il percorso del webhook è **lo stesso** di `main`
    (`/webhook/whatsapp`).
-4. **Raccomandazione:** opzione **A** — il ricevitore attuale resta l'unico callback
-   Meta e inoltra al CRM il corpo originale con la firma originale (fan-out
-   "trasparente"), con fasi ombra → parallelo → invio dal CRM. Prima di tutto
-   (Fase 0) va accertato **chi** è oggi il ricevitore. Nessun cambio di callback
-   in questo blocco; un eventuale cambio futuro richiede prima che il ripristino
-   sia verificabile (vedi §4.6).
+4. **Raccomandazione:** il numero si collega al **futuro CRM di produzione**, non al
+   TEST. Opzione **A** — il ricevitore attuale resta l'unico callback Meta e inoltra
+   al CRM di produzione il corpo originale con la firma originale (fan-out
+   "trasparente"), con fasi ombra → parallelo → invio dal CRM. Template della stima,
+   PDF e collegamento Stima Pro restano sul percorso attuale finché non c'è una
+   decisione separata. **Sul TEST solo dati sintetici**: nessun inoltro di clienti
+   reali verso il TEST come scelta predefinita; una prova reale richiede destinatari
+   e perimetro concordati per iscritto (§4.2-bis). Prima di tutto (Fase 0) va
+   accertato **chi** è oggi il ricevitore. Nessun cambio di callback in questo
+   blocco; un eventuale cambio futuro richiede prima che il ripristino sia
+   verificabile (§4.6).
 
 ---
 
@@ -119,7 +126,7 @@ Riferimenti nella forma `origin/main:<file>:<riga>`.
 
 | Aspetto | Dove | Cosa fa |
 |---|---|---|
-| Verifica GET | `main.py:1221-1232` | parametri Python `hub_mode`, `hub_challenge`, `hub_verify_token` confrontati con `WHATSAPP_VERIFY_TOKEN`. **FastAPI legge le query `hub_mode` ecc., non `hub.mode`**: la verifica di Meta riceverebbe 403. Così fin dalla prima versione (`fa4547b`, `ff34dd7`) |
+| Verifica GET | `main.py:1221-1232` | parametri Python `hub_mode`, `hub_challenge`, `hub_verify_token` confrontati con `WHATSAPP_VERIFY_TOKEN`. **FastAPI legge le query `hub_mode` ecc., non `hub.mode`**: con il codice attuale una nuova verifica di Meta riceverebbe 403 (difetto presente anche nelle versioni `fa4547b`, `ff34dd7` di questo repository). Non dice dove punti oggi il callback né come sia stato verificato: da accertare in console e nei log |
 | POST | `main.py:1234-1278` | `verify_whatsapp_signature` (`main.py:117-134`): HMAC-SHA256 del corpo grezzo con `WHATSAPP_APP_SECRET`, confronto a tempo costante con `X-Hub-Signature-256`; senza segreto 503, firma assente/errata 403 (introdotto con `884c442`, 2026-08-29) |
 | Elaborazione | `main.py:1243-1273` | legge **solo** `entry[0].changes[0].messages[0]`; ignora gli stati di consegna e gli altri messaggi dello stesso payload; tipi non testuali salvati come `[TIPO]`; INSERT in `whatsapp_incoming (from_number, message_type, text, received_at, direction='in')` |
 | Errori | `main.py:1275-1278` | ogni eccezione è stampata e la risposta è comunque **200**: Meta non ritenta → **messaggio perso** in caso di errore DB |
@@ -336,15 +343,18 @@ servizio dedicato "smistatore") riceve da Meta e duplica verso produzione e CRM.
 | Doppio template della stima | `salva_stima` sia in `main` sia nel CRM chiamano il servizio esterno | il sito deve inviare a UN backend; su TEST `WHATSAPP_SERVICE_URL` verso un destinatario non reale |
 | Perdita messaggi | `main` risponde 200 anche se non salva; inoltro senza ritentativi | coda e ritentativi lato ricevitore; riconciliazione giornaliera |
 | Firma non valida sul CRM | corpo ricodificato; App Secret diverso | inoltro dei byte originali; stesso segreto, conservato solo nelle variabili del servizio |
-| Dati reali su TEST | ricezione in parallelo verso il CRM di TEST | decisione del titolare del trattamento (§5) |
+| Dati reali su TEST | un inoltro verso il CRM di TEST | escluso per impostazione: sul TEST solo dati sintetici; una prova reale solo con destinatari e perimetro concordati (§4.2-bis) |
 | Attribuzione sbagliata | `WHATSAPP_INBOUND_ROUTES` errata | fase ombra con verifica dei conteggi `routed`/`unrouted` |
 
 ### Raccomandazione
 
-**Opzione A, nella forma "inoltro trasparente asincrono"**, perché è l'unica che:
-non cambia il callback Meta; non richiede modifiche al CRM (il 4A accetta già
-corpo+firma originali ed è idempotente); lascia la produzione nel comportamento
-attuale; ha un rientro immediato (spegnere l'inoltro). Il punto in cui inserire
+**Opzione A, nella forma "inoltro trasparente asincrono" verso il CRM di
+produzione**, perché è l'unica che: non cambia il callback Meta; non richiede
+modifiche al CRM (il 4A accetta già corpo+firma originali ed è idempotente);
+lascia la produzione nel comportamento attuale (template della stima, PDF, Stima
+Pro, sopralluogo dal sito); ha un rientro immediato (spegnere l'inoltro). La
+destinazione dell'inoltro è il CRM **di produzione**, quando esisterà: il TEST non
+riceve messaggi di clienti reali. Il punto in cui inserire
 l'inoltro dipende dalla Fase 0: se il ricevitore è il servizio esterno, l'inoltro
 va lì (altro repository); se è `main`, va in `main` con una patch minima e un
 interruttore. B e C restano opzioni successive, da valutare solo quando il CRM
@@ -352,8 +362,8 @@ sarà un servizio di produzione e il rientro del callback sarà verificabile.
 
 **Serve una decisione del titolare o un accesso Meta per:** sapere dove punta oggi
 il callback; approvare una modifica al ricevitore di produzione; condividere
-l'App Secret con il servizio CRM; ricevere dati reali su TEST; qualsiasi cambio
-futuro di callback (B/C).
+l'App Secret con il servizio CRM di produzione; l'eventuale prova reale circoscritta
+sul TEST (destinatari e perimetro); qualsiasi cambio futuro di callback (B/C).
 
 ---
 
@@ -364,8 +374,14 @@ futuro di callback (B/C).
 - **Niente merge** tra `origin/main` e `core-0.1-test` (storie separate): la sola
   modifica di produzione ammessa è una patch minima dedicata all'inoltro, scritta
   sulla storia di `main` (o del servizio esterno), revisionata a parte.
-- **Servizi distinti:** produzione (sito + stime + ricevitore attuale) e CRM
-  (oggi TEST, con database TEST). Ogni fase si dichiara per servizio.
+- **Servizi distinti:** produzione (sito + stime + ricevitore attuale), CRM di
+  produzione (futuro, con il suo database) e CRM di TEST (solo dati sintetici).
+  Ogni fase si dichiara per servizio. Le fasi 1-3 riguardano il CRM **di
+  produzione**.
+- **Da preservare in ogni fase:** invio del template della stima (oggi tramite il
+  servizio esterno), PDF della stima e collegamento Stima Pro, richiesta di
+  sopralluogo dal sito, ricezione delle risposte. Nessuna fase sposta questi
+  percorsi: il CRM riceve una copia e, solo in Fase 3, risponde.
 - **Codice deployato e stato del database si verificano separatamente**; nessuna
   migrazione applicata implicitamente (118/119 sul CRM sono prerequisito
   dichiarato, `roadmap/BLOCCO-4D_ATTIVAZIONE.md:14-16`).
@@ -392,10 +408,26 @@ log); conflitto con `BLOCCO-4D_ATTIVAZIONE.md` risolto per iscritto; su TEST
 assente o giustificata, `WHATSAPP_SERVICE_URL` non diretta al servizio reale.
 **Rientro:** nessuno necessario.
 
-### 4.3 Fase 1 — ombra (copie al CRM, invisibili)
+### 4.2-bis TEST — solo dati sintetici
 
+Sul CRM di TEST il collegamento si prova **senza** il numero reale: webhook firmati
+con un segreto di prova, numeri e contatti sintetici, `WHATSAPP_OUTBOUND_MODE` e
+`WHATSAPP_AUTO_REPLY_MODE` assenti (è ciò che i test e i collaudi locali già fanno).
+**Nessun inoltro di clienti reali verso il TEST** come scelta predefinita.
+
+Una **prova reale circoscritta** è possibile solo con un accordo scritto del titolare
+che fissi: destinatari (es. telefoni interni dell'agenzia, elencati), perimetro
+(numero, agenzia, durata in giorni), cosa si invia (nessun cliente, nessun template
+della stima), conservazione e cancellazione dei dati raccolti. Senza questo accordo
+la prova non si fa.
+
+### 4.3 Fase 1 — ombra (copie al CRM di produzione, invisibili)
+
+Prerequisito: il CRM di produzione esiste come servizio proprio, con il suo
+database e le migrazioni verificate (`roadmap/RILASCIO_TEST_123_125.md` § 7).
 Modifiche: inoltro nel ricevitore attuale dietro un interruttore spento per
-default (nome da definire, oggi non esistente), destinazione il webhook del CRM;
+default (nome da definire, oggi non esistente), destinazione il webhook del CRM
+di produzione;
 sul CRM `WHATSAPP_APP_SECRET` uguale a quello dell'app e
 `WHATSAPP_INBOUND_ROUTES` **vuota** (tutto salvato `unrouted`, invisibile).
 
@@ -430,7 +462,7 @@ scritta su quale inbox è quella di lavoro.
 ### 4.5 Fase 3 — invio dal CRM
 
 Prerequisito: il CRM su un servizio di produzione (non TEST), con migrazioni
-verificate, oppure decisione esplicita di usare TEST con dati reali.
+verificate.
 Modifiche: sul CRM `WHATSAPP_OUTBOUND_MODE=meta`, `WHATSAPP_GRAPH_VERSION`
 scelta sulla documentazione Meta, `WHATSAPP_TOKEN` del numero; sul canale attuale
 si spegne la risposta manuale (in `main` basta togliere `WHATSAPP_PHONE_ID`, che è
@@ -455,11 +487,11 @@ Questo piano non cambia il callback. Per qualsiasi fase futura che lo cambi:
    annotare i NOMI delle variabili collegate (`WHATSAPP_VERIFY_TOKEN`,
    `WHATSAPP_APP_SECRET`) e dove sono custodite.
 2. **Rischio di non ritorno:** Meta verifica ogni nuovo URL con una GET. Se il
-   callback originale è `main`, oggi **la verifica fallirebbe** (§1d): una volta
-   spostato, non si potrebbe tornare a `main` senza prima correggere la GET di
-   `main`. Quindi: o il ricevitore originale è il servizio esterno ed è
-   verificabile, o la correzione della GET di `main` va rilasciata e provata
-   **prima** di qualunque spostamento.
+   callback originale è `main`, una **nuova** verifica con il codice attuale di
+   `main` non riuscirebbe (§1d): una volta spostato, tornare a `main` richiederebbe
+   prima di correggerne la GET. Quindi: o il ricevitore originale è il servizio
+   esterno ed è verificabile, o la correzione della GET di `main` va rilasciata e
+   provata **prima** di qualunque spostamento.
 3. **Ripristino:** reimpostare in console l'URL fotografato con lo stesso verify
    token, confermare la verifica, ricontrollare i campi sottoscritti, inviare un
    messaggio di prova da un telefono di prova e vederlo nel ricevitore originale.
@@ -490,8 +522,9 @@ Questo piano non cambia il callback. Per qualsiasi fase futura che lo cambi:
    approvazione della patch di produzione.
 2. Condivisione dell'App Secret con il servizio CRM, oppure ri-firma con un
    segreto interno (richiede modifica al CRM).
-3. Ricevere messaggi reali di clienti su un ambiente di TEST (trattamento dati
-   personali) e conservazione/cancellazione dei dati raccolti in ombra.
+3. Eventuale prova reale circoscritta sul TEST (§4.2-bis: destinatari, perimetro,
+   durata, cancellazione); per la produzione, conservazione dei dati raccolti in
+   ombra.
 4. Agenzia di destinazione del numero (`WHATSAPP_INBOUND_ROUTES`).
 5. Quale inbox è quella di lavoro in Fase 2 e quando si spegne la risposta legacy.
 6. Quando e dove il CRM diventa servizio di produzione (Fase 3).
@@ -508,11 +541,13 @@ Questo piano non cambia il callback. Per qualsiasi fase futura che lo cambi:
 ### 6.1 Conflitto tra documenti
 `roadmap/BLOCCO-4D_ATTIVAZIONE.md:7-10` dichiara il callback su `main`;
 `roadmap/BLOCCO-4A_TEST_RUNBOOK.md:31` lo dichiara non verificabile e indica il
-servizio esterno come possibile destinatario; il codice di `main` (§1d) rende
-la verifica Meta di `main` impossibile. Solo la console Meta può decidere.
+servizio esterno come possibile destinatario; il codice attuale di `main` (§1d)
+non supererebbe una nuova verifica, ma questo non dice dove punti oggi il callback.
+Solo la console Meta e i log delle consegne reali possono decidere.
 
 ### 6.2 Difetti di `main` rilevanti (non corretti qui)
-GET di verifica incompatibile; solo il primo messaggio del payload; 200 anche su
+GET di verifica incompatibile con i parametri di Meta nel codice attuale (una nuova
+verifica non riuscirebbe); solo il primo messaggio del payload; 200 anche su
 errore; nessuna deduplicazione; risposta manuale salvata come inviata anche se
 fallita; PDF pubblici su GitHub.
 

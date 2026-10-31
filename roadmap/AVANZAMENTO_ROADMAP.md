@@ -81,7 +81,7 @@ Livelli, sempre distinti:
 ### Punto 5 — firma (`esign/`, migrazione 125)
 
 - **Contratto del fornitore:** ambiente, creazione idempotente, rilettura dello stato, documento, audit trail, verifica degli eventi. C'è uno strumento HMAC-SHA256 sul corpo grezzo, con confronto a tempo costante.
-- **Validità:** una firma è valida solo in `production`; una firma in sandbox resta di prova. Il database rifiuta `signed` senza documento, data e livello.
+- **Ambiente:** una richiesta conta come firmata (`valid_signature`) solo se completata nell'ambiente reale (`production`) di un fornitore reale; in sandbox resta di prova. È una **condizione tecnica**: da sola non dimostra la validità legale della firma, che dipende dal tipo di firma (FES/FEA/FEQ), dal fornitore e dal documento ed è materia del parere legale. Il database rifiuta `signed` senza documento, data e livello.
 - **Webhook pubblico** `/api/public/esign/webhooks/{provider}`:
   - una sola applicazione per id evento;
   - stato sempre riletto dal fornitore;
@@ -94,8 +94,10 @@ Livelli, sempre distinti:
 
 Il piano è in `BLOCCO-4_NUMERO_OPERATIVO_PIANO.md`:
 - ricostruzione di template della stima, PDF e Stima Pro, sopralluogo e webhook di `main`;
-- opzione raccomandata A: il ricevitore attuale inoltra al CRM;
-- quattro fasi, ognuna con criteri d'uscita e procedura di ritorno indietro;
+- opzione raccomandata A: il ricevitore attuale inoltra al **futuro CRM di produzione**, preservando template della stima, PDF e Stima Pro e sopralluogo dal sito;
+- sul TEST solo dati sintetici: nessun inoltro di clienti reali come scelta predefinita; una prova reale solo con destinatari e perimetro concordati per iscritto;
+- fasi con criteri d'uscita e procedura di ritorno indietro;
+- difetto attuale di `main`: la verifica GET legge `hub_mode` invece di `hub.mode`, quindi una nuova verifica Meta non riuscirebbe. Non dimostra dove punti oggi il callback né che non sia mai stato verificato: configurazione e consegne reali restano da verificare;
 - nessun merge di storie separate.
 
 Nessuna modifica a `main`, ai callback di Meta o al servizio template.
@@ -127,7 +129,8 @@ le variabili del servizio serve anche una chiave API Render tra i segreti dell'a
    - accesso alla console Meta, per capire dove punta oggi il callback;
    - accesso al servizio template esterno;
    - scelta dell'opzione A, B o C;
-   - consenso a ricevere dati reali di clienti su TEST;
+   - eventuale prova reale circoscritta sul TEST: destinatari, perimetro, durata, cancellazione (di default sul TEST solo dati sintetici);
+   - quando e come nasce il CRM di produzione, destinazione del collegamento;
    - agenzia di destinazione del numero.
 3. **Firma:**
    - scelta del fornitore e apertura dell'account sandbox;
