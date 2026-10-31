@@ -570,18 +570,24 @@ def test_f10_and_that_tab_makes_no_tenant_request_after_the_broadcast(staged):
     assert _chiamate_tenant(out["urls"]) == [], out["urls"]
 
 
+# SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: dopo /me, per una sessione con
+# superficie di tenant, la Shell chiede `/api/voice/status` (main.js, aggiornaVoceVoce)
+# PRIMA della vista: lo stub a coda risponde nell'ordine, quindi la risposta va dichiarata.
+VOCE_SPENTA = {"enabled": False}
+
+
 def test_f11_with_an_active_acting_contatti_still_works(staged):
     """T5 - nessuna regressione: dentro un'agenzia il CRM funziona."""
-    out = run(staged, REPORT, script(ok(DENTRO), ok(CONTATTI_B)), hash="#/contatti")
+    out = run(staged, REPORT, script(ok(DENTRO), ok(VOCE_SPENTA), ok(CONTATTI_B)), hash="#/contatti")
     assert out["hash"] == "#/contatti", out["hash"]
-    assert "#222" in out["content"], out["content"][:300]
+    assert "#222" in out["content"], (out["urls"], out["content"][:300])
     assert "contatti" in out["navRoutes"], out["navRoutes"]
     assert "rete" in out["navRoutes"], out["navRoutes"]
 
 
 def test_f12_an_ordinary_tenant_is_never_redirected(staged):
     """T6 - un agente con la sua agenzia resta dov'e'. Nessuna Rete."""
-    out = run(staged, REPORT, script(ok(TENANT), ok(CONTATTI_A)), hash="#/contatti")
+    out = run(staged, REPORT, script(ok(TENANT), ok(VOCE_SPENTA), ok(CONTATTI_A)), hash="#/contatti")
     assert out["hash"] == "#/contatti", out["hash"]
     assert "#111" in out["content"], out["content"][:300]
     assert "rete" not in out["navRoutes"], out["navRoutes"]
@@ -694,7 +700,7 @@ def test_g4_entering_an_agency_reopens_the_crm_for_the_same_person(staged):
     dentro_con_casa = dict(DENTRO)
     dentro_con_casa["home_agency_id"] = 7
     dentro_con_casa["home_agency_name"] = "Casa Sua"
-    out = run(staged, REPORT, script(ok(dentro_con_casa), ok(CONTATTI_B)),
+    out = run(staged, REPORT, script(ok(dentro_con_casa), ok(VOCE_SPENTA), ok(CONTATTI_B)),
               hash="#/contatti")
     assert out["hash"] == "#/contatti", out["hash"]
     assert "#222" in out["content"], out["content"][:300]
