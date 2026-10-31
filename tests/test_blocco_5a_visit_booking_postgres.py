@@ -37,7 +37,7 @@ pytestmark = [
 ROME = ZoneInfo("Europe/Rome")
 OPS = "/api/visit-booking-links"
 PUB = "/api/public/visit-booking"
-SECRETS = ("Via Segreta", "77", "99999", "NOTA-RISERVATA", "IMM-")
+SECRETS = ("Via Segreta", "Civico-S77", "99999", "NOTA-RISERVATA", "IMM-")
 
 
 @pytest.fixture
@@ -64,7 +64,7 @@ def _property(b, agency="a", *, mandate=True, end=None, status="active"):
     cols = "agency_id, code, title, property_type, commercial_status, city, address, civic_number, minimum_price, " \
            "internal_notes"
     vals = [b["ids"][agency], code, "Trilocale Via Segreta", "apartment", status, "Comune Sintetico", "Via Segreta",
-            "77", 99999, "NOTA-RISERVATA"]
+            "Civico-S77", 99999, "NOTA-RISERVATA"]
     if mandate:
         cols += ", mandate_type, mandate_start, mandate_end"
         vals += ["Esclusiva", date.today() - timedelta(days=30), end]
@@ -354,6 +354,8 @@ def test_p_public_responses_expose_nothing_reserved(vb):
         "date_to": (datetime.now(timezone.utc) + timedelta(days=3)).isoformat()}).text
     out = _book(vb, token, _slots(vb, token)[0]["start_at"])
     raw += out.text + vb["public"].get(f"{PUB}/manage/{out.json()['manage_url'].rsplit('/', 1)[1]}").text
+    for casuale in (token, out.json()["manage_url"]):  # token e chiave casuali: non sono dati
+        raw = raw.replace(casuale, "")
     for secret in SECRETS:
         assert secret not in raw, secret
     assert info.json()["property"] == {"type_label": "Appartamento", "city": "Comune Sintetico"} or \

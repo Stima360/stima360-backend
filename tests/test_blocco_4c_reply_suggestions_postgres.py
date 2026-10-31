@@ -44,7 +44,7 @@ pytestmark = [
 ]
 
 API = "/api/reply-suggestions/messages"
-SECRETS = ("Via Riservata", "99", "123456", "NOTA-INTERNA-RISERVATA", "NOTA-PUBBLICA-NON-USATA", "Proprietario Segreto")
+SECRETS = ("Via Riservata", "Civico-R99", "123456", "NOTA-INTERNA-RISERVATA", "NOTA-PUBBLICA-NON-USATA", "Proprietario Segreto")
 
 
 def _property(b, agency, *, status="active", **values):
@@ -53,7 +53,7 @@ def _property(b, agency, *, status="active", **values):
            "bathrooms": 1, "floor": "2", "total_floors": 4, "elevator": True, "energy_class": "C",
            # dati riservati: non devono mai uscire
            "minimum_price": 123456, "internal_notes": "NOTA-INTERNA-RISERVATA",
-           "public_notes": "NOTA-PUBBLICA-NON-USATA", "address": "Via Riservata", "civic_number": "99"}
+           "public_notes": "NOTA-PUBBLICA-NON-USATA", "address": "Via Riservata", "civic_number": "Civico-R99"}
     row.update(values)
     cols = ", ".join(row)
     marks = ", ".join(["%s"] * len(row))
@@ -158,7 +158,9 @@ def test_r_reserved_information_never_appears(wa):
     pid, _ = _property(wa, "a")
     mid, _, contact = _incoming(wa, "Qual è il prezzo minimo? Indirizzo? Chi è il proprietario? Costo, metri, piano?")
     _link(wa, mid, contact, pid)
-    raw = wa["login"]("owner_a").get(f"{API}/{mid}").text
+    body = wa["login"]("owner_a").get(f"{API}/{mid}").json()
+    body.pop("fingerprint")                       # impronta esadecimale casuale: non e' un dato
+    raw = json.dumps(body, ensure_ascii=False)
     for secret in SECRETS:
         assert secret not in raw, secret
 

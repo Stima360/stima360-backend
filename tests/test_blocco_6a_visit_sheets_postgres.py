@@ -85,7 +85,7 @@ def test_g_a_booked_visit_sheet_with_data_template_and_author(app):
     pdf = _download(owner, out["sheet"]["id"])
     assert pdf.startswith(b"%PDF") and hashlib.sha256(pdf).hexdigest() == out["sheet"]["sha256"]
     text = _text(pdf)
-    for expected in ("Foglio visita", "Via Segreta 77, Comune Sintetico", "Esclusiva", "Visitatore Sintetico",
+    for expected in ("Foglio visita", "Via Segreta Civico-S77, Comune Sintetico", "Esclusiva", "Visitatore Sintetico",
                      "non attesta che la visita", "Firma del visitatore", "Bozza di modello",
                      "non contiene clausole provvigionali"):
         assert expected in " ".join(text.split()), expected
