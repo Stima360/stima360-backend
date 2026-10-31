@@ -55,7 +55,7 @@ def test_a_visit_request_on_a_bookable_property_gets_the_link_and_no_confirmatio
     appointments_before = _q(vb5, "SELECT count(*) FROM appointments")[0][0]
     _tick(vb5)
     decision, reason, text, version, mode, data, handoff = _decision(vb5, mid)
-    assert (decision, reason, version, mode, handoff) == ("answer", "visit_booking_link", "5b-1", "simulate", None)
+    assert (decision, reason, version, mode, handoff) == ("answer", "visit_booking_link", "5b-2", "simulate", None)
     assert PLACEHOLDER in text and "fissato solo quando la pagina conferma" in text
     assert "confermat" not in text.replace("conferma la prenotazione", "")
     assert "/visita/" not in text and data["booking_link_id"] == link["id"]
@@ -93,3 +93,22 @@ def test_without_a_bookable_link_the_visit_goes_to_the_agent(vb5, case):
     decision, reason, text, *_ = _decision(vb5, mid)
     assert (decision, reason) == ("handoff", "visit") and PLACEHOLDER not in text
     assert "nessun appuntamento è fissato" in text
+
+
+@pytest.mark.parametrize("status", ["mandate", "reserved", "under_offer"])
+def test_the_link_is_offered_only_for_an_active_property(vb5, status):
+    """Incarico in corso e collegamento attivo, ma l'immobile non e' «Attivo»:
+    nessun collegamento automatico, la richiesta va all'agente."""
+    pid = _property(vb5)
+    _booking_link(vb5, pid).json()
+    _q(vb5, "SET session_replication_role = replica; UPDATE properties SET commercial_status = %s WHERE id = %s",
+       (status, pid))
+    from visit_booking import service as visit_booking
+    from core.database import core_cursor
+    with core_cursor() as (_conn, cur):
+        assert visit_booking.booking_link_for_visit(cur, vb5["ids"]["a"], pid) is not None   # prenotabile
+    mid = _visit(vb5, pid)
+    _tick(vb5)
+    decision, reason, text, _v, _m, data, handoff = _decision(vb5, mid)
+    assert (decision, reason) == ("handoff", "visit") and PLACEHOLDER not in text
+    assert "booking_link_id" not in data and handoff["task"] == "planned"

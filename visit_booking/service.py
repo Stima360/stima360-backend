@@ -176,6 +176,23 @@ def create_link(ctx, data: dict) -> dict:
     return _link_view(link, token)
 
 
+def eligible_agents(ctx, property_id: int) -> dict:
+    """Gli agenti a cui `create_link` assegnerebbe davvero un collegamento su
+    questo immobile: membri attivi con orario settimanale configurato (un
+    agente non titolare vede solo se stesso). Stessi controlli di `create_link`."""
+    agency_id = ctx.require_agency()
+    from appointments import working_hours_repository
+    with core_cursor() as (_, cur):
+        _require_installed(cur)
+        prop = _managed_property(cur, ctx, property_id)
+        agents = appointment_repository.agents(cur, agency_id)
+        if not sees_all_agency_records(ctx.role, ctx.is_platform_admin):
+            agents = [a for a in agents if a["id"] == ctx.user_id]
+        items = [{"id": a["id"], "name": a["name"], "is_me": a["id"] == ctx.user_id} for a in agents
+                 if working_hours_repository.has_weekly_configuration(cur, agency_id, a["id"])]
+    return {"property_id": prop["id"], "items": items}
+
+
 def list_links(ctx, property_id: int) -> dict:
     agency_id = ctx.require_agency()
     with core_cursor() as (_, cur):

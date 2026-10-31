@@ -523,8 +523,9 @@ ripristinare da un backup verificato.
 1. **Messaggi WhatsApp** → una conversazione: pannello «Risposte automatiche» con «arresto generale
    attivo» (la variabile `WHATSAPP_AUTO_REPLY_MODE` resta assente: nessuna automazione accesa).
 2. **Immobile con incarico in corso** → **Visite** → «Prenotazione online delle visite» →
-   «Nuovo collegamento» (agente con orario settimanale, autorizzazione del proprietario) → copiare il
-   collegamento.
+   «Nuovo collegamento» → il menu «Agente» elenca solo gli agenti attivi con orario settimanale
+   configurato (nessuno: messaggio «impostalo in Agenda»); scegliere l'agente e l'autorizzazione del
+   proprietario → copiare il collegamento.
 3. In una finestra privata: `/visita/<token>` → orario → dati → esito a schermo → collegamento di
    gestione `/visita-gestione/<chiave>` → «Sposta» e «Annulla».
 4. **Agenda** e **Immobile → Visite**: la stessa visita, poi annullata/spostata.
@@ -535,3 +536,6 @@ ripristinare da un backup verificato.
    «Mostra report» → «Scarica PDF»; revocare l'accesso dall'amministrazione proprietari →
    ricaricare: report e PDF non più disponibili.
 7. Anche a 390 px di larghezza: pagina `/visita/...` e portale proprietario.
+8. Risposte automatiche (solo simulazione, regole `5b-2`): dati della scheda e collegamento di
+   prenotazione solo per un immobile «Attivo»; con stato incarico, riservato, in trattativa, venduto
+   o ritirato la richiesta passa all'agente.

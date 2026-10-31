@@ -142,6 +142,36 @@ def test_l_agencies_are_separated(vb):
     assert _link(vb, pid, who="owner_b", agent="owner_b").status_code in (403, 404)
 
 
+def test_l_only_agents_with_working_hours_are_offered(vb):
+    """La scelta dell'agente mostra solo chi il server accetta: membri attivi
+    con orario settimanale; un agente vede solo se stesso; altra agenzia 404."""
+    ids = vb["ids"]
+    _q(vb, "DELETE FROM agent_working_hours WHERE user_id = ANY(%s)", ([ids["agent2_a"], ids["admin_a"]],))
+    pid = _property(vb)
+    r = vb["login"]("owner_a").get(f"{OPS}/agents", params={"property_id": pid})
+    assert r.status_code == 200, r.text
+    items = r.json()["items"]
+    assert sorted(a["id"] for a in items) == sorted([ids["agent_a"], ids["owner_a"]])
+    assert [a["is_me"] for a in items if a["id"] == ids["owner_a"]] == [True]
+    assert set(items[0]) == {"id", "name", "is_me"}
+    for a in items:                                    # ognuno e' davvero assegnabile
+        assert _link(vb, pid, agent=next(k for k in ("agent_a", "owner_a") if ids[k] == a["id"])).status_code == 201
+    other = _property(vb)                              # immobile non suo: l'agente non lo gestisce
+    assert vb["login"]("agent_a").get(f"{OPS}/agents", params={"property_id": other}).status_code == 403
+    _q(vb, "SET session_replication_role = replica; UPDATE properties SET assigned_agent_id = %s WHERE id = %s",
+       (ids["agent_a"], pid))
+    mine = vb["login"]("agent_a").get(f"{OPS}/agents", params={"property_id": pid}).json()["items"]
+    assert [a["id"] for a in mine] == [ids["agent_a"]]
+    _q(vb, "UPDATE agency_memberships SET status = 'suspended' WHERE operator_user_id = %s", (ids["agent_a"],))
+    try:
+        left = vb["login"]("owner_a").get(f"{OPS}/agents", params={"property_id": pid}).json()["items"]
+        assert [a["id"] for a in left] == [ids["owner_a"]]
+    finally:
+        _q(vb, "UPDATE agency_memberships SET status = 'active' WHERE operator_user_id = %s", (ids["agent_a"],))
+    assert vb["login"]("owner_b").get(f"{OPS}/agents", params={"property_id": pid}).status_code == 404
+    assert vb["login"]("owner_a").get(f"{OPS}/agents").status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # O - orari prenotabili
 # ---------------------------------------------------------------------------

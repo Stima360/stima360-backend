@@ -53,7 +53,9 @@ from inbound_messages.service import INBOUND_ORIGIN
 from message_replies.enums import WINDOW_HOURS, WINDOW_SAFETY_MINUTES
 from operator_auth.context import SystemAgencyContext
 from operator_auth.permissions import sees_all_agency_records
+from reply_suggestions import repository as suggestion_repository
 from reply_suggestions import service as suggestions
+from reply_suggestions.fields import AVAILABLE_STATUS
 from visit_booking import service as visit_booking
 
 from . import repository
@@ -75,6 +77,15 @@ from .enums import (
     VISIT_BOOKING_OWNER_TEXT,
     VISIT_BOOKING_TEXT,
 )
+
+
+def _available(cur, agency_id: int, prop: dict | None) -> bool:
+    """L'immobile del messaggio e' «Attivo» (la stessa condizione del 4C)."""
+    if not prop:
+        return False
+    row = suggestion_repository.communicable_property(cur, agency_id, prop["id"])
+    return row is not None and row.get("commercial_status") == AVAILABLE_STATUS
+
 
 NOT_INSTALLED_MESSAGE = "Le risposte automatiche non sono ancora installate su questo ambiente (migrazione 119)."
 FORBIDDEN_MESSAGE = "Solo il titolare o un amministratore dell'agenzia può gestire le risposte automatiche."
@@ -188,8 +199,10 @@ def decide(cur, agency_id: int, message: dict, *, now=None) -> dict:
     # BLOCCO-5B: una richiesta di visita sull'immobile IDENTIFICATO di questo
     # messaggio, con la prenotazione davvero abilitata, riceve il collegamento
     # (come segnaposto: il token non si conserva) e nessuna conferma.
-    if (s["handoff"] or {}).get("code") == "visit":
-        link = visit_booking.booking_link_for_visit(cur, agency_id, (s["property"] or {}).get("id"))
+    # Come per i dati della scheda, SOLO per un immobile «Attivo»: un incarico
+    # in corso ma riservato, in trattativa o non ancora attivo va all'agente.
+    if (s["handoff"] or {}).get("code") == "visit" and _available(cur, agency_id, s["property"]):
+        link = visit_booking.booking_link_for_visit(cur, agency_id, s["property"]["id"])
         if link is not None:
             text = VISIT_BOOKING_TEXT.format(link=BOOKING_LINK_PLACEHOLDER)
             if link["owner_authorization"] == "per_visit":

@@ -3,6 +3,7 @@
 Operatore (montato con `require_authenticated_operator`, scope da `require_operator`):
     POST /api/visit-booking-links                       crea un collegamento (token mostrato una volta)
     GET  /api/visit-booking-links?property_id=          collegamenti di un immobile
+    GET  /api/visit-booking-links/agents?property_id=   agenti assegnabili (attivi, con orario)
     POST /api/visit-booking-links/{id}/disable          disattiva
 
 Pubblico (nessuna sessione; ogni rifiuto del link e' la stessa risposta neutra):
@@ -118,6 +119,11 @@ def create(body: LinkCreate, ctx: OperatorContext = Depends(require_operator)):
 @router.get("")
 def list_links(property_id: int = Query(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
     return _call(service.list_links, ctx, property_id)
+
+
+@router.get("/agents")
+def eligible_agents(property_id: int = Query(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
+    return _call(service.eligible_agents, ctx, property_id)
 
 
 @router.post("/{link_id}/disable")

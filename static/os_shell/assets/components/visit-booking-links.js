@@ -8,7 +8,6 @@
 // alla creazione: poi resta solo la sua impronta. Tutto via `textContent`.
 
 import { apiGet, apiPost } from '../core/api-client.js';
-import { getAgents } from '../agenda/agenda-api.js';
 
 const API = '/api/visit-booking-links';
 
@@ -86,14 +85,27 @@ export async function mountVisitBookingLinks(container, { propertyId }) {
 
   function createForm() {
     const form = el('div', 'visit-booking-form');
+    // Solo gli agenti che il server accetta: membri attivi con orario
+    // settimanale configurato. Nessuna scelta implicita se sono piu' d'uno.
     const agent = el('select', 'input'); agent.name = 'assigned_user_id';
-    getAgents().then((r) => {
-      for (const a of r.items || []) {
-        const o = el('option', null, a.name); o.value = String(a.id);
-        if (a.is_me) o.selected = true;
+    const agentHint = el('p', 'muted');
+    agentHint.setAttribute('data-visit-booking-agent-hint', '');
+    const agentsReady = apiGet(`${API}/agents?property_id=${encodeURIComponent(propertyId)}`).then((r) => {
+      const items = (r && r.items) || [];
+      if (items.length !== 1) {
+        const pick = el('option', null, items.length ? '— scegli l’agente —' : 'Nessun agente disponibile');
+        pick.value = ''; agent.appendChild(pick);
+      }
+      for (const a of items) {
+        const o = el('option', null, a.is_me ? `${a.name} (tu)` : a.name); o.value = String(a.id);
         agent.appendChild(o);
       }
-    }).catch(() => {});
+      if (items.length === 1) agent.value = String(items[0].id);
+      agentHint.textContent = items.length
+        ? 'Sono elencati solo gli agenti attivi con un orario settimanale configurato.'
+        : 'Nessun agente ha un orario settimanale configurato: impostalo in Agenda per creare un collegamento.';
+      return items.length;
+    }).catch((e) => { agentHint.textContent = errorText(e); return 0; });
     const duration = numberInput('duration_minutes', 45, 15, 240);
     const step = el('select', 'input'); step.name = 'step_minutes';
     for (const v of [15, 30, 60]) { const o = el('option', null, `${v} minuti`); o.value = String(v); if (v === 30) o.selected = true; step.appendChild(o); }
@@ -112,6 +124,7 @@ export async function mountVisitBookingLinks(container, { propertyId }) {
     const save = button('Crea collegamento', 'primary', 'data-visit-booking-save');
     const cancel = button('Annulla', 'ghost');
     save.addEventListener('click', async () => {
+      if (!(await agentsReady) || !agent.value) { error.replaceChildren(el('div', 'error-box', 'Scegli un agente con orario configurato.')); return; }
       if (!owner.value) { error.replaceChildren(el('div', 'error-box', 'Indica l’autorizzazione del proprietario.')); return; }
       save.disabled = true;
       try {
@@ -133,7 +146,7 @@ export async function mountVisitBookingLinks(container, { propertyId }) {
     });
     cancel.addEventListener('click', () => load());
     const actions = el('div', 'agency-actions'); actions.append(save, cancel);
-    form.append(field('Agente', agent), field('Durata della visita (minuti)', duration), field('Orari ogni', step),
+    form.append(field('Agente', agent), agentHint, field('Durata della visita (minuti)', duration), field('Orari ogni', step),
       field('Tempo di spostamento prima e dopo (minuti)', travel), field('Preavviso minimo (ore)', notice),
       field('Prenotabile fino a (giorni)', horizon), field('Autorizzazione del proprietario', owner),
       field('Nota sull’autorizzazione', note), error, actions);

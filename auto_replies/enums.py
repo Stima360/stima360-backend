@@ -13,7 +13,7 @@ MODES = (MODE_OFF, MODE_SIMULATE)
 
 #: Versione delle regole: una decisione per (messaggio, versione). Cambiare
 #: regole o testi (anche quelli del 4C) vuol dire cambiare questa stringa.
-RULES_VERSION = "5b-1"          # BLOCCO-5B: visita con collegamento di prenotazione
+RULES_VERSION = "5b-2"          # collegamento di prenotazione solo per immobile «Attivo»
 
 #: Quanti messaggi al massimo per giro e per agenzia.
 TICK_LIMIT = 50
