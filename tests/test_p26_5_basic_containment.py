@@ -385,6 +385,8 @@ TENANT_PREFIXES = (
     # SENTINELLA AGGIORNATA DA BLOCCO-5A: i collegamenti di prenotazione delle
     # visite, lato operatore (agenzia dalla sessione, corpo chiuso).
     "/api/visit-booking-links",
+    # SENTINELLA AGGIORNATA DA BLOCCO-6A: i fogli visita (visibilita' dell'Agenda).
+    "/api/visit-sheets",
 )
 
 

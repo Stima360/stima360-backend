@@ -158,7 +158,8 @@ def test_01_la_071_e_valida_e_in_coda():
     # simulazione delle risposte automatiche; additiva), con la sua down.
     # SENTINELLA AGGIORNATA DA BLOCCO-5A: 120_property_visit_booking (prenotazione online delle
     # visite; additiva), con la sua down.
-    assert numeri[numeri.index(76):] == list(range(76, 121))
+    # SENTINELLA AGGIORNATA DA BLOCCO-6A: 121_visit_sheets (fogli visita; additiva), con la sua down.
+    assert numeri[numeri.index(76):] == list(range(76, 122))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

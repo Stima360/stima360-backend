@@ -2194,6 +2194,20 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 404, b'{"detail":{"code":"PROPERTY_NOT_FOUND"}}')
         return self._reply(method, path, 200, b'{"items": []}')
 
+    def _visit_sheets(self, method, path, agency, payload):
+        """BLOCCO-6A. Il doppio di `/api/visit-sheets`: elenco della PROPRIA
+        agenzia, foglio inesistente 404. Rotto `isolation`: l'elenco
+        dell'immobile altrui risponde 200, e la matrice deve fallire."""
+        import re as _re
+
+        trovato = _re.search(r"property_id=(\d+)", path)
+        if trovato:
+            riga = self.rows.get(int(trovato.group(1)))
+            if bool(riga) and riga["prefix"] == "/api/property" and (
+                    riga["agency"] == agency or self._broken("isolation", "visit_sheets")):
+                return self._reply(method, path, 200, b'{"items": []}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
+
     def _inbound_messages(self, method, path, agency, payload):
         """BLOCCO-4A. Il doppio di `/api/inbound-messages`: elenco della sola
         agenzia della sessione, corpo dell'associazione chiuso (modello VERO).
@@ -2625,6 +2639,10 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA BLOCCO-4C
         if path.startswith("/api/reply-suggestions"):
             return self._reply_suggestions(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-6A
+        if path.startswith("/api/visit-sheets"):
+            return self._visit_sheets(method, path, agency, payload)
 
         # SENTINELLA AGGIORNATA DA BLOCCO-5A
         if path.startswith("/api/visit-booking-links"):
@@ -3679,6 +3697,23 @@ def test_13w_a_visit_link_on_another_agency_fails_the_matrix(monkeypatch):
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("VISIT_BOOKING_LINKS-elenco-A-non-vede-B") for i in falliti), falliti
+
+
+def test_13x_visit_sheets_are_certified_without_generating(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("VISIT_SHEETS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 4 + 2, righe
+
+
+def test_13y_visit_sheets_of_another_agency_fail_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="visit_sheets"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("VISIT_SHEETS-elenco-A-non-vede-B") for i in falliti), falliti
 
 
 def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):

@@ -1708,3 +1708,8 @@ a.census-unit-main { text-decoration: none; }
 .visit-booking-list li { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
 .visit-booking-form { display: grid; gap: 8px; max-width: 560px; }
 .visit-booking-links code { overflow-wrap: anywhere; display: block; }
+/* BLOCCO-6A: fogli visita. */
+.visit-sheets { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 10px; display: grid; gap: 8px; min-width: 0; }
+.visit-sheets h3 { margin: 0; font-size: 15px; }
+.visit-sheets-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.visit-sheet-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; }

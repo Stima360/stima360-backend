@@ -92,6 +92,8 @@ from message_replies.router import router as message_replies_router
 from reply_suggestions.router import router as reply_suggestions_router
 # BLOCCO-4D: motore delle risposte automatiche, solo simulazione (`/api/auto-replies`).
 from auto_replies.router import router as auto_replies_router
+# BLOCCO-6A: fogli visita (`/api/visit-sheets`).
+from visit_sheets.router import router as visit_sheets_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
@@ -223,6 +225,8 @@ app.include_router(message_replies_router, dependencies=[Depends(require_authent
 app.include_router(reply_suggestions_router, dependencies=[Depends(require_authenticated_operator)])
 # BLOCCO-4D: stesso montaggio; nessuna rotta invia o accoda. Arresto generale: WHATSAPP_AUTO_REPLY_MODE.
 app.include_router(auto_replies_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-6A: stesso montaggio; visibilita' dell'Agenda, nessuna pubblicazione al proprietario.
+app.include_router(visit_sheets_router, dependencies=[Depends(require_authenticated_operator)])
 # P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.

@@ -88,6 +88,7 @@ import { getSession } from '../core/auth.js';
 import { loadFormOptions, openPropertyDialog, propertyDisplayName, propertyTypeLabel } from '../components/property-form.js';
 import { mountPropertyInteractions } from '../components/property-interactions.js';
 import { mountVisitBookingLinks } from '../components/visit-booking-links.js';
+import { mountVisitSheets } from '../components/visit-sheets.js';
 // BLOCCO-2A: la scheda «Valutazioni» (valutazioni dell'agente, versioni e approvazione).
 import { mountPropertyValuations } from '../components/property-valuations.js';
 // REPORT-PROPRIETARIO-1: la scheda «Report proprietario» (anteprima e PDF da condividere).
@@ -526,7 +527,9 @@ export async function renderImmobileDettaglio(container, params = []) {
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents, documentAddMode, documentRemoveConfirm); bindDocumentiSection(contentEl); break;
         case 'visite': contentEl.innerHTML = renderVisite(property.visits, visitRemoveConfirm); bindVisiteSection(contentEl);
           // BLOCCO-5A: collegamenti di prenotazione online delle visite di questo immobile.
-          mountVisitBookingLinks(contentEl, { propertyId: property.id }).catch(() => {}); break;
+          mountVisitBookingLinks(contentEl, { propertyId: property.id }).catch(() => {});
+          // BLOCCO-6A: fogli visita delle visite in agenda di questo immobile.
+          mountVisitSheets(contentEl, { propertyId: property.id }).catch(() => {}); break;
         case 'proposte': contentEl.innerHTML = renderProposte(params[1] === 'proposte' && /^\d+$/.test(params[2] || '') ? proposals.filter((pr) => String(pr.match_id) === params[2]) : proposals, sales, property, saleCancelConfirm); bindProposteSection(contentEl); break;
         case 'acquirenti':
         case 'abbinamenti': {

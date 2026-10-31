@@ -70,16 +70,17 @@ def test_01_la_107_e_valida_additiva_e_l_ultima():
     nomi = [m.version for m in tutte]
     assert nomi.index("118_whatsapp_inbound") == nomi.index("117_property_valuation_pdfs") + 1
     assert nomi.index("117_property_valuation_pdfs") == nomi.index("116_property_valuations") + 1
-    # (con la 119 e la 120 in coda, la catena storica e' spostata di due posizioni)
-    assert tutte[-6].version == "115_agency_logos"
-    assert tutte[-7].version == "114_territory_logical_delete"
-    assert tutte[-8].version == "113_operator_logical_delete"
-    assert tutte[-9].version == "112_stime_consenso_marketing_prova"
-    assert tutte[-10].version == "111_voice_mandate_intents"
-    assert tutte[-11].version == "110_consent_capture"
-    assert tutte[-12].version == "109_consent_channels"
-    assert tutte[-13].version == "108_followup_contact_journey"
-    ultima = tutte[-14]
+    # (dopo la 118 vengono 119, 120, 121...: la catena storica si legge fino alla 118)
+    tutte = [m for m in tutte if m.number <= 118]
+    assert tutte[-4].version == "115_agency_logos"
+    assert tutte[-5].version == "114_territory_logical_delete"
+    assert tutte[-6].version == "113_operator_logical_delete"
+    assert tutte[-7].version == "112_stime_consenso_marketing_prova"
+    assert tutte[-8].version == "111_voice_mandate_intents"
+    assert tutte[-9].version == "110_consent_capture"
+    assert tutte[-10].version == "109_consent_channels"
+    assert tutte[-11].version == "108_followup_contact_journey"
+    ultima = tutte[-12]
     assert ultima.version == "107_visita_immobile_incarico"
     assert ultima.down_path is not None and not ultima.non_transactional
     assert runner.validate_migration(ultima) == []

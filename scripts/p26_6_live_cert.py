@@ -757,6 +757,17 @@ DOMAINS = (
              "in creazione, corpo chiuso -> 422, nessun collegamento creato",
     ),
     Domain(
+        "VISIT_SHEETS", "/api/visit-sheets",
+        # BLOCCO-6A. SOLO RIFIUTI E LETTURE: la matrice non genera fogli. Le
+        # visite dell'immobile altrui non si elencano (404), un foglio
+        # inesistente o altrui non si scarica (404); anonimo e Basic -> 401.
+        certifier="visit_sheets",
+        depends_on="PROPERTY",
+        api_delete=False,
+        note="due rotte sondate: anonimo e Basic -> 401, immobile altrui -> 404, foglio altrui -> 404, "
+             "nessun foglio generato",
+    ),
+    Domain(
         "AUTO_REPLIES", "/api/auto-replies",
         # BLOCCO-4D. SOLO RIFIUTI: la matrice non fa MAI girare il motore e non
         # cambia il modo dell'agenzia. Anonimo e Basic -> 401; la conversazione
@@ -7709,6 +7720,40 @@ def certify_visit_booking_links(report, http, cert, domain, jars, owned, context
         risposta = http.request("POST", base, jar=jars[etichetta], payload={**corpo, "agency_id": agenzia_altra})
         report.check(f"VISIT_BOOKING_LINKS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
                      f"{etichetta}: POST {base} con agency_id di {altro} -> {risposta.status} (atteso 422)")
+
+
+VISIT_SHEETS_OPERAZIONI = (("GET", "?property_id=1"), ("GET", "/999999999/pdf"))
+
+
+def certify_visit_sheets(report, http, cert, domain, jars, owned, context) -> None:
+    """VISIT_SHEETS (BLOCCO-6A): nessun foglio generato dalla matrice.
+
+        anonimo, Basic                          -> 401 (mount)
+        GET ?property_id=<immobile altrui>      -> 404, A->B e B->A
+        GET /<foglio inesistente>/pdf           -> 404
+    """
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in VISIT_SHEETS_OPERAZIONI:
+        percorso = base + suffisso
+        risposta = http.request(metodo, percorso)
+        report.check(f"VISIT_SHEETS-anonimo-{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"VISIT_SHEETS-basic-{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        suo = (owned.get(altro) or {}).get("PROPERTY")
+        risposta = http.request("GET", f"{base}/999999999/pdf", jar=jars[etichetta])
+        report.check(f"VISIT_SHEETS-pdf-inesistente-{etichetta}", risposta.status in (404, 503),
+                     f"{etichetta}: GET {base}/999999999/pdf -> {risposta.status} (atteso 404)")
+        if suo is None:
+            report.note(f"VISIT_SHEETS-elenco-{etichetta}-non-vede-{altro}",
+                        f"nessun immobile di {altro} fra le risorse della matrice: prova non applicabile")
+            continue
+        risposta = http.request("GET", f"{base}?property_id={suo}", jar=jars[etichetta])
+        report.check(f"VISIT_SHEETS-elenco-{etichetta}-non-vede-{altro}", risposta.status in (404, 503),
+                     f"{etichetta}: GET {base}?property_id=<immobile di {altro}> -> {risposta.status} (atteso 404)")
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:
