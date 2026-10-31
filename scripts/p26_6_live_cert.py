@@ -671,6 +671,126 @@ DOMAINS = (
              "Admin e un cookie proprio; vede solo gli immobili concessi",
     ),
     Domain(
+        "AGENCY_PROFILE", "/api/agency-profile",
+        # BLOCCO-1B. SOLO RIFIUTI E LETTURE, come TRASH: la matrice non scrive i
+        # dati ne' il logo di un'agenzia di TEST. L'agenzia viene SOLO dalla
+        # sessione: la prova cross-tenant e' che ogni sessione legge il profilo
+        # e il logo della propria agenzia anche con l'altra nella query, e che
+        # un `agency_id` nel corpo viene rifiutato (422) prima di ogni scrittura.
+        certifier="agency_profile",
+        api_delete=False,
+        note="quattro rotte sondate (la DELETE no): anonimo e Basic -> 401, profilo e logo solo "
+             "della propria agenzia (agency_id nella query ignorato), agency_id "
+             "nel corpo -> 422, profili di A e B invariati",
+    ),
+    Domain(
+        "PROPERTY_VALUATIONS", "/api/property-valuations",
+        # BLOCCO-2A. SOLO RIFIUTI E LETTURE: la matrice non crea, non modifica e
+        # non approva valutazioni di TEST. L'agenzia viene SOLO dalla sessione:
+        # la prova cross-tenant e' che l'immobile dell'altra agenzia non e'
+        # raggiungibile (404, o 503 se la 116 non e' applicata) ne' in lettura
+        # ne' come destinazione di una bozza, e che un `agency_id` nel corpo e'
+        # rifiutato (422) prima di ogni scrittura.
+        certifier="property_valuations",
+        depends_on="PROPERTY",
+        api_delete=False,
+        note="sei rotte sondate (nessuna DELETE esiste): anonimo e Basic -> 401, "
+             "immobile altrui mai raggiungibile, agency_id nel corpo -> 422",
+    ),
+    Domain(
+        "OWNER_REPORTS", "/api/owner-reports",
+        # REPORT-PROPRIETARIO-1. SOLA LETTURA: il report non scrive nulla e la
+        # matrice non chiede nemmeno un PDF riuscito. L'agenzia viene SOLO dalla
+        # sessione: l'immobile dell'altra agenzia non e' raggiungibile (404) ne'
+        # in anteprima ne' in PDF, e un `agency_id` nel corpo e' rifiutato (422).
+        certifier="owner_reports",
+        depends_on="PROPERTY",
+        api_delete=False,
+        note="due rotte sondate: anonimo e Basic -> 401, immobile altrui mai "
+             "raggiungibile, agency_id nel corpo -> 422",
+    ),
+    Domain(
+        "INBOUND_MESSAGES", "/api/inbound-messages",
+        # BLOCCO-4A. SOLO RIFIUTI E LETTURE: la matrice non associa messaggi e
+        # non chiama il webhook. L'agenzia viene SOLO dalla sessione: l'elenco
+        # risponde con la sola agenzia della sessione (o 503 se la 118 manca),
+        # un messaggio inesistente e' 404, `agency_id` nel corpo e' 422.
+        certifier="inbound_messages",
+        depends_on=None,
+        api_delete=False,
+        note="quattro rotte sondate: anonimo e Basic -> 401, elenco della sola sessione, "
+             "agency_id nel corpo -> 422, nessuna associazione eseguita",
+    ),
+    Domain(
+        "MESSAGE_REPLIES", "/api/message-replies",
+        # BLOCCO-4B. SOLO RIFIUTI: la matrice non invia MAI una risposta WhatsApp.
+        # Destinatario e mittente non si possono passare (422), una conversazione
+        # che non esiste nell'agenzia della sessione e' 404 (o 503 se l'invio e'
+        # disattivato), mai un 2xx su una POST.
+        certifier="message_replies",
+        depends_on=None,
+        api_delete=False,
+        note="due rotte sondate: anonimo e Basic -> 401, destinatario o mittente nel corpo -> 422, "
+             "conversazione inesistente -> 404, nessun invio",
+    ),
+    Domain(
+        "REPLY_SUGGESTIONS", "/api/reply-suggestions",
+        # BLOCCO-4C. SOLA LETTURA: una GET che calcola un suggerimento e non
+        # scrive nulla. L'agenzia viene SOLO dalla sessione: un messaggio che
+        # non e' dell'agenzia della sessione e' 404, nessun metodo di scrittura.
+        certifier="reply_suggestions",
+        depends_on=None,
+        api_delete=False,
+        note="una rotta sondata: anonimo e Basic -> 401, messaggio inesistente -> 404, "
+             "POST -> 405, nessun invio",
+    ),
+    Domain(
+        "VISIT_BOOKING_LINKS", "/api/visit-booking-links",
+        # BLOCCO-5A. SOLO RIFIUTI: la matrice non crea MAI un collegamento di
+        # prenotazione. L'immobile dell'altra agenzia non e' raggiungibile ne'
+        # in elenco ne' in creazione (404); un `agency_id` o un campo ignoto
+        # nel corpo -> 422; anonimo e Basic -> 401.
+        certifier="visit_booking_links",
+        depends_on="PROPERTY",
+        api_delete=False,
+        note="due rotte sondate: anonimo e Basic -> 401, immobile altrui -> 404 in elenco e "
+             "in creazione, corpo chiuso -> 422, nessun collegamento creato",
+    ),
+    Domain(
+        "VISIT_SHEETS", "/api/visit-sheets",
+        # BLOCCO-6A. SOLO RIFIUTI E LETTURE: la matrice non genera fogli. Le
+        # visite dell'immobile altrui non si elencano (404), un foglio
+        # inesistente o altrui non si scarica (404); anonimo e Basic -> 401.
+        certifier="visit_sheets",
+        depends_on="PROPERTY",
+        api_delete=False,
+        note="due rotte sondate: anonimo e Basic -> 401, immobile altrui -> 404, foglio altrui -> 404, "
+             "nessun foglio generato",
+    ),
+    Domain(
+        "SIGNATURE_REQUESTS", "/api/signature-requests",
+        # BLOCCO-6B. SOLO RIFIUTI: la matrice non crea richieste di firma. Un
+        # foglio inesistente o altrui -> 404; un campo ignoto -> 422; anonimo e
+        # Basic -> 401.
+        certifier="signature_requests",
+        depends_on=None,
+        api_delete=False,
+        note="due rotte sondate: anonimo e Basic -> 401, foglio altrui -> 404, corpo chiuso -> 422, "
+             "nessuna richiesta creata",
+    ),
+    Domain(
+        "AUTO_REPLIES", "/api/auto-replies",
+        # BLOCCO-4D. SOLO RIFIUTI: la matrice non fa MAI girare il motore e non
+        # cambia il modo dell'agenzia. Anonimo e Basic -> 401; la conversazione
+        # dell'altra agenzia -> 404 (503 se la 119 manca); un `agency_id` o un
+        # modo d'invio nel corpo -> 422.
+        certifier="auto_replies",
+        depends_on=None,
+        api_delete=False,
+        note="tre rotte sondate: anonimo e Basic -> 401, conversazione altrui -> 404, "
+             "agency_id o modo d'invio nel corpo -> 422, nessun giro eseguito",
+    ),
+    Domain(
         "LEGACY_ADMIN", "/api/admin",
         listing="/api/admin/stime?day=oggi",
         note="le sette route /api/admin che toccano dati di tenant, migrate "
@@ -7170,6 +7290,517 @@ def certify_trash(report, http, cert, domain, jars, owned, context) -> None:
         None not in prima.values() and dopo == prima,
         f"contatori del Cestino prima e dopo la sezione: {prima} -> {dopo} (attesi identici)",
     )
+
+
+#: `DELETE /logo` non viene sondata nemmeno da anonimo: fuori dal cleanup la
+#: matrice non invia mai una DELETE (lo verificano le prove 86m e a30_01).
+AGENCY_PROFILE_OPERAZIONI = (("GET", ""), ("PUT", ""), ("GET", "/logo"), ("PUT", "/logo"))
+
+
+def certify_agency_profile(report, http, cert, domain, jars, owned, context) -> None:
+    """AGENCY_PROFILE (BLOCCO-1B): nessuna scrittura riuscita tentata.
+
+        anonimo, Basic            -> 401 su GET/PUT profilo e GET/PUT logo (mount;
+                                     la DELETE non si sonda: niente DELETE fuori dal cleanup)
+        GET ?agency_id= dell'altra -> 200, agency_id della PROPRIA agenzia
+        PUT con agency_id nel corpo -> 422 (corpo chiuso, nessuna scrittura)
+        GET /logo                 -> il PROPRIO logo (impronta del proprio
+                                     profilo) o 404: mai quello dell'altra
+        profili di A e B prima e dopo la sezione -> identici
+    """
+    import hashlib
+
+    base = domain.prefix
+
+    def agenzia_id(etichetta):
+        valore = (context.get("agencies") or {}).get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in AGENCY_PROFILE_OPERAZIONI:
+        percorso = base + suffisso
+        risposta = http.request(metodo, percorso)
+        report.check(f"AGENCY_PROFILE-anonimo-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"AGENCY_PROFILE-basic-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+
+    def profilo(etichetta, query=""):
+        risposta = http.request("GET", f"{base}{query}", jar=jars[etichetta])
+        return risposta, (risposta.json() if risposta.status == 200 else None)
+
+    prima = {e: profilo(e)[1] for e in ("A", "B")}
+
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        mia, sua = agenzia_id(etichetta), agenzia_id(altro)
+        risposta, corpo = profilo(etichetta, f"?agency_id={sua}")
+        report.check(
+            f"AGENCY_PROFILE-lettura-{etichetta}-non-vede-{altro}",
+            risposta.status == 200 and isinstance(corpo, dict) and corpo.get("agency_id") == mia,
+            f"{etichetta}: GET {base}?agency_id=<{altro}> -> {risposta.status}, agenzia "
+            f"{corpo.get('agency_id') if isinstance(corpo, dict) else None} (attesa la propria: {mia})",
+        )
+        risposta = http.request("PUT", base, jar=jars[etichetta],
+                                payload={"display_name": "matrice ostile", "agency_id": sua})
+        report.check(
+            f"AGENCY_PROFILE-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+            f"{etichetta}: PUT {base} con agency_id dell'altra agenzia nel corpo -> "
+            f"{risposta.status} (atteso 422: nessuna scrittura)",
+        )
+        # L'impronta attesa viene SOLO da un profilo verificato come proprio:
+        # un profilo dell'altra agenzia renderebbe "atteso" il logo sbagliato.
+        letto = prima[etichetta] if isinstance(prima[etichetta], dict) else {}
+        attendibile = letto.get("agency_id") == mia
+        proprio = letto.get("logo") if attendibile else None
+        risposta = http.request("GET", f"{base}/logo?agency_id={sua}", jar=jars[etichetta])
+        if not attendibile:
+            esito, atteso = False, "un profilo della propria agenzia da cui ricavare il logo"
+        elif proprio:
+            impronta = hashlib.sha256(risposta.body or b"").hexdigest()
+            esito = risposta.status == 200 and impronta == proprio.get("sha256")
+            atteso = "il proprio logo"
+        else:
+            esito, atteso = risposta.status == 404, "404: nessun logo di ripiego"
+        report.check(
+            f"AGENCY_PROFILE-logo-{etichetta}-non-vede-{altro}", esito,
+            f"{etichetta}: GET {base}/logo?agency_id=<{altro}> -> {risposta.status} (atteso {atteso})",
+        )
+
+    dopo = {e: profilo(e)[1] for e in ("A", "B")}
+    report.check(
+        "AGENCY_PROFILE-invariato",
+        None not in prima.values() and dopo == prima,
+        "profili di A e B prima e dopo la sezione (attesi identici: la matrice non scrive)",
+    )
+
+
+PROPERTY_VALUATIONS_OPERAZIONI = (("GET", "?property_id=1"), ("POST", ""), ("GET", "/1"), ("PUT", "/1"),
+                                  ("POST", "/1/approve"), ("POST", "/1/new-version"),
+                                  # BLOCCO-2B: il PDF (generazione e download), anch'esso dietro sessione
+                                  ("POST", "/1/pdf"), ("GET", "/1/pdf"))
+
+
+def certify_property_valuations(report, http, cert, domain, jars, owned, context) -> None:
+    """PROPERTY_VALUATIONS (BLOCCO-2A): nessuna scrittura riuscita tentata.
+
+        anonimo, Basic                        -> 401 su tutte le rotte (mount)
+        GET ?property_id=<immobile altrui>    -> 404 (503 se la 116 manca): mai la lista altrui
+        GET ?property_id=<immobile proprio>   -> 200 con sole righe della propria agenzia
+                                                 (503 se la 116 manca)
+        POST con agency_id nel corpo          -> 422 (corpo chiuso)
+        POST su un immobile altrui            -> 404 (503 se la 116 manca): nessuna bozza
+    """
+    base = domain.prefix
+
+    def agenzia_id(etichetta):
+        valore = (context.get("agencies") or {}).get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in PROPERTY_VALUATIONS_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = {"row_version": 1} if suffisso.endswith("/approve") else ({} if metodo != "GET" else None)
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"PROPERTY_VALUATIONS-anonimo-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo,
+                                headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"PROPERTY_VALUATIONS-basic-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        mio = (owned.get(etichetta) or {}).get("PROPERTY")
+        suo = (owned.get(altro) or {}).get("PROPERTY")
+        if suo is not None:
+            risposta = http.request("GET", f"{base}?property_id={suo}", jar=jars[etichetta])
+            report.check(
+                f"PROPERTY_VALUATIONS-lista-{etichetta}-non-vede-{altro}", risposta.status in (404, 503),
+                f"{etichetta}: GET {base}?property_id=<immobile di {altro}> -> {risposta.status} "
+                "(atteso 404, o 503 se la 116 non e' applicata)")
+            risposta = http.request("POST", base, jar=jars[etichetta],
+                                    payload={"property_id": suo, "content": {}})
+            report.check(
+                f"PROPERTY_VALUATIONS-bozza-{etichetta}-su-{altro}", risposta.status in (404, 503),
+                f"{etichetta}: POST {base} sull'immobile di {altro} -> {risposta.status} "
+                "(atteso 404, o 503: nessuna bozza su un immobile altrui)")
+        else:
+            report.note(f"PROPERTY_VALUATIONS-lista-{etichetta}-non-vede-{altro}",
+                        f"nessun immobile di {altro} fra le risorse della matrice: prova non applicabile")
+        if mio is not None:
+            risposta = http.request("GET", f"{base}?property_id={mio}", jar=jars[etichetta])
+            corpo = risposta.json() if risposta.status == 200 else None
+            righe = corpo.get("items") if isinstance(corpo, dict) else None
+            estranee = [r for r in (righe or []) if not isinstance(r, dict) or r.get("agency_id") != agenzia_id(etichetta)]
+            report.check(
+                f"PROPERTY_VALUATIONS-lista-propria-{etichetta}",
+                risposta.status == 503 or (risposta.status == 200 and isinstance(righe, list) and estranee == []),
+                f"{etichetta}: GET {base}?property_id=<immobile proprio> -> {risposta.status}, "
+                f"{len(estranee)} righe non della propria agenzia (attese 0)")
+            risposta = http.request("POST", base, jar=jars[etichetta],
+                                    payload={"property_id": mio, "content": {}, "agency_id": agenzia_id(altro)})
+            report.check(
+                f"PROPERTY_VALUATIONS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                f"{etichetta}: POST {base} con agency_id dell'altra agenzia nel corpo -> "
+                f"{risposta.status} (atteso 422: nessuna scrittura)")
+
+
+OWNER_REPORTS_OPERAZIONI = (("GET", "/1"), ("POST", "/1/pdf"))
+
+
+def certify_owner_reports(report, http, cert, domain, jars, owned, context) -> None:
+    """OWNER_REPORTS (REPORT-PROPRIETARIO-1): nessuna scrittura, nessun PDF chiesto.
+
+        anonimo, Basic                       -> 401 su tutte le rotte (mount)
+        GET /<immobile altrui>               -> 404: mai il report di un'altra agenzia
+        POST /<immobile altrui>/pdf          -> 404: mai il PDF di un'altra agenzia
+        GET /<immobile proprio>              -> 200 con l'immobile richiesto
+        POST /<immobile proprio>/pdf con agency_id nel corpo -> 422 (corpo chiuso)
+    """
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in OWNER_REPORTS_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = {} if metodo != "GET" else None
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"OWNER_REPORTS-anonimo-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"OWNER_REPORTS-basic-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+
+    def agenzia_id(etichetta):
+        valore = (context.get("agencies") or {}).get(etichetta)
+        return valore.get("id") if isinstance(valore, dict) else valore
+
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        mio = (owned.get(etichetta) or {}).get("PROPERTY")
+        suo = (owned.get(altro) or {}).get("PROPERTY")
+        if suo is not None:
+            risposta = http.request("GET", f"{base}/{suo}", jar=jars[etichetta])
+            report.check(f"OWNER_REPORTS-anteprima-{etichetta}-non-vede-{altro}", risposta.status == 404,
+                         f"{etichetta}: GET {base}/<immobile di {altro}> -> {risposta.status} (atteso 404)")
+            risposta = http.request("POST", f"{base}/{suo}/pdf", jar=jars[etichetta], payload={})
+            report.check(f"OWNER_REPORTS-pdf-{etichetta}-non-vede-{altro}", risposta.status == 404,
+                         f"{etichetta}: POST {base}/<immobile di {altro}>/pdf -> {risposta.status} (atteso 404)")
+        else:
+            report.note(f"OWNER_REPORTS-anteprima-{etichetta}-non-vede-{altro}",
+                        f"nessun immobile di {altro} fra le risorse della matrice: prova non applicabile")
+        if mio is not None:
+            risposta = http.request("GET", f"{base}/{mio}", jar=jars[etichetta])
+            corpo = risposta.json() if risposta.status == 200 else None
+            immobile = (corpo or {}).get("property") if isinstance(corpo, dict) else None
+            report.check(f"OWNER_REPORTS-anteprima-propria-{etichetta}",
+                         risposta.status == 200 and isinstance(immobile, dict) and immobile.get("id") == mio,
+                         f"{etichetta}: GET {base}/<immobile proprio> -> {risposta.status}")
+            risposta = http.request("POST", f"{base}/{mio}/pdf", jar=jars[etichetta],
+                                    payload={"agency_id": agenzia_id(altro)})
+            report.check(f"OWNER_REPORTS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                         f"{etichetta}: POST {base}/<immobile proprio>/pdf con agency_id -> {risposta.status} "
+                         "(atteso 422)")
+
+
+INBOUND_MESSAGES_OPERAZIONI = (("GET", "/conversations"), ("GET", "/conversations/393330000000"),
+                               ("GET", "/1"), ("POST", "/1/link"))
+
+
+def certify_inbound_messages(report, http, cert, domain, jars, owned, context) -> None:
+    """INBOUND_MESSAGES (BLOCCO-4A): nessuna scrittura riuscita tentata.
+
+        anonimo, Basic                          -> 401 su tutte le rotte (mount)
+        GET /conversations                      -> 200 (503 se la 118 manca)
+        GET /<id inesistente>                   -> 404 (503 se la 118 manca)
+        POST /<id>/link con agency_id nel corpo -> 422 (corpo chiuso, nessuna associazione)
+    """
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in INBOUND_MESSAGES_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = {} if metodo != "GET" else None
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"INBOUND_MESSAGES-anonimo-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"INBOUND_MESSAGES-basic-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        risposta = http.request("GET", f"{base}/conversations", jar=jars[etichetta])
+        corpo = risposta.json() if risposta.status == 200 else None
+        report.check(f"INBOUND_MESSAGES-elenco-{etichetta}",
+                     risposta.status == 503 or (risposta.status == 200 and isinstance(corpo, dict)
+                                                and isinstance(corpo.get("items"), list)),
+                     f"{etichetta}: GET {base}/conversations -> {risposta.status}")
+        risposta = http.request("GET", f"{base}/999999999", jar=jars[etichetta])
+        report.check(f"INBOUND_MESSAGES-inesistente-{etichetta}", risposta.status in (404, 503),
+                     f"{etichetta}: GET {base}/<id inesistente> -> {risposta.status} (atteso 404)")
+        valore = (context.get("agencies") or {}).get(altro)
+        agenzia_altra = valore.get("id") if isinstance(valore, dict) else valore
+        risposta = http.request("POST", f"{base}/999999999/link", jar=jars[etichetta],
+                                payload={"contact_id": None, "agency_id": agenzia_altra})
+        report.check(f"INBOUND_MESSAGES-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: POST {base}/<id>/link con agency_id -> {risposta.status} (atteso 422)")
+
+
+MESSAGE_REPLIES_OPERAZIONI = (("GET", "/conversations/390000000001"), ("POST", "/conversations/390000000001"))
+
+
+def certify_message_replies(report, http, cert, domain, jars, owned, context) -> None:
+    """MESSAGE_REPLIES (BLOCCO-4B): nessun invio tentato con successo.
+
+        anonimo, Basic                                -> 401 su tutte le rotte (mount)
+        GET  conversazione inesistente                -> 404
+        POST con destinatario/mittente nel corpo      -> 422 (corpo chiuso)
+        POST su una conversazione inesistente         -> 404 o 503, mai 2xx
+    """
+    import uuid as _uuid
+
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in MESSAGE_REPLIES_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = {} if metodo != "GET" else None
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"MESSAGE_REPLIES-anonimo-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"MESSAGE_REPLIES-basic-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    percorso = base + "/conversations/390000000001"
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        valore = (context.get("agencies") or {}).get(altro)
+        agenzia_altra = valore.get("id") if isinstance(valore, dict) else valore
+        risposta = http.request("GET", percorso, jar=jars[etichetta])
+        report.check(f"MESSAGE_REPLIES-inesistente-{etichetta}", risposta.status == 404,
+                     f"{etichetta}: GET {percorso} -> {risposta.status} (atteso 404)")
+        risposta = http.request("POST", percorso, jar=jars[etichetta],
+                                payload={"text": "x", "client_request_id": str(_uuid.uuid4()), "confirm": True,
+                                         "to": "390000000002", "agency_id": agenzia_altra})
+        report.check(f"MESSAGE_REPLIES-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: POST {percorso} con destinatario e agenzia di {altro} nel corpo -> "
+                     f"{risposta.status} (atteso 422)")
+        risposta = http.request("POST", percorso, jar=jars[etichetta],
+                                payload={"text": "x", "client_request_id": str(_uuid.uuid4()), "confirm": True})
+        report.check(f"MESSAGE_REPLIES-nessun-invio-{etichetta}", risposta.status in (404, 503),
+                     f"{etichetta}: POST {percorso} -> {risposta.status} (atteso 404 o 503, mai un invio)")
+
+
+REPLY_SUGGESTIONS_PERCORSO = "/messages/999999999"
+
+
+def _ultimo_messaggio(http, jar) -> int | None:
+    """L'id dell'ultimo messaggio ricevuto visibile alla sessione, se c'e'."""
+    risposta = http.request("GET", "/api/inbound-messages/conversations", jar=jar)
+    try:
+        voci = (risposta.json() or {}).get("items") or []
+    except Exception:
+        return None
+    for voce in voci if isinstance(voci, list) else []:
+        ultimo = (voce or {}).get("last_message") or {}
+        if isinstance(ultimo.get("id"), int):
+            return ultimo["id"]
+    return None
+
+
+def certify_reply_suggestions(report, http, cert, domain, jars, owned, context) -> None:
+    """REPLY_SUGGESTIONS (BLOCCO-4C): solo letture, nessuna scrittura possibile.
+
+        anonimo, Basic                          -> 401 (mount)
+        GET messaggio inesistente               -> 404, per ogni agenzia
+        GET messaggio dell'ALTRA agenzia        -> 404, A->B e B->A (l'ultimo
+                                                   messaggio visibile all'altra
+                                                   sessione; se non ne ha, un id
+                                                   inesistente)
+        POST sulla stessa rotta                 -> 405: la rotta non scrive
+    """
+    base = domain.prefix
+    percorso = base + REPLY_SUGGESTIONS_PERCORSO
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    risposta = http.request("GET", percorso)
+    report.check("REPLY_SUGGESTIONS-anonimo", risposta.status == 401,
+                 f"GET {percorso} senza sessione -> {risposta.status} (atteso 401)")
+    risposta = http.request("GET", percorso, headers={"Authorization": f"Basic {credenziale}"})
+    report.check("REPLY_SUGGESTIONS-basic", risposta.status == 401,
+                 f"GET {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        altrui = _ultimo_messaggio(http, jars[altro])
+        bersaglio = f"{base}/messages/{altrui or 999999999}"
+        risposta = http.request("GET", bersaglio, jar=jars[etichetta])
+        report.check(f"REPLY_SUGGESTIONS-messaggio-altrui-{etichetta}-{altro}", risposta.status == 404,
+                     f"{etichetta}: GET {bersaglio} (messaggio di {altro}"
+                     f"{'' if altrui else ': nessuno visibile, id inesistente'}) -> {risposta.status} (atteso 404)")
+        risposta = http.request("GET", percorso, jar=jars[etichetta])
+        report.check(f"REPLY_SUGGESTIONS-inesistente-{etichetta}", risposta.status == 404,
+                     f"{etichetta}: GET {percorso} -> {risposta.status} (atteso 404)")
+        risposta = http.request("POST", percorso, jar=jars[etichetta], payload={})
+        report.check(f"REPLY_SUGGESTIONS-nessuna-scrittura-{etichetta}", risposta.status == 405,
+                     f"{etichetta}: POST {percorso} -> {risposta.status} (atteso 405, la rotta non scrive)")
+
+
+AUTO_REPLIES_OPERAZIONI = (("GET", "/settings"), ("PUT", "/settings"), ("POST", "/tick"))
+
+
+def _ultimo_mittente(http, jar) -> str | None:
+    """Il telefono dell'ultima conversazione visibile alla sessione, se c'e'."""
+    risposta = http.request("GET", "/api/inbound-messages/conversations", jar=jar)
+    try:
+        voci = (risposta.json() or {}).get("items") or []
+    except Exception:
+        return None
+    for voce in voci if isinstance(voci, list) else []:
+        telefono = (voce or {}).get("sender_phone")
+        if isinstance(telefono, str) and telefono.isdigit():
+            return telefono
+    return None
+
+
+def certify_auto_replies(report, http, cert, domain, jars, owned, context) -> None:
+    """AUTO_REPLIES (BLOCCO-4D): nessun giro, nessun cambio di modo.
+
+        anonimo, Basic                            -> 401 su settings e tick (mount)
+        GET conversazione dell'ALTRA agenzia      -> 404 (o 503 senza la 119), A->B e B->A
+        PUT settings con agency_id altrui         -> 422 (corpo chiuso)
+        PUT settings con un modo d'invio          -> 422 (non esiste)
+    """
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in AUTO_REPLIES_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = None if metodo == "GET" else {}
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"AUTO_REPLIES-anonimo-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"AUTO_REPLIES-basic-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        valore = (context.get("agencies") or {}).get(altro)
+        agenzia_altra = valore.get("id") if isinstance(valore, dict) else valore
+        telefono = _ultimo_mittente(http, jars[altro]) or "390000000001"
+        percorso = f"{base}/conversations/{telefono}"
+        risposta = http.request("GET", percorso, jar=jars[etichetta])
+        report.check(f"AUTO_REPLIES-conversazione-altrui-{etichetta}-{altro}", risposta.status in (404, 503),
+                     f"{etichetta}: GET {percorso} (conversazione di {altro}) -> {risposta.status} (atteso 404)")
+        risposta = http.request("PUT", base + "/settings", jar=jars[etichetta],
+                                payload={"mode": "off", "agency_id": agenzia_altra})
+        report.check(f"AUTO_REPLIES-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: PUT {base}/settings con agency_id di {altro} -> {risposta.status} (atteso 422)")
+        risposta = http.request("PUT", base + "/settings", jar=jars[etichetta], payload={"mode": "send"})
+        report.check(f"AUTO_REPLIES-nessun-invio-{etichetta}", risposta.status == 422,
+                     f"{etichetta}: PUT {base}/settings con modo d'invio -> {risposta.status} (atteso 422)")
+
+
+VISIT_BOOKING_LINKS_OPERAZIONI = (("GET", "?property_id=1"), ("POST", ""))
+
+
+def certify_visit_booking_links(report, http, cert, domain, jars, owned, context) -> None:
+    """VISIT_BOOKING_LINKS (BLOCCO-5A): nessun collegamento creato.
+
+        anonimo, Basic                                 -> 401 su elenco e creazione (mount)
+        GET  ?property_id=<immobile altrui>            -> 404, A->B e B->A
+        POST con l'immobile altrui (corpo valido)      -> 404: mai un link su un'altra agenzia
+        POST con agency_id nel corpo                   -> 422 (corpo chiuso)
+    """
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in VISIT_BOOKING_LINKS_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = {} if metodo != "GET" else None
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"VISIT_BOOKING_LINKS-anonimo-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"VISIT_BOOKING_LINKS-basic-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        suo = (owned.get(altro) or {}).get("PROPERTY")
+        valore = (context.get("agencies") or {}).get(altro)
+        agenzia_altra = valore.get("id") if isinstance(valore, dict) else valore
+        if suo is None:
+            report.note(f"VISIT_BOOKING_LINKS-elenco-{etichetta}-non-vede-{altro}",
+                        f"nessun immobile di {altro} fra le risorse della matrice: prova non applicabile")
+            continue
+        risposta = http.request("GET", f"{base}?property_id={suo}", jar=jars[etichetta])
+        report.check(f"VISIT_BOOKING_LINKS-elenco-{etichetta}-non-vede-{altro}", risposta.status == 404,
+                     f"{etichetta}: GET {base}?property_id=<immobile di {altro}> -> {risposta.status} (atteso 404)")
+        corpo = {"property_id": suo, "assigned_user_id": 1, "owner_authorization": "per_visit"}
+        risposta = http.request("POST", base, jar=jars[etichetta], payload=corpo)
+        report.check(f"VISIT_BOOKING_LINKS-crea-{etichetta}-B" if etichetta == "A" else
+                     f"VISIT_BOOKING_LINKS-crea-{etichetta}-A", risposta.status in (403, 404),
+                     f"{etichetta}: POST {base} con l'immobile di {altro} -> {risposta.status} (atteso 404)")
+        risposta = http.request("POST", base, jar=jars[etichetta], payload={**corpo, "agency_id": agenzia_altra})
+        report.check(f"VISIT_BOOKING_LINKS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: POST {base} con agency_id di {altro} -> {risposta.status} (atteso 422)")
+
+
+VISIT_SHEETS_OPERAZIONI = (("GET", "?property_id=1"), ("GET", "/999999999/pdf"))
+
+
+def certify_visit_sheets(report, http, cert, domain, jars, owned, context) -> None:
+    """VISIT_SHEETS (BLOCCO-6A): nessun foglio generato dalla matrice.
+
+        anonimo, Basic                          -> 401 (mount)
+        GET ?property_id=<immobile altrui>      -> 404, A->B e B->A
+        GET /<foglio inesistente>/pdf           -> 404
+    """
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in VISIT_SHEETS_OPERAZIONI:
+        percorso = base + suffisso
+        risposta = http.request(metodo, percorso)
+        report.check(f"VISIT_SHEETS-anonimo-{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"VISIT_SHEETS-basic-{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        suo = (owned.get(altro) or {}).get("PROPERTY")
+        risposta = http.request("GET", f"{base}/999999999/pdf", jar=jars[etichetta])
+        report.check(f"VISIT_SHEETS-pdf-inesistente-{etichetta}", risposta.status in (404, 503),
+                     f"{etichetta}: GET {base}/999999999/pdf -> {risposta.status} (atteso 404)")
+        if suo is None:
+            report.note(f"VISIT_SHEETS-elenco-{etichetta}-non-vede-{altro}",
+                        f"nessun immobile di {altro} fra le risorse della matrice: prova non applicabile")
+            continue
+        risposta = http.request("GET", f"{base}?property_id={suo}", jar=jars[etichetta])
+        report.check(f"VISIT_SHEETS-elenco-{etichetta}-non-vede-{altro}", risposta.status in (404, 503),
+                     f"{etichetta}: GET {base}?property_id=<immobile di {altro}> -> {risposta.status} (atteso 404)")
+
+
+SIGNATURE_REQUESTS_OPERAZIONI = (("GET", "?visit_sheet_id=999999999"), ("POST", ""))
+
+
+def certify_signature_requests(report, http, cert, domain, jars, owned, context) -> None:
+    """SIGNATURE_REQUESTS (BLOCCO-6B): nessuna richiesta creata dalla matrice.
+
+        anonimo, Basic                                -> 401 (mount)
+        GET  ?visit_sheet_id=<inesistente>            -> 404 (o 503 senza la 122), A->B e B->A
+        POST con un campo ignoto (agency_id)          -> 422 (corpo chiuso)
+    """
+    import uuid as _uuid
+
+    base = domain.prefix
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in SIGNATURE_REQUESTS_OPERAZIONI:
+        percorso = base + suffisso
+        corpo = None if metodo == "GET" else {}
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"SIGNATURE_REQUESTS-anonimo-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"SIGNATURE_REQUESTS-basic-{metodo}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        valore = (context.get("agencies") or {}).get(altro)
+        agenzia_altra = valore.get("id") if isinstance(valore, dict) else valore
+        risposta = http.request("GET", f"{base}?visit_sheet_id=999999999", jar=jars[etichetta])
+        report.check(f"SIGNATURE_REQUESTS-foglio-{etichetta}-non-vede-{altro}", risposta.status in (404, 503),
+                     f"{etichetta}: GET {base}?visit_sheet_id=999999999 -> {risposta.status} (atteso 404)")
+        risposta = http.request("POST", base, jar=jars[etichetta], payload={
+            "visit_sheet_id": 999999999, "signer_name": "x", "signer_contact": "x@x.invalid",
+            "idempotency_key": str(_uuid.uuid4()), "agency_id": agenzia_altra})
+        report.check(f"SIGNATURE_REQUESTS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: POST {base} con agency_id di {altro} -> {risposta.status} (atteso 422)")
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:

@@ -462,6 +462,29 @@ def claim_due(ctx, *, provider: str, channel: str, limit: int = DEFAULT_CLAIM_BA
         return _lavora(proprio)
 
 
+def claim_message(ctx, message_id: int, *, provider: str, channel: str, cur=None,
+                  token_factory=_token) -> dict[str, Any] | None:
+    """BLOCCO-4B: reclama UN messaggio preciso (un invio manuale appena accodato).
+
+    Stesse regole di `claim_due` - transazione breve, provider chiamato DOPO il
+    commit, un token e un tentativo aperto - ma senza prendere gli altri
+    messaggi dovuti del canale. `None` se il messaggio non e' piu' in coda.
+    """
+    provider = _testo(provider, "provider", obbligatorio=True, massimo=40)
+    channel = _testo(channel, "channel", obbligatorio=True, massimo=20)
+    if channel not in CHANNELS:
+        raise ValidationError(f"channel must be one of {', '.join(sorted(CHANNELS))}")
+
+    def _lavora(c):
+        return repository.claim_message(c, ctx, message_id, provider=provider, channel=channel,
+                                        token_factory=token_factory)
+
+    if cur is not None:
+        return _lavora(cur)
+    with communication_cursor(commit=True) as (_conn, proprio):
+        return _lavora(proprio)
+
+
 #: Cosa dichiara il risultato tardivo, quando la finalizzazione arriva tardi.
 #: E' cio' che il worker STAVA per dire: l'osservazione resta, l'autorita' no.
 ESITO_TARDIVO = {

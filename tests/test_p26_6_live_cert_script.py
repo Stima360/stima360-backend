@@ -2096,6 +2096,217 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 404, b'{"detail":"Elemento non trovato nel Cestino","code":"NOT_FOUND"}')
         return self._reply(method, path, 404, b'{"detail":"Not Found"}')
 
+    def _property_valuations(self, method, path, agency, payload):
+        """BLOCCO-2A. Il doppio di `/api/property-valuations`: corpo chiuso
+        (modello VERO `CreateRequest`), immobile cercato nella PROPRIA agenzia
+        (le righe `/api/property` del doppio). Rotto `isolation`: la lista e la
+        creazione accettano l'immobile di un'altra agenzia."""
+        import json as _json
+        import re as _re
+
+        from property_valuations.schemas import CreateRequest
+
+        rotto = self._broken("isolation", "property_valuations")
+
+        def immobile_visibile(pid):
+            riga = self.rows.get(pid)
+            return bool(riga) and riga["prefix"] == "/api/property" and (riga["agency"] == agency or rotto)
+
+        percorso, _, query = path.partition("?")
+        if percorso == "/api/property-valuations" and method == "GET":
+            trovato = _re.search(r"property_id=(\d+)", query)
+            pid = int(trovato.group(1)) if trovato else None
+            if pid is None or not immobile_visibile(pid):
+                return self._reply(method, path, 404, b'{"detail":{"code":"PROPERTY_NOT_FOUND"}}')
+            return self._reply(method, path, 200, _json.dumps(
+                {"property_id": pid, "items": [], "has_draft": False, "can_create": True}).encode())
+        if percorso == "/api/property-valuations" and method == "POST":
+            try:
+                corpo = CreateRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            if not immobile_visibile(corpo.property_id):
+                return self._reply(method, path, 404, b'{"detail":{"code":"PROPERTY_NOT_FOUND"}}')
+            return self._reply(method, path, 201, b'{"id": 1, "status": "draft"}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"VALUATION_NOT_FOUND"}}')
+
+    def _message_replies(self, method, path, agency, payload):
+        """BLOCCO-4B. Il doppio di `/api/message-replies`: corpo chiuso (modello
+        VERO), conversazione inesistente 404. Rotto `isolation`: la POST
+        risponde 200 come se avesse inviato, e la certificazione deve fallire."""
+        from message_replies.router import ReplyRequest
+
+        if method == "POST":
+            try:
+                ReplyRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            if self._broken("isolation", "message_replies"):
+                return self._reply(method, path, 200, b'{"reply": {"status": "sent"}}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
+
+    def _reply_suggestions(self, method, path, agency, payload):
+        """BLOCCO-4C. Il doppio di `/api/reply-suggestions`: un messaggio che
+        non e' dell'agenzia della sessione e' 404 (la POST la rifiuta gia' il
+        router vero con 405). Rotto `isolation`: la GET risponde 200 con il
+        suggerimento, e la certificazione deve fallire."""
+        if self._broken("isolation", "reply_suggestions"):
+            return self._reply(method, path, 200, b'{"text": "suggerimento di un\'altra agenzia"}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
+
+    def _auto_replies(self, method, path, agency, payload):
+        """BLOCCO-4D. Il doppio di `/api/auto-replies`: corpo delle impostazioni
+        chiuso (modello VERO), conversazione altrui 404. Rotto `isolation`: la
+        conversazione dell'altra agenzia risponde 200, e la matrice deve fallire."""
+        from auto_replies.router import SettingsRequest
+
+        if method == "PUT":
+            try:
+                SettingsRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            return self._reply(method, path, 200, b'{"mode": "off"}')
+        if "/conversations/" in path and self._broken("isolation", "auto_replies"):
+            return self._reply(method, path, 200, b'{"decisions": "di un\'altra agenzia"}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
+
+    def _visit_booking_links(self, method, path, agency, payload):
+        """BLOCCO-5A. Il doppio di `/api/visit-booking-links`: immobile cercato
+        nella PROPRIA agenzia, corpo chiuso (modello VERO). Rotto `isolation`:
+        l'elenco dell'immobile altrui risponde 200, e la matrice deve fallire."""
+        import re as _re
+
+        from visit_booking.router import LinkCreate
+
+        rotto = self._broken("isolation", "visit_booking_links")
+        if method == "POST":
+            try:
+                corpo = LinkCreate(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            pid = corpo.property_id
+        else:
+            trovato = _re.search(r"property_id=(\d+)", path)
+            pid = int(trovato.group(1)) if trovato else 0
+        riga = self.rows.get(pid)
+        visibile = bool(riga) and riga["prefix"] == "/api/property" and (riga["agency"] == agency or rotto)
+        if not visibile:
+            return self._reply(method, path, 404, b'{"detail":{"code":"PROPERTY_NOT_FOUND"}}')
+        return self._reply(method, path, 200, b'{"items": []}')
+
+    def _visit_sheets(self, method, path, agency, payload):
+        """BLOCCO-6A. Il doppio di `/api/visit-sheets`: elenco della PROPRIA
+        agenzia, foglio inesistente 404. Rotto `isolation`: l'elenco
+        dell'immobile altrui risponde 200, e la matrice deve fallire."""
+        import re as _re
+
+        trovato = _re.search(r"property_id=(\d+)", path)
+        if trovato:
+            riga = self.rows.get(int(trovato.group(1)))
+            if bool(riga) and riga["prefix"] == "/api/property" and (
+                    riga["agency"] == agency or self._broken("isolation", "visit_sheets")):
+                return self._reply(method, path, 200, b'{"items": []}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
+
+    def _signature_requests(self, method, path, agency, payload):
+        """BLOCCO-6B. Il doppio di `/api/signature-requests`: corpo chiuso
+        (modello VERO), foglio inesistente 404. Rotto `isolation`: l'elenco
+        risponde 200 per un foglio non suo, e la matrice deve fallire."""
+        from esign.router import CreateRequest
+
+        if method == "POST":
+            try:
+                CreateRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+        if self._broken("isolation", "signature_requests"):
+            return self._reply(method, path, 200, b'{"items": []}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"SHEET_NOT_FOUND"}}')
+
+    def _inbound_messages(self, method, path, agency, payload):
+        """BLOCCO-4A. Il doppio di `/api/inbound-messages`: elenco della sola
+        agenzia della sessione, corpo dell'associazione chiuso (modello VERO).
+        Rotto `isolation`: l'elenco contiene una conversazione dell'altra agenzia
+        e la certificazione deve accorgersene (corpo diverso da un elenco)."""
+        import json as _json
+
+        from inbound_messages.router import LinkRequest
+
+        rotto = self._broken("isolation", "inbound_messages")
+        if path == "/api/inbound-messages/conversations" and method == "GET":
+            if rotto:
+                return self._reply(method, path, 200, b'{"items": "conversazioni di un\'altra agenzia"}')
+            return self._reply(method, path, 200, _json.dumps({"items": [], "can_link": True}).encode())
+        if path.endswith("/link") and method == "POST":
+            try:
+                LinkRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"MESSAGE_NOT_FOUND"}}')
+
+    def _owner_reports(self, method, path, agency, payload):
+        """REPORT-PROPRIETARIO-1. Il doppio di `/api/owner-reports`: immobile
+        cercato nella PROPRIA agenzia, corpo del PDF chiuso (modello VERO).
+        Rotto `isolation`: l'anteprima e il PDF dell'immobile altrui rispondono."""
+        import json as _json
+        import re as _re
+
+        from owner_report.router import PdfRequest
+
+        rotto = self._broken("isolation", "owner_reports")
+        trovato = _re.match(r"^/api/owner-reports/(\d+)(/pdf)?$", path)
+        if not trovato:
+            return self._reply(method, path, 404, b'{"detail":"Not Found"}')
+        pid, pdf = int(trovato.group(1)), bool(trovato.group(2))
+        riga = self.rows.get(pid)
+        visibile = bool(riga) and riga["prefix"] == "/api/property" and (riga["agency"] == agency or rotto)
+        if pdf and method == "POST":
+            try:
+                PdfRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+        if not visibile:
+            return self._reply(method, path, 404, b'{"detail":{"code":"PROPERTY_NOT_FOUND"}}')
+        if pdf:
+            return self._reply(method, path, 200, b"%PDF-1.4 doppio")
+        return self._reply(method, path, 200, _json.dumps({"property": {"id": pid}}).encode())
+
+    def _agency_profile(self, method, path, agency, payload):
+        """BLOCCO-1B. Il doppio e' `/api/agency-profile`: l'agenzia dalla sessione
+        (la query `agency_id` e' ignorata come fa FastAPI), il corpo chiuso
+        (`extra=forbid` del modello VERO). L'agenzia 1 ha un logo, la 2 no.
+        Rotto `isolation`: profilo e logo sono quelli dell'altra agenzia.
+        Rotto `logo`: il profilo e' giusto, il logo e' quello dell'altra."""
+        import hashlib
+        import json as _json
+
+        from agency_profile.schemas import AgencyProfile
+
+        loghi = {1: b"logo-agenzia-1"}
+        rotto = self._broken("isolation", "agency_profile")
+        vista = (3 - agency) if rotto and agency in (1, 2) else agency
+        percorso = path.split("?")[0]
+        if percorso == "/api/agency-profile" and method == "GET":
+            logo = loghi.get(vista)
+            return self._reply(method, path, 200, _json.dumps({
+                "agency_id": vista, "agency_name": f"Agenzia {vista}", "configured": False,
+                "profile": {}, "updated_at": None, "can_edit": True,
+                "logo": None if logo is None else {"sha256": hashlib.sha256(logo).hexdigest()},
+            }).encode())
+        if percorso == "/api/agency-profile" and method == "PUT":
+            try:
+                AgencyProfile(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            return self._reply(method, path, 200, b"{}")
+        if percorso == "/api/agency-profile/logo" and method == "GET":
+            if self._broken("logo", "agency_profile") and agency in (1, 2):
+                vista = 3 - agency
+            if vista in loghi:
+                return self._reply(method, path, 200, loghi[vista])
+            return self._reply(method, path, 404, b'{"detail":"Nessun logo caricato."}')
+        return self._reply(method, path, 403, b'{"detail":"non consentito"}')
+
     def _calendar_sync(self, method, path, agency, payload):
         """A30-9B. Il doppio riproduce il CONTENIMENTO, mai un consenso Google.
 
@@ -2419,6 +2630,46 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1
         if path.startswith("/api/trash"):
             return self._trash(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-1B
+        if path.startswith("/api/agency-profile"):
+            return self._agency_profile(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-2A
+        if path.startswith("/api/property-valuations"):
+            return self._property_valuations(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA REPORT-PROPRIETARIO-1
+        if path.startswith("/api/owner-reports"):
+            return self._owner_reports(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-4A
+        if path.startswith("/api/inbound-messages"):
+            return self._inbound_messages(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-4B
+        if path.startswith("/api/message-replies"):
+            return self._message_replies(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-4C
+        if path.startswith("/api/reply-suggestions"):
+            return self._reply_suggestions(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-6B
+        if path.startswith("/api/signature-requests"):
+            return self._signature_requests(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-6A
+        if path.startswith("/api/visit-sheets"):
+            return self._visit_sheets(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-5A
+        if path.startswith("/api/visit-booking-links"):
+            return self._visit_booking_links(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-4D
+        if path.startswith("/api/auto-replies"):
+            return self._auto_replies(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3292,6 +3543,213 @@ def test_13c_voice_is_certified_rejection_only(monkeypatch):
     assert sum(1 for k, _ in voce if k == cert.PASS) >= 13 + 13 + 3 * 2, voce
     assert {i for _, i in voce} >= {"VOICE-status-A", "VOICE-status-B", "VOICE-corpo-chiuso-A-B",
                                     "VOICE-corpo-chiuso-B-A", "VOICE-comando-altrui-A", "VOICE-comando-altrui-B"}
+
+
+def test_13g_agency_profile_is_certified_reads_and_rejections_only(monkeypatch):
+    """BLOCCO-1B: la sezione AGENCY_PROFILE gira davvero nella matrice e ogni sua
+    prova e' un PASS sull'app com'e': 4 rotte anonime + 4 Basic + 3 domande per
+    ciascuna agenzia + la guardia sui profili invariati."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("AGENCY_PROFILE-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 4 + 4 + 3 * 2 + 1, righe
+    assert not any("DELETE" in i for _, i in righe), righe
+    assert {i for _, i in righe} >= {"AGENCY_PROFILE-lettura-A-non-vede-B", "AGENCY_PROFILE-corpo-chiuso-B-A",
+                                     "AGENCY_PROFILE-logo-A-non-vede-B", "AGENCY_PROFILE-logo-B-non-vede-A"}
+
+
+def test_13h_agency_profile_leaking_the_other_agency_fails_the_matrix(monkeypatch):
+    """La contropartita: un'app che mostra profilo o logo dell'altra agenzia fa
+    fallire la matrice, proprio sulle prove AGENCY_PROFILE."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="agency_profile"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("AGENCY_PROFILE-lettura") for i in falliti), falliti
+
+
+def test_13i_agency_profile_serving_the_other_logo_fails_the_matrix(monkeypatch):
+    """Profilo giusto, logo dell'altra agenzia (o un logo di ripiego dove non ce
+    n'e'): la matrice fallisce sulla prova del logo."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"logo"}, only="agency_profile"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("AGENCY_PROFILE-logo") for i in falliti), falliti
+
+
+def test_13j_property_valuations_are_certified_rejections_and_reads_only(monkeypatch):
+    """BLOCCO-2A: la sezione PROPERTY_VALUATIONS gira nella matrice e ogni sua
+    prova e' un PASS: 6 rotte anonime + 6 Basic + 4 domande per agenzia."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("PROPERTY_VALUATIONS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 6 + 6 + 4 * 2, righe
+    assert {i for _, i in righe} >= {"PROPERTY_VALUATIONS-lista-A-non-vede-B", "PROPERTY_VALUATIONS-bozza-B-su-A",
+                                     "PROPERTY_VALUATIONS-corpo-chiuso-A-B", "PROPERTY_VALUATIONS-lista-propria-B"}
+
+
+def test_13k_property_valuations_reaching_the_other_agency_fail_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="property_valuations"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("PROPERTY_VALUATIONS-lista") for i in falliti), falliti
+
+
+def test_13l_owner_reports_are_certified_rejections_and_reads_only(monkeypatch):
+    """REPORT-PROPRIETARIO-1: la sezione OWNER_REPORTS gira nella matrice e ogni
+    sua prova e' un PASS: 2 rotte anonime + 2 Basic + 4 domande per agenzia."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("OWNER_REPORTS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 2 + 2 + 4 * 2, righe
+    assert {i for _, i in righe} >= {"OWNER_REPORTS-anteprima-A-non-vede-B", "OWNER_REPORTS-pdf-B-non-vede-A",
+                                     "OWNER_REPORTS-corpo-chiuso-A-B", "OWNER_REPORTS-anteprima-propria-B"}
+
+
+def test_13m_owner_reports_reaching_the_other_agency_fail_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="owner_reports"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("OWNER_REPORTS-anteprima") for i in falliti), falliti
+
+
+def test_13n_inbound_messages_are_certified_rejections_and_reads_only(monkeypatch):
+    """BLOCCO-4A: la sezione INBOUND_MESSAGES gira nella matrice e ogni sua
+    prova e' un PASS: 4 rotte anonime + 4 Basic + 3 domande per agenzia."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("INBOUND_MESSAGES-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 4 + 4 + 3 * 2, righe
+    assert {i for _, i in righe} >= {"INBOUND_MESSAGES-elenco-A", "INBOUND_MESSAGES-corpo-chiuso-B-A"}
+
+
+def test_13o_inbound_messages_leaking_another_agency_fail_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="inbound_messages"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("INBOUND_MESSAGES-elenco") for i in falliti), falliti
+
+
+def test_13p_message_replies_are_certified_rejections_only(monkeypatch):
+    """BLOCCO-4B: la sezione MESSAGE_REPLIES gira nella matrice e ogni prova e'
+    un PASS: 2 rotte anonime + 2 Basic + 3 domande per agenzia, nessun invio."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("MESSAGE_REPLIES-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 2 + 2 + 3 * 2, righe
+
+
+def test_13q_a_reply_that_sends_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="message_replies"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("MESSAGE_REPLIES-nessun-invio") for i in falliti), falliti
+
+
+def test_13r_reply_suggestions_are_certified_read_only(monkeypatch):
+    """BLOCCO-4C: la sezione REPLY_SUGGESTIONS gira nella matrice e ogni prova
+    e' un PASS: anonimo + Basic + 3 domande per agenzia (inesistente, messaggio
+    dell'altra agenzia, nessuna scrittura)."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("REPLY_SUGGESTIONS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 2 + 3 * 2, righe
+
+
+def test_13s_a_suggestion_of_another_agency_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="reply_suggestions"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("REPLY_SUGGESTIONS-messaggio-altrui-A-B") for i in falliti), falliti
+
+
+def test_13t_auto_replies_are_certified_rejections_only(monkeypatch):
+    """BLOCCO-4D: la sezione AUTO_REPLIES gira e ogni prova e' un PASS:
+    3 rotte anonime + 3 Basic + 3 domande per agenzia; nessun giro eseguito."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("AUTO_REPLIES-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 3 + 3 + 3 * 2, righe
+
+
+def test_13u_an_auto_reply_conversation_of_another_agency_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="auto_replies"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("AUTO_REPLIES-conversazione-altrui-A-B") for i in falliti), falliti
+
+
+def test_13v_visit_booking_links_are_certified_rejections_only(monkeypatch):
+    """BLOCCO-5A: la sezione VISIT_BOOKING_LINKS gira e ogni prova e' un PASS."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("VISIT_BOOKING_LINKS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 2 + 2, righe
+
+
+def test_13w_a_visit_link_on_another_agency_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="visit_booking_links"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("VISIT_BOOKING_LINKS-elenco-A-non-vede-B") for i in falliti), falliti
+
+
+def test_13x_visit_sheets_are_certified_without_generating(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("VISIT_SHEETS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 4 + 2, righe
+
+
+def test_13y_visit_sheets_of_another_agency_fail_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="visit_sheets"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("VISIT_SHEETS-elenco-A-non-vede-B") for i in falliti), falliti
+
+
+def test_13z_signature_requests_are_certified_rejections_only(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("SIGNATURE_REQUESTS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 4 + 2 * 2, righe
+
+
+def test_13za_a_signature_request_of_another_agency_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="signature_requests"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("SIGNATURE_REQUESTS-foglio-A-non-vede-B") for i in falliti), falliti
 
 
 def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):
@@ -6073,6 +6531,54 @@ FK_NON_CASCADE_ATTESE = frozenset({
     ("property_territorial_change_requests", "decided_by_user_id", "operator_users", "SET NULL"),
     ("property_territorial_change_events", "actor_agency_id", "agencies", "RESTRICT"),
     ("property_territorial_change_events", "actor_user_id", "operator_users", "SET NULL"),
+    # SENTINELLA AGGIORNATA DA BLOCCO-1B, migration 115 (il logo dell'agenzia): UN
+    # riferimento non-CASCADE nuovo. ESAMINATO.
+    #
+    #   agency_logos.agency_id  -> agencies  NO ACTION
+    #
+    # Un logo per agenzia, il tenant e' la chiave. CONSEGUENZA PER IL CLEANUP,
+    # dichiarata: lo scrive solo agency_profile/service.py (PUT /logo), che la
+    # matrice non percorre (solo rifiuti e letture); se un'agenzia di prova ne
+    # avesse uno, il preflight lo incontra come RIFIUTO, non come cancellazione.
+    ("agency_logos", "agency_id", "agencies", "NO ACTION"),
+    # SENTINELLA AGGIORNATA DA BLOCCO-2A, migration 116 (valutazioni dell'agente):
+    # riferimenti non-CASCADE nuovi. ESAMINATI.
+    #
+    #   property_valuations.agency_id                  -> agencies        NO ACTION
+    #   property_valuations.property_id                -> properties      NO ACTION
+    #   property_valuations.created_by_user_id         -> operator_users  NO ACTION
+    #   property_valuations.updated_by_user_id         -> operator_users  NO ACTION
+    #   property_valuations.approved_by_user_id        -> operator_users  NO ACTION
+    #   property_valuations.previous_valuation_id      -> property_valuations  NO ACTION
+    #   property_valuations.superseded_by_valuation_id -> property_valuations  NO ACTION
+    #
+    # Storico (le approvate non si cancellano, trigger della 116). CONSEGUENZA
+    # PER IL CLEANUP, dichiarata: le scrive solo property_valuations/service.py,
+    # che la matrice non percorre in scrittura (solo rifiuti e letture); se un
+    # immobile di prova ne avesse, il preflight lo incontra come RIFIUTO.
+    ("property_valuations", "agency_id", "agencies", "NO ACTION"),
+    ("property_valuations", "property_id", "properties", "NO ACTION"),
+    ("property_valuations", "created_by_user_id", "operator_users", "NO ACTION"),
+    ("property_valuations", "updated_by_user_id", "operator_users", "NO ACTION"),
+    ("property_valuations", "approved_by_user_id", "operator_users", "NO ACTION"),
+    ("property_valuations", "previous_valuation_id", "property_valuations", "NO ACTION"),
+    ("property_valuations", "superseded_by_valuation_id", "property_valuations", "NO ACTION"),
+    # SENTINELLA AGGIORNATA DA BLOCCO-2B, migration 117 (PDF delle valutazioni
+    # approvate): riferimenti non-CASCADE nuovi verso tabelle che il cleanup
+    # cancella. ESAMINATI.
+    #
+    #   property_valuation_pdfs.agency_id             -> agencies        NO ACTION
+    #   property_valuation_pdfs.property_id           -> properties      NO ACTION
+    #   property_valuation_pdfs.generated_by_user_id  -> operator_users  NO ACTION
+    #
+    # (`valuation_id -> property_valuations` punta a una tabella che il cleanup
+    # non cancella.) Documenti immutabili (trigger della 117). CONSEGUENZA PER IL
+    # CLEANUP, dichiarata: li scrive solo property_valuations/pdf_service.py
+    # (POST /pdf), che la matrice non percorre in scrittura; se un immobile di
+    # prova ne avesse, il preflight lo incontra come RIFIUTO.
+    ("property_valuation_pdfs", "agency_id", "agencies", "NO ACTION"),
+    ("property_valuation_pdfs", "property_id", "properties", "NO ACTION"),
+    ("property_valuation_pdfs", "generated_by_user_id", "operator_users", "NO ACTION"),
 })
 
 

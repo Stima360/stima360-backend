@@ -16,7 +16,8 @@ portale e coincide voce per voce: il mini-form di /PianoVenditaStima360.html
 (/sitemap.xml, 80 pagine /valutazione/<comune>/<microzona>; le differenze sono
 solo nella forma degli slug). Totale dal portale: 2 regioni, 25 comuni, 80
 microzone; in piu' i comuni aggiunti dal CRM (`CRM_ADDED_MUNICIPALITIES`, oggi
-Giulianova, senza microzone): 26 comuni in tutto. I
+Giulianova, con 4 microzone decise dal titolare): 26 comuni e 84 microzone
+in tutto. I
 nomi sono copiati come li pubblica il portale, apostrofo tipografico compreso
 ("Sant’Omero", "Porto d’Ascoli"): sono gli stessi valori che il sito salva in
 `stime_dettagliate.comune/microzona`.
@@ -67,8 +68,10 @@ TERRITORY: dict[str, dict[str, Any]] = {
             "Colonnella": ("067019", ["Bivio", "Centro storico", "Contrade"]),
             "Controguerra": ("067020", ["Centro storico", "Contrade"]),
             "Corropoli": ("067021", ["Centro storico", "Bivio", "Contrade"]),
-            # C0-quater: comune aggiunto dal CRM (vedi CRM_ADDED_MUNICIPALITIES), non dal portale
-            "Giulianova": ("067025", []),
+            # C0-quater: comune aggiunto dal CRM (vedi CRM_ADDED_MUNICIPALITIES), non dal portale;
+            # microzone decise dal titolare il 2026-10-30 (vedi CRM_ADDED_MICROZONES)
+            "Giulianova": ("067025", ["Giulianova Sud", "Giulianova Centro", "Giulianova Nord",
+                                      "Giulianova Alta"]),
             "Martinsicuro": ("067047", ["Centro", "Villarosa", "Alto"]),
             "Nereto": ("067031", ["Centro storico", "Bivio", "Contrade"]),
             "Sant’Egidio alla Vibrata": ("067038", ["Centro", "Bivio", "Contrade"]),
@@ -112,10 +115,18 @@ TERRITORY_SOURCES = {
 #: AGENZIE-TERRITORI C0-quater (2026-10-14, decisione del titolare): comuni che
 #: il CRM conosce anche se il portale non li offre. Giulianova e' il comune
 #: dell'agenzia «STIMA360 Giulianova» (territorio TEST `municipality/giulianova`).
-#: Codice ISTAT 067025, provincia TE (ISTAT). Nessuna microzona: il portale non
-#: ne pubblica e qui non se ne inventano; la microzona resta facoltativa.
+#: Codice ISTAT 067025, provincia TE (ISTAT). Il portale non pubblica microzone
+#: per Giulianova: quelle del catalogo sono decise dal titolare (sotto); la
+#: microzona resta facoltativa.
 CRM_ADDED_MUNICIPALITIES: dict[str, str] = {
-    "Giulianova": "Comune dell'agenzia STIMA360 Giulianova (C0-quater); assente dal portale, senza microzone",
+    "Giulianova": "Comune dell'agenzia STIMA360 Giulianova (C0-quater); assente dal portale",
+}
+
+#: Microzone che il CRM conosce anche se il portale non le pubblica, per comune
+#: (decisione del titolare del 2026-10-30, ambiente TEST). Sono esattamente le
+#: microzone di quel comune in TERRITORY, nello stesso ordine.
+CRM_ADDED_MICROZONES: dict[str, tuple[str, ...]] = {
+    "Giulianova": ("Giulianova Sud", "Giulianova Centro", "Giulianova Nord", "Giulianova Alta"),
 }
 
 

@@ -154,6 +154,23 @@ def assignable_agent_name(ctx, operator_user_id):
     return None
 
 
+#: BLOCCO-1A: i campi la cui modifica scrive lo storico prezzi/stati.
+_HISTORY_FIELDS = frozenset(('asking_price', 'commercial_status', 'classification'))
+
+
+def _history_author(ctx):
+    """BLOCCO-1A: l'autore dello storico prezzi/stati, dal contesto autenticato.
+
+    `operator:<user_id>`, la convenzione P26-5 di `audit_actor`. Mai il
+    `changed_by` del payload: lo schema lo accetta ancora per compatibilita'
+    (property_admin lo invia), qui non conta nulla. Un contesto senza operatore
+    (`user_id` None: forma legacy Basic, contesto di sistema) registra l'autore
+    come assente, come dice `OperatorContext` - mai un operatore inventato.
+    """
+    user_id = getattr(ctx, 'user_id', None)
+    return None if user_id is None else f"operator:{int(user_id)}"
+
+
 def create_property(ctx,data,*,generate_identity=False):
     """Create one property, owned by the agency the caller's scope names.
 
@@ -177,6 +194,7 @@ def create_property(ctx,data,*,generate_identity=False):
             "'agency_id' is derived from the agency scope and must not be supplied"
         )
     agency_id=ctx.require_agency()
+    changed_by=_history_author(ctx)
     if generate_identity and not (data.get('code') or '').strip():
         # CRM-OPS-2: codice omesso, NULL, vuoto o di soli spazi = mancante.
         # Si salva NULL, cosi' l'UPDATE ... WHERE code IS NULL qui sotto lo
@@ -204,11 +222,11 @@ def create_property(ctx,data,*,generate_identity=False):
             # CRM-OPS-2: codice generato nella stessa transazione, mai dopo.
             created=_assign_generated_code(cur,created['id'],agency_id) or created
         if created.get('asking_price') is not None:
-            cur.execute("INSERT INTO property_price_history(property_id,new_price,change_reason) VALUES(%s,%s,%s)",(created['id'],created['asking_price'],'initial price'))
+            cur.execute("INSERT INTO property_price_history(property_id,new_price,change_reason,changed_by) VALUES(%s,%s,%s,%s)",(created['id'],created['asking_price'],'initial price',changed_by))
         if created.get('commercial_status'):
-            cur.execute("INSERT INTO property_status_history(property_id,field_name,new_value,note) VALUES(%s,'commercial_status',%s,%s)",(created['id'],created['commercial_status'],'initial status'))
+            cur.execute("INSERT INTO property_status_history(property_id,field_name,new_value,changed_by,note) VALUES(%s,'commercial_status',%s,%s,%s)",(created['id'],created['commercial_status'],changed_by,'initial status'))
         if created.get('classification'):
-            cur.execute("INSERT INTO property_status_history(property_id,field_name,new_value,note) VALUES(%s,'classification',%s,%s)",(created['id'],created['classification'],'initial classification'))
+            cur.execute("INSERT INTO property_status_history(property_id,field_name,new_value,changed_by,note) VALUES(%s,'classification',%s,%s,%s)",(created['id'],created['classification'],changed_by,'initial classification'))
         return created
 
 def list_properties(*args, **kwargs):
@@ -403,8 +421,14 @@ def update_property(*args, **kwargs):
     if not data:
         return _not_in_trash(get_property(ctx, property_id) if ctx is not None else get_property(property_id))
     change_reason = data.pop('change_reason', None)
-    changed_by = data.pop('changed_by', None)
+    # BLOCCO-1A: accettato per compatibilita', ignorato come autore.
+    data.pop('changed_by', None)
     history_note = data.pop('history_note', None)
+    if ctx is None and _HISTORY_FIELDS & set(data):
+        # Senza contesto non c'e' un autore attendibile: rifiutato prima di
+        # aprire la transazione, nessuna scrittura parziale.
+        raise ProgrammingError("property history requires an authenticated context")
+    changed_by = _history_author(ctx)
     if 'metadata' in data:
         data['metadata'] = Json(data.get('metadata') or {})
     if not data:

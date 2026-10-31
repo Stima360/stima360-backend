@@ -26,3 +26,8 @@ google-auth-oauthlib==1.4.1
 # C3: il QR code del link personale del consenso, generato come SVG lato
 # server (puro Python, nessuna dipendenza nativa).
 segno==1.6.6
+
+# BLOCCO-1B: decodifica completa del logo dell'agenzia (PNG/JPEG) prima del
+# salvataggio. Era gia' installato come dipendenza di reportlab (pillow>=9.0.0):
+# qui diventa dichiarato, fissato alla versione gia' risolta (nessun aggiornamento).
+pillow==13.0.0

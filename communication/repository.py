@@ -366,6 +366,7 @@ INITIAL_STATUS = INITIAL_STATUS
 # ===========================================================================
 
 from .enums import (  # noqa: E402  (import in coda: il modulo e' cresciuto per fasi)
+    CHANNEL_WHATSAPP,
     CLAIMED_STATUS,
     FAILURE_DEFINITE,
     FAILURE_INDETERMINATE,
@@ -373,6 +374,7 @@ from .enums import (  # noqa: E402  (import in coda: il modulo e' cresciuto per 
     OUTCOME_ACCEPTED,
     OUTCOME_INDETERMINATE,
     OUTCOME_REJECTED,
+    REASON_OPERATOR_REPLY,
     STATUS_FAILED,
     STATUS_INDETERMINATE,
     STATUS_SENT,
@@ -398,6 +400,15 @@ CENTRAL_CONTINUITY_FILTER = (
 MARKETING_RECIPIENTS_FILTER = """
            AND (m.communication_type <> 'marketing'
                 OR lower(btrim(m.destination_snapshot)) = ANY(%s))"""
+
+
+#: BLOCCO-4B: le risposte manuali WhatsApp (`message_replies`) non sono mai
+#: candidate del claim generico, qualunque sia il loro `scheduled_at`. Le
+#: prende solo `claim_message`, dal percorso che le ricontrolla (finestra,
+#: numero, operatore) subito prima dell'invio. Ogni altro messaggio, anche
+#: WhatsApp con un altro motivo, resta candidato come prima.
+MANUAL_REPLY_EXCLUSION = """
+           AND NOT (m.channel = %s AND m.reason_code = %s)"""
 
 
 def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
@@ -453,6 +464,7 @@ def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
           FROM {source}
            AND m.status = %s
            AND m.channel = %s
+{MANUAL_REPLY_EXCLUSION}
            AND m.scheduled_at <= NOW()
            AND (NOT COALESCE((to_jsonb(m)->>'tappa6_cycle')::boolean, FALSE)
                 OR (EXTRACT(ISODOW FROM %s::timestamptz AT TIME ZONE 'Europe/Rome') BETWEEN 1 AND 6
@@ -464,11 +476,18 @@ def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
          LIMIT %s
            FOR UPDATE SKIP LOCKED
         """,
-        scope_params + [INITIAL_STATUS, channel, *([datetime.now(timezone.utc)] * 3),
+        scope_params + [INITIAL_STATUS, channel, CHANNEL_WHATSAPP, REASON_OPERATOR_REPLY,
+                        *([datetime.now(timezone.utc)] * 3),
                         *([marketing_recipients] if marketing_recipients is not None else []), limit],
     )
     candidati = [r["id"] for r in cur.fetchall()]
 
+    return _claim_ids(cur, ctx, candidati, provider=provider, token_factory=token_factory)
+
+
+def _claim_ids(cur, ctx, candidati, *, provider: str, token_factory) -> list[dict[str, Any]]:
+    """I passi 2-5 del claim, per gli id gia' scelti (e bloccati) dal chiamante."""
+    agency = ctx.require_agency()
     reclamati: list[dict[str, Any]] = []
     for message_id in candidati:
         token = token_factory()
@@ -515,6 +534,26 @@ def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
         reclamati.append({"message": message, "attempt": _row(cur.fetchone())})
 
     return reclamati
+
+
+def claim_message(cur, ctx, message_id: int, *, provider: str, channel: str, token_factory) -> dict[str, Any] | None:
+    """BLOCCO-4B: il claim di UN messaggio preciso, non di tutti quelli dovuti.
+
+    Per un invio manuale: l'operatore ha appena accodato il SUO messaggio e lo
+    manda subito. `claim_due` prenderebbe invece qualsiasi messaggio dovuto del
+    canale, compresi quelli di un percorso automatico, che questo invio non
+    deve toccare. Stessa transizione (`queued -> sending`, tentativo aperto
+    nello stesso commit): il CAS su `status` dentro `_claim_ids` e' il lock -
+    due richieste sullo stesso id, una sola lo prende. `None` se il messaggio
+    non e' piu' in coda, non e' del canale o non e' dell'agenzia.
+    """
+    source, scope_params = communication_scoped_source(ctx, "communication_messages", "m")
+    cur.execute(f"SELECT m.id FROM {source} AND m.id = %s AND m.status = %s AND m.channel = %s",
+                scope_params + [message_id, INITIAL_STATUS, channel])
+    if cur.fetchone() is None:
+        return None
+    reclamati = _claim_ids(cur, ctx, [message_id], provider=provider, token_factory=token_factory)
+    return reclamati[0] if reclamati else None
 
 
 #: Come ogni stato terminale si traduce in tre cose: l'esito del tentativo, la

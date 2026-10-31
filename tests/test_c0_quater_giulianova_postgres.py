@@ -3,9 +3,10 @@
 PostgreSQL usa-e-getta (schema completo dal runner) e router veri; nessun dato
 reale. Il catalogo e' lo stesso (`property/catalog.py`): nessun secondo elenco.
 
-  g01  Giulianova (ISTAT 067025, TE, senza microzone) e' nell'albero del form
-       (`GET /api/property/form-options`), in ordine alfabetico fra i comuni TE;
-       gli altri 25 comuni e le 80 microzone restano identici;
+  g01  Giulianova (ISTAT 067025, TE) e' nell'albero del form
+       (`GET /api/property/form-options`), in ordine alfabetico fra i comuni TE,
+       con le 4 microzone decise dal titolare (Sud, Centro, Nord, Alta); gli
+       altri 25 comuni e le loro 80 microzone restano identici (84 in tutto);
   g02  un EDIFICIO a Giulianova si crea con la cascata regione/provincia/comune
        (census) e si modifica; una microzona inventata e' rifiutata;
   g03  un IMMOBILE indipendente a Giulianova si crea e si modifica dal form
@@ -18,8 +19,11 @@ reale. Il catalogo e' lo stesso (`property/catalog.py`): nessun secondo elenco.
        identiche dopo (immobili ed edifici), e nessuna riga di `agencies`,
        `agency_memberships`, `network_*` o `agency_territory_assignments` viene
        toccata dal catalogo.
+  g08  ognuna delle 4 microzone di Giulianova si salva e si rilegge su edificio
+       e immobile indipendente (anche in modifica).
 In Chromium (stesso server delle prove Edifici): il filtro Comune della lista
-Edifici offre Giulianova e filtra l'edificio creato.
+Edifici offre Giulianova e filtra l'edificio creato; il filtro Microzona offre
+le 4 microzone di Giulianova e filtra l'edificio salvato con una di esse.
 """
 from __future__ import annotations
 
@@ -34,6 +38,7 @@ from tests.test_eliminazione_edificio_1_browser_postgres import _sfora, _vai
 pytestmark = pytest.mark.skipif(not DSN, reason="P29_TEST_DSN non impostata")
 
 TE = {"region": "Abruzzo", "province": "TE"}
+GIULIANOVA_ZONE = ["Giulianova Sud", "Giulianova Centro", "Giulianova Nord", "Giulianova Alta"]
 
 
 def _impronta(m):
@@ -63,9 +68,10 @@ def test_g01_g06_giulianova_nel_catalogo(mondo):
     nomi = [c["name"] for c in te["municipalities"]]
     assert nomi == sorted(nomi, key=str.casefold) and "Giulianova" in nomi
     giul = next(c for c in te["municipalities"] if c["name"] == "Giulianova")
-    assert giul == {"name": "Giulianova", "istat_code": "067025", "microzones": []}
+    assert giul == {"name": "Giulianova", "istat_code": "067025", "microzones": GIULIANOVA_ZONE}
     tutti = {c["name"]: c for reg in albero for p in reg["provinces"] for c in p["municipalities"]}
-    assert len(tutti) == 26 and sum(len(c["microzones"]) for c in tutti.values()) == 80
+    assert len(tutti) == 26 and sum(len(c["microzones"]) for c in tutti.values()) == 84
+    assert list(nomi).count("Giulianova") == 1                           # nessun comune duplicato
     assert tutti["Alba Adriatica"]["microzones"] == ["Nord", "Villa Fiore", "Zona Basciani"]
 
     # g02 - edificio a Giulianova
@@ -116,12 +122,40 @@ def test_g01_g06_giulianova_nel_catalogo(mondo):
     assert dopo["rete"] == prima["rete"]
 
 
+def test_g08_le_quattro_microzone_si_salvano(mondo):
+    m = mondo
+    api = m["api"]()
+    tag = uuid.uuid4().hex[:6]
+    for i, zona in enumerate(GIULIANOVA_ZONE):
+        # edificio: creazione con la microzona, rilettura dal database
+        e = _edificio(m, **TE, city="Giulianova", microzone=zona, address=f"Via Zona {tag}",
+                      civic_number=str(10 + i), name=None, units_declared=None, units_declared_source=None)
+        assert e["microzone"] == zona
+        assert [tuple(r) for r in _q(m, "SELECT city, microzone FROM buildings WHERE id = %s", (e["id"],))] == [("Giulianova", zona)]
+        # immobile indipendente: creazione senza microzona, poi modifica con la microzona
+        r = api.post("/api/property/properties", json={"title": f"Zona {tag} {i}", **TE, "city": "Giulianova",
+                                                       "address": f"Via Zona {tag}", "civic_number": str(20 + i)})
+        assert r.status_code in (200, 201), r.text
+        pid = r.json()["id"]
+        r = api.patch(f"/api/property/properties/{pid}", json={**TE, "city": "Giulianova", "microzone": zona})
+        assert r.status_code == 200, r.text
+        assert r.json()["microzone"] == zona
+        assert [tuple(r) for r in _q(m, "SELECT city, microzone FROM properties WHERE id = %s", (pid,))] == [("Giulianova", zona)]
+        # immobile indipendente creato direttamente con la microzona
+        r = api.post("/api/property/properties", json={"title": f"Zona {tag} {i}b", **TE, "city": "Giulianova",
+                                                       "microzone": zona})
+        assert r.status_code in (200, 201), r.text
+        assert r.json()["microzone"] == zona
+
+
 def test_g07_giulianova_selezionabile_in_chromium(server):  # noqa: F811
     from playwright.sync_api import sync_playwright
     m = server
     tag = uuid.uuid4().hex[:6]
     e = _edificio(m, **TE, city="Giulianova", microzone=None, address=f"Via Chromium {tag}", civic_number="7",
                   name=f"Palazzina Giulianova {tag}", units_declared=None, units_declared_source=None)
+    z = _edificio(m, **TE, city="Giulianova", microzone="Giulianova Alta", address=f"Via Chromium {tag}",
+                  civic_number="9", name=f"Palazzina Alta {tag}", units_declared=None, units_declared_source=None)
     with sync_playwright() as p:
         browser = p.chromium.launch()
         page = browser.new_page(viewport={"width": 390, "height": 860})
@@ -134,6 +168,11 @@ def test_g07_giulianova_selezionabile_in_chromium(server):  # noqa: F811
         assert page.locator("[data-building-id]").count() >= 1
         testo = page.inner_text(f"[data-building-id='{e['id']}']")
         assert "Giulianova" in testo, testo
+        zone = page.eval_on_selector_all("#buildings-microzone option", "os => os.map(o => o.value).filter(Boolean)")
+        assert zone == GIULIANOVA_ZONE, zone
+        page.select_option("#buildings-microzone", "Giulianova Alta")
+        page.wait_for_selector(f"[data-building-id='{z['id']}']")
+        page.wait_for_selector(f"[data-building-id='{e['id']}']", state="detached")
         mis = _sfora(page)
         assert mis["scroll"] <= mis["inner"] + 1 and mis["fuori"] == [], mis
         assert errori == [], errori

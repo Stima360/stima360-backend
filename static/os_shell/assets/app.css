@@ -1577,3 +1577,142 @@ a.census-unit-main { text-decoration: none; }
   .comm-badge { margin-left: 36px; }
   .comm-actions .btn { flex: 1 1 100%; }
 }
+
+/* BLOCCO-1B: «Dati agenzia e logo» (#/agenzia). Il logo non si deforma mai:
+   larghezza e altezza seguono le proporzioni del file entro un riquadro. */
+.agency-profile-page { display: grid; gap: 16px; max-width: 880px; }
+.agency-profile-page .card { padding: 16px; }
+.agency-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.agency-preview-label { font-size: 13px; color: var(--muted); margin: 8px 0 6px; }
+.agency-preview { border: 1px dashed var(--border); border-radius: var(--radius); padding: 12px; background: #fff; }
+.agency-preview-draft { border-color: #e0b54a; }
+.agency-preview-note { font-size: 13px; margin: 6px 0 0; }
+.agency-header { display: flex; align-items: center; gap: 16px; min-width: 0; }
+.agency-header-logo, .agency-logo-preview {
+  display: block; width: auto; height: auto; max-width: 220px; max-height: 72px; object-fit: contain; flex: 0 0 auto;
+}
+.agency-logo-preview { max-height: 120px; max-width: 280px; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px; background: #fff; }
+.agency-header-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.agency-header-name { font-size: 17px; }
+.agency-header-line { font-size: 13px; color: var(--muted); }
+.agency-logo-current { margin-bottom: 10px; }
+.sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.user-menu-actions .user-menu-link { display: block; width: 100%; margin-bottom: 8px; text-align: center; }
+@media (max-width: 767px) {
+  .agency-header { flex-direction: column; align-items: flex-start; }
+}
+
+/* BLOCCO-2A: scheda «Valutazioni» dell'immobile. */
+.valuations-tab { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.valuation-detail, .valuation-list { min-width: 0; }
+.valuation-notice { font-size: 13px; border-left: 3px solid var(--primary); padding-left: 8px; }
+.valuation-view { display: grid; gap: 12px; margin-top: 8px; }
+.valuation-view-head { display: flex; align-items: center; gap: 10px; }
+.valuation-section h4 { margin: 0 0 6px; font-size: 14px; }
+.valuation-facts { display: grid; gap: 4px; margin: 0; }
+.valuation-fact { display: grid; grid-template-columns: minmax(140px, 260px) 1fr; gap: 8px; }
+.valuation-fact dt { color: var(--muted); font-size: 13px; }
+.valuation-fact dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.valuation-comparables { margin: 0; padding-left: 18px; display: grid; gap: 8px; }
+.valuation-issues { border: 1px solid #f1d38a; background: #fdf8e8; border-radius: var(--radius); padding: 10px 12px; }
+.valuation-issues ul { margin: 6px 0 0; padding-left: 18px; }
+.valuation-fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin: 0 0 12px; }
+.valuation-fieldset legend { font-weight: 600; padding: 0 4px; }
+.valuation-hint { font-size: 12px; margin: 4px 0 0; }
+.valuation-comparable { margin-bottom: 10px; }
+@media (max-width: 767px) {
+  .valuation-fact { grid-template-columns: 1fr; }
+}
+/* BLOCCO-2B: PDF della valutazione approvata. */
+.valuation-pdf { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; margin-top: 12px; display: grid; gap: 6px; }
+.valuation-pdf h4 { margin: 0; font-size: 14px; }
+.valuation-pdf p { margin: 0; overflow-wrap: anywhere; }
+.valuation-pdf-historical { border-left: 3px solid #9ca3af; padding-left: 8px; font-size: 13px; }
+
+/* REPORT-PROPRIETARIO-1: scheda «Report proprietario» dell'immobile. */
+.owner-report-tab { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
+.owner-report-notice { font-size: 13px; border-left: 3px solid var(--primary); padding-left: 8px; }
+.owner-report-form { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 10px; align-items: end; }
+.owner-report-wide { grid-column: 1 / -1; }
+.owner-report-field { display: grid; gap: 4px; min-width: 0; }
+.owner-report-field textarea { width: 100%; box-sizing: border-box; }
+.owner-report-counter { font-size: 12px; justify-self: end; }
+.owner-report-hint { font-size: 12px; margin: 0; }
+.owner-report-definitions { margin: 0; padding-left: 18px; display: grid; gap: 4px; font-size: 13px; }
+.owner-report-preview { display: grid; gap: 10px; min-width: 0; }
+.owner-report-preview h4 { margin: 8px 0 0; font-size: 14px; }
+.owner-report-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 8px; }
+.owner-report-card { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; display: grid; gap: 2px; }
+.owner-report-card strong { font-size: 22px; }
+.owner-report-facts { display: grid; gap: 4px; margin: 0; }
+.owner-report-fact { display: grid; grid-template-columns: minmax(140px, 240px) 1fr; gap: 8px; }
+.owner-report-fact dt { color: var(--muted); font-size: 13px; }
+.owner-report-fact dd { margin: 0; overflow-wrap: anywhere; }
+@media (max-width: 767px) {
+  .owner-report-fact { grid-template-columns: 1fr; }
+}
+
+/* BLOCCO-4A: «Messaggi WhatsApp». */
+.messages-page { display: grid; gap: 12px; }
+.messages-notice { font-size: 13px; border-left: 3px solid var(--primary); padding-left: 8px; }
+.messages-layout { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 12px; align-items: start; }
+.messages-list { display: grid; gap: 6px; min-width: 0; }
+.messages-list .btn.messages-conversation { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: start;
+  align-items: start; gap: 2px; text-align: left; width: 100%; height: auto; white-space: normal; }
+.messages-list .btn.messages-conversation.active { outline: 2px solid var(--primary); }
+.messages-message .btn[data-message-link-open] { justify-self: start; }
+.messages-preview { overflow-wrap: anywhere; font-size: 13px; }
+.messages-detail { display: grid; gap: 10px; min-width: 0; }
+.messages-message { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; display: grid; gap: 6px; }
+.messages-message-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.messages-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.messages-links, .messages-hint { margin: 0; font-size: 13px; }
+.messages-link-form { display: grid; gap: 8px; }
+.messages-field { display: grid; gap: 4px; min-width: 0; }
+@media (max-width: 767px) {
+  .messages-layout { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* BLOCCO-4B: risposta WhatsApp manuale. */
+.wa-reply { border-top: 1px solid var(--border); padding-top: 10px; display: grid; gap: 8px; min-width: 0; }
+.wa-reply h4 { margin: 0; font-size: 14px; }
+.wa-reply-window { margin: 0; font-size: 13px; }
+.wa-reply-stop { border-left: 3px solid #d97706; padding-left: 8px; font-size: 13px; }
+.wa-reply-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.wa-reply-item { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; display: grid; gap: 4px; }
+.wa-reply-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
+.wa-reply-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wa-reply-error { margin: 0; color: #b91c1c; font-size: 13px; }
+.wa-reply-field { display: grid; gap: 4px; min-width: 0; }
+.wa-reply-field textarea { width: 100%; box-sizing: border-box; }
+.wa-reply-counter { font-size: 12px; justify-self: end; }
+.wa-reply-confirm { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; display: grid; gap: 6px; }
+.wa-reply .btn[data-wa-reply-prepare] { justify-self: start; }
+/* BLOCCO-4C: suggerimento di risposta sotto un messaggio. */
+.wa-suggestion { border-left: 3px solid var(--border); padding: 6px 0 6px 10px; display: grid; gap: 6px; min-width: 0; }
+.wa-suggestion h4 { margin: 0; font-size: 14px; }
+.wa-suggestion p { margin: 0; font-size: 13px; }
+.wa-suggestion textarea { width: 100%; box-sizing: border-box; }
+.wa-suggestion-sources { margin: 0; padding-left: 18px; font-size: 13px; }
+/* BLOCCO-4D: motore delle risposte automatiche (solo simulazione). */
+.wa-auto-panel { border: 1px dashed var(--border); border-radius: 8px; padding: 8px 10px; display: grid; gap: 6px; margin-bottom: 10px; min-width: 0; }
+.wa-auto-panel p { margin: 0; font-size: 13px; }
+.wa-auto-decision { border-left: 3px dashed var(--border); padding: 4px 0 4px 10px; display: grid; gap: 4px; min-width: 0; }
+.wa-auto-decision p { margin: 0; font-size: 13px; }
+.wa-auto-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.wa-auto-text { margin: 0; padding: 6px 8px; background: var(--surface-2, rgba(0,0,0,0.04)); border-radius: 6px; font-size: 13px; overflow-wrap: anywhere; }
+/* BLOCCO-5A: collegamenti di prenotazione online delle visite. */
+.visit-booking-links { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 10px; display: grid; gap: 8px; min-width: 0; }
+.visit-booking-links h3 { margin: 0; font-size: 15px; }
+.visit-booking-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.visit-booking-list li { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.visit-booking-form { display: grid; gap: 8px; max-width: 560px; }
+.visit-booking-links code { overflow-wrap: anywhere; display: block; }
+/* BLOCCO-6A: fogli visita. */
+.visit-sheets { border-top: 1px solid var(--border); margin-top: 14px; padding-top: 10px; display: grid; gap: 8px; min-width: 0; }
+.visit-sheets h3 { margin: 0; font-size: 15px; }
+.visit-sheets-list { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.visit-sheet-line { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; font-size: 13px; }
+/* BLOCCO-6B: richieste di firma (simulazione). */
+.visit-sign { display: grid; gap: 4px; padding-left: 12px; border-left: 2px dashed var(--border); }
+.visit-sign-form { display: grid; gap: 6px; max-width: 420px; }

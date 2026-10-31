@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from flow.router import router as flow_router
 from pathlib import Path
 from datetime import datetime, date, timedelta, timezone
-import hashlib, hmac, logging, os, re, uvicorn, secrets, uuid, requests
+import hashlib, hmac, json, logging, os, re, uvicorn, secrets, uuid, requests
 from valuation_base import compute_base_from_payload 
 from database import get_connection, invia_mail
 import stime_purge
@@ -55,6 +55,9 @@ from appointments_legacy.site_hook import safe_import_for_detail
 # require_authenticated_operator: qui non c'e' un operatore, c'e' il client
 # pubblico che apre un link.
 from public_booking.public_router import router as public_booking_router
+# BLOCCO-5A: prenotazione online delle visite di un immobile con incarico.
+from visit_booking.router import public_router as visit_booking_public_router
+from visit_booking.router import router as visit_booking_router
 from public_booking.page import PAGE_PREFIX as PUBLIC_BOOKING_PAGE_PREFIX, PublicBookingPage
 from calendar_sync.router import router as calendar_sync_router
 from seller_intelligence import service as seller_intelligence_service
@@ -73,6 +76,26 @@ from appointment_reminders.router import router as appointment_reminders_router
 # STIMA Voice Fase 7: il router dei comandi vocali (spento finche' non e' acceso ogni livello).
 from voice.router import router as voice_router
 from trash.router import router as trash_router
+# BLOCCO-1B: dati dell'agenzia per i report e logo (`/api/agency-profile`).
+from agency_profile.router import router as agency_profile_router
+# BLOCCO-2A: valutazioni dell'agente sugli immobili (`/api/property-valuations`).
+from property_valuations.router import router as property_valuations_router
+# REPORT-PROPRIETARIO-1: report attivita' dell'immobile per il proprietario (`/api/owner-reports`).
+from owner_report.router import router as owner_report_router
+# BLOCCO-4A: ricezione WhatsApp (persistenza dal webhook) e consultazione `/api/inbound-messages`.
+from inbound_messages import parser as inbound_parser
+from inbound_messages import service as inbound_service
+from inbound_messages.router import router as inbound_messages_router
+# BLOCCO-4B: risposta WhatsApp manuale alle conversazioni (`/api/message-replies`).
+from message_replies.router import router as message_replies_router
+# BLOCCO-4C: suggerimenti di risposta, solo proposte (`/api/reply-suggestions`).
+from reply_suggestions.router import router as reply_suggestions_router
+# BLOCCO-4D: motore delle risposte automatiche, solo simulazione (`/api/auto-replies`).
+from auto_replies.router import router as auto_replies_router
+# BLOCCO-6A: fogli visita (`/api/visit-sheets`).
+from visit_sheets.router import router as visit_sheets_router
+# BLOCCO-6B: richieste di firma (`/api/signature-requests`), oggi solo adattatore simulato.
+from esign.router import router as esign_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
 # ---------------------------------------------------------
@@ -185,6 +208,29 @@ app.include_router(appointment_reminders_router, dependencies=[Depends(require_a
 # errore; `GET /api/voice/status` tiene nascosta l'interfaccia.
 app.include_router(voice_router, dependencies=[Depends(require_authenticated_operator)])
 app.include_router(trash_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-1B: solo il mount, come l'Agenda: ogni rotta prende lo scope da
+# `require_operator`; le scritture le decide `agency_profile.service.require_editor`.
+app.include_router(agency_profile_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-2A: solo il mount, come l'Agenda: ogni rotta prende lo scope da
+# `require_operator`; i permessi li decide `property_valuations.service`.
+app.include_router(property_valuations_router, dependencies=[Depends(require_authenticated_operator)])
+# REPORT-PROPRIETARIO-1: stesso montaggio; scope da `require_operator`, permessi in
+# `owner_report.service` (chi puo' gestire l'immobile). Sola lettura: nessuna scrittura.
+app.include_router(owner_report_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-4A: stesso montaggio; scope da `require_operator`, permessi in `inbound_messages.service`.
+# Sola consultazione e associazione: nessuna rotta invia messaggi.
+app.include_router(inbound_messages_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-4B: stesso montaggio; permessi, finestra e invio in `message_replies.service`.
+# L'invio reale e' disattivato salvo `WHATSAPP_OUTBOUND_MODE=meta`.
+app.include_router(message_replies_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-4C: stesso montaggio; una sola GET, nessuna scrittura e nessun invio.
+app.include_router(reply_suggestions_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-4D: stesso montaggio; nessuna rotta invia o accoda. Arresto generale: WHATSAPP_AUTO_REPLY_MODE.
+app.include_router(auto_replies_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-6A: stesso montaggio; visibilita' dell'Agenda, nessuna pubblicazione al proprietario.
+app.include_router(visit_sheets_router, dependencies=[Depends(require_authenticated_operator)])
+# BLOCCO-6B: stesso montaggio; nessuna firma valida finche' non si integra un fornitore reale.
+app.include_router(esign_router, dependencies=[Depends(require_authenticated_operator)])
 # P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.
@@ -192,6 +238,9 @@ app.include_router(communication_public_router)
 # A30-12: PUBBLICA per natura - chi apre il link non e' un operatore -
 # esattamente come communication_public_router sopra.
 app.include_router(public_booking_router)
+# BLOCCO-5A: pubblico come `/api/public/booking`; ogni rifiuto del link e' la stessa risposta neutra.
+app.include_router(visit_booking_public_router)
+app.include_router(visit_booking_router, dependencies=[Depends(require_authenticated_operator)])
 
 # P27-1 - LA SUPERFICIE PLATFORM. UNA PORTA DIVERSA, NON UNA PORTA PIU' LARGA.
 #
@@ -380,6 +429,13 @@ app.mount(
 # qualunque token e parla solo con `/api/public/booking/...` (vedi
 # `public_booking/page.py`).
 app.mount(PUBLIC_BOOKING_PAGE_PREFIX, PublicBookingPage(), name="public-booking-page")
+# BLOCCO-5A: le pagine della prenotazione di una visita (`/visita/{token}`) e
+# della sua gestione (`/visita-gestione/{chiave}`): stessa classe, stesse
+# intestazioni di privacy, file in `static/visit_booking/`.
+app.mount("/visita-gestione", PublicBookingPage(Path(__file__).resolve().parent / "static" / "visit_booking"),
+          name="visit-booking-manage-page")
+app.mount("/visita", PublicBookingPage(Path(__file__).resolve().parent / "static" / "visit_booking"),
+          name="visit-booking-page")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -2180,60 +2236,53 @@ def admin_update_stima(
 # ---------------------------------------------------------
 @app.get("/webhook/whatsapp")
 def whatsapp_verify(
+    request: Request,
     hub_mode: str = None,
     hub_challenge: str = None,
     hub_verify_token: str = None,
 ):
+    # BLOCCO-4A: Meta invia `hub.mode`, `hub.verify_token`, `hub.challenge`
+    # (con il punto); i nomi con il trattino basso restano accettati. Senza un
+    # token configurato la verifica e' sempre rifiutata.
+    query = request.query_params
+    mode = query.get("hub.mode") or hub_mode
+    token = query.get("hub.verify_token") or hub_verify_token
+    challenge = query.get("hub.challenge") or hub_challenge
     VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
 
-    if hub_mode == "subscribe" and hub_verify_token == VERIFY_TOKEN:
-        return int(hub_challenge)
+    if (VERIFY_TOKEN and mode == "subscribe" and token and challenge and challenge.isdigit()
+            and hmac.compare_digest(token, VERIFY_TOKEN)):
+        return int(challenge)
 
     raise HTTPException(status_code=403, detail="Webhook verification failed")
 
 @app.post("/webhook/whatsapp")
 async def whatsapp_webhook(request: Request):
+    """BLOCCO-4A: ricezione affidabile.
+
+    Firma verificata sul corpo ORIGINALE prima di qualsiasi accesso al
+    database. Tutti i messaggi, gli stati di consegna e gli altri eventi del
+    payload sono salvati in UNA transazione (`inbound_messages.service.ingest`),
+    idempotente sull'identificativo del provider. La risposta 200 arriva solo
+    dopo il commit: un errore di scrittura risponde 500 e Meta ritenta, senza
+    duplicati. Nessuna risposta viene inviata e nessun allegato scaricato.
+    """
     raw_body = await request.body()
     verify_whatsapp_signature(
         raw_body,
         request.headers.get("X-Hub-Signature-256"),
     )
-    payload = await request.json()
-
     try:
-        entry = payload.get("entry", [])[0]
-        changes = entry.get("changes", [])[0].get("value", {})
-
-        if "messages" not in changes:
-            return {"ok": True}
-
-        msg = changes["messages"][0]
-        from_number = msg.get("from")
-        msg_type = msg.get("type")
-
-        text = None
-        if msg_type == "text":
-            text = msg.get("text", {}).get("body")
-        else:
-            # 👇 SALVA TUTTO
-            text = f"[{msg_type.upper()}]"
-
-        if not from_number:
-            return {"ok": True}
-
-        conn = get_connection()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO whatsapp_incoming
-            (from_number, message_type, text, received_at, direction)
-            VALUES (%s, %s, %s, NOW(), 'in')
-        """, (from_number, msg_type, text))
-        conn.commit()
-        cur.close()
-        conn.close()
-
-    except Exception as e:
-        print("WHATSAPP WEBHOOK ERROR:", e)
+        parsed = inbound_parser.parse(json.loads(raw_body))
+    except (ValueError, inbound_parser.MalformedPayload):
+        raise HTTPException(status_code=400, detail="Invalid webhook payload")
+    try:
+        await run_in_threadpool(inbound_service.ingest, parsed)
+    except inbound_service.NotInstalled as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except Exception as exc:
+        logger.error("whatsapp_inbound_persist_failed error_type=%s", type(exc).__name__)
+        raise HTTPException(status_code=500, detail="Webhook not persisted") from exc
 
     return {"ok": True}
 

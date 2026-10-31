@@ -108,6 +108,14 @@ export function mountUserMenu() {
   const info = el('dl', 'user-menu-info');
   const azioni = el('div', 'user-menu-actions');
   panel.append(testa, info, azioni);
+  // BLOCCO-1B: «Dati agenzia e logo» (#/agenzia), solo per chi opera in
+  // un'agenzia. Leggibile da ogni operatore; modificabile se il server lo dice.
+  const agenziaLink = el('a', 'btn ghost user-menu-link', 'Dati agenzia e logo');
+  agenziaLink.href = '#/agenzia';
+  agenziaLink.setAttribute('data-user-menu-agency', '');
+  agenziaLink.hidden = true;
+  agenziaLink.addEventListener('click', () => apri(false));
+  azioni.appendChild(agenziaLink);
   if (logoutBtn) azioni.appendChild(logoutBtn);
 
   host.replaceChildren(trigger, panel);
@@ -161,6 +169,7 @@ export function mountUserMenu() {
     }
     host.hidden = false;
     disegna(session, null);
+    agenziaLink.hidden = !canUseTenantSurface(session);
     if (!canUseTenantSurface(session)) return;
     const epoca = sessionEpoch();
     try {

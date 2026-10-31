@@ -87,6 +87,12 @@ import { getSession } from '../core/auth.js';
 // CRM-OPS-2: "Modifica immobile" - lo stesso form della creazione, precompilato.
 import { loadFormOptions, openPropertyDialog, propertyDisplayName, propertyTypeLabel } from '../components/property-form.js';
 import { mountPropertyInteractions } from '../components/property-interactions.js';
+import { mountVisitBookingLinks } from '../components/visit-booking-links.js';
+import { mountVisitSheets } from '../components/visit-sheets.js';
+// BLOCCO-2A: la scheda «Valutazioni» (valutazioni dell'agente, versioni e approvazione).
+import { mountPropertyValuations } from '../components/property-valuations.js';
+// REPORT-PROPRIETARIO-1: la scheda «Report proprietario» (anteprima e PDF da condividere).
+import { mountOwnerReport } from '../components/owner-report.js';
 import { propertyTypeText } from '../components/property-label.js';
 import { COMPATIBILITY_STATUS_LABELS, MATCH_CLASS_LABELS, MATCH_COMMERCIAL_STATUS_LABELS } from '../components/match-labels.js';
 // CENSIMENTO-1 Fase 4: la tab «Censimento» della scheda (palazzina, pertinenze
@@ -247,6 +253,10 @@ const TABS = [
   // MATCH e gli acquirenti compatibili (la rotta `.../abbinamenti` resta valida).
   { key: 'acquirenti', label: 'Acquirenti compatibili' },
   { key: 'proposte', label: 'Proposte' },
+  // BLOCCO-2A: valutazioni dell'agente (vendita e locazione), con le loro versioni.
+  { key: 'valutazioni', label: 'Valutazioni' },
+  // REPORT-PROPRIETARIO-1: report attivita' per il proprietario, in PDF.
+  { key: 'report-proprietario', label: 'Report proprietario' },
   { key: 'attivita', label: 'Storico interazioni' },
 ];
 
@@ -515,7 +525,11 @@ export async function renderImmobileDettaglio(container, params = []) {
         case 'proprietari': contentEl.innerHTML = renderProprietari(property.contacts, contactRemoveConfirm, property) + renderLeadLinks(property.leads); bindProprietariSection(contentEl); break;
         case 'foto': contentEl.innerHTML = renderFoto(property.photos, photoAddMode, photoRemoveConfirm); bindFotoSection(contentEl); break;
         case 'documenti': contentEl.innerHTML = renderDocumenti(property.documents, documentAddMode, documentRemoveConfirm); bindDocumentiSection(contentEl); break;
-        case 'visite': contentEl.innerHTML = renderVisite(property.visits, visitRemoveConfirm); bindVisiteSection(contentEl); break;
+        case 'visite': contentEl.innerHTML = renderVisite(property.visits, visitRemoveConfirm); bindVisiteSection(contentEl);
+          // BLOCCO-5A: collegamenti di prenotazione online delle visite di questo immobile.
+          mountVisitBookingLinks(contentEl, { propertyId: property.id }).catch(() => {});
+          // BLOCCO-6A: fogli visita delle visite in agenda di questo immobile.
+          mountVisitSheets(contentEl, { propertyId: property.id }).catch(() => {}); break;
         case 'proposte': contentEl.innerHTML = renderProposte(params[1] === 'proposte' && /^\d+$/.test(params[2] || '') ? proposals.filter((pr) => String(pr.match_id) === params[2]) : proposals, sales, property, saleCancelConfirm); bindProposteSection(contentEl); break;
         case 'acquirenti':
         case 'abbinamenti': {
@@ -527,6 +541,8 @@ export async function renderImmobileDettaglio(container, params = []) {
           break;
         }
         case 'censimento': await renderCensimentoTab(contentEl); break;
+        case 'valutazioni': await mountPropertyValuations(contentEl, { propertyId: property.id, loadAgents: getAgents }); break;
+        case 'report-proprietario': await mountOwnerReport(contentEl, { propertyId: property.id }); break;
         case 'attivita':
           contentEl.innerHTML = '<div id="property-interactions"></div>';
           await mountPropertyInteractions(contentEl.querySelector('#property-interactions'), {

@@ -146,7 +146,21 @@ def test_01_la_071_e_valida_e_in_coda():
     # dell'eliminazione logica degli operatori; additiva), con la sua down.
     # SENTINELLA AGGIORNATA DA ELIMINA TERRITORIO: 114_territory_logical_delete (marcatore
     # dell'eliminazione logica dei territori; additiva), con la sua down.
-    assert numeri[numeri.index(76):] == list(range(76, 115))
+    # SENTINELLA AGGIORNATA DA BLOCCO-1B: 115_agency_logos (il logo dell'agenzia; additiva),
+    # con la sua down.
+    # SENTINELLA AGGIORNATA DA BLOCCO-2A: 116_property_valuations (valutazioni dell'agente;
+    # additiva), con la sua down.
+    # SENTINELLA AGGIORNATA DA BLOCCO-2B: 117_property_valuation_pdfs (PDF delle valutazioni
+    # approvate; additiva), con la sua down.
+    # SENTINELLA AGGIORNATA DA BLOCCO-4A: 118_whatsapp_inbound (ricezione WhatsApp; additiva),
+    # con la sua down.
+    # SENTINELLA AGGIORNATA DA BLOCCO-4D: 119_whatsapp_auto_reply_simulation (registro della
+    # simulazione delle risposte automatiche; additiva), con la sua down.
+    # SENTINELLA AGGIORNATA DA BLOCCO-5A: 120_property_visit_booking (prenotazione online delle
+    # visite; additiva), con la sua down.
+    # SENTINELLA AGGIORNATA DA BLOCCO-6A: 121_visit_sheets (fogli visita; additiva), con la sua down.
+    # SENTINELLA AGGIORNATA DA BLOCCO-6B: 122_signature_requests (richieste di firma; additiva).
+    assert numeri[numeri.index(76):] == list(range(76, 123))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))
@@ -322,7 +336,9 @@ def test_12_public_unsubscribe_e_un_origin_ammesso_e_l_insieme_resta_chiuso():
     # l'agenzia viene dal link risolto per impronta sul server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
-        "public_booking", "appointment_reminder", "public_consent")
+        "public_booking", "appointment_reminder", "public_consent",
+        # SENTINELLA AGGIORNATA DA BLOCCO-4B: lo STOP WhatsApp ricevuto da un'agenzia.
+        "whatsapp_inbound")
     ctx = context.SystemAgencyContext(agency_id=3, origin="public_unsubscribe")
     assert ctx.require_agency() == 3 and ctx.user_id is None
     with pytest.raises(ValueError):

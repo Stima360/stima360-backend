@@ -244,7 +244,12 @@ def test_F4_nessun_update_usa_solo_lid():
 
 def test_T1_il_token_e_per_messaggio_non_per_batch():
     """`token_factory` viene chiamata dentro il ciclo sui candidati."""
-    sorgente = inspect.getsource(repository.claim_due)
+    # SENTINELLA AGGIORNATA DA BLOCCO-4B: il corpo del claim (passi 2-5) e'
+    # in `_claim_ids`, condiviso da `claim_due` e dal claim mirato
+    # `claim_message`. Il ciclo e il token per messaggio si cercano li'.
+    assert "_claim_ids(" in inspect.getsource(repository.claim_due)
+    assert "_claim_ids(" in inspect.getsource(repository.claim_message)
+    sorgente = inspect.getsource(repository._claim_ids)
     corpo = re.sub(r'""".*?"""', "", sorgente, flags=re.DOTALL)
     ciclo = corpo.index("for message_id in candidati")
     assert corpo.index("token_factory()") > ciclo, (
@@ -309,7 +314,11 @@ def test_R4_solo_il_claim_incrementa_attempt_count():
     incrementi = [s for s in statement_update()
                   if re.search(r"attempt_count\s*=\s*attempt_count\s*\+\s*1", s)]
     assert len(incrementi) == 1, f"attempt_count incrementato in {len(incrementi)} punti"
-    assert "attempt_count = attempt_count + 1" in inspect.getsource(repository.claim_due)
+    # SENTINELLA AGGIORNATA DA BLOCCO-4B: l'unico incremento e' in `_claim_ids`,
+    # l'unico corpo del claim, per `claim_due` come per `claim_message`.
+    assert "attempt_count = attempt_count + 1" in inspect.getsource(repository._claim_ids)
+    for nome in ("claim_due", "claim_message"):
+        assert "_claim_ids(" in inspect.getsource(getattr(repository, nome)), nome
 
 
 def test_R5_il_risultato_tardivo_non_tocca_il_messaggio():
@@ -351,6 +360,9 @@ def test_A2_la_superficie_pubblica_e_quella_prevista():
         # P29-3D: "invia ora". Sposta `scheduled_at` di un messaggio in
         # coda; non spedisce, non reclama, non tocca lo stato.
         "send_now",
+        # SENTINELLA AGGIORNATA DA BLOCCO-4B: il claim di UN messaggio preciso,
+        # per la risposta WhatsApp manuale. Stessa transizione di `claim_due`.
+        "claim_message",
     }, sorted(pubbliche)
 
 

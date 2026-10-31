@@ -109,6 +109,18 @@ PUBLIC_BY_DESIGN = {
     ("GET", "/api/public/booking/{token}"),
     ("GET", "/api/public/booking/{token}/slots"),
     ("POST", "/api/public/booking/{token}/submit"),
+    # SENTINELLA AGGIORNATA DA BLOCCO-5A: la prenotazione online di UNA visita
+    # per immobile. Autenticata dal token opaco del link (solo SHA-256 nel
+    # database) o dalla chiave di gestione della prenotazione (solo impronte);
+    # agenzia e immobile dal link, mai dal client; ogni rifiuto e' la stessa
+    # risposta neutra; scritture tramite `SystemAgencyContext(origin="public_booking")`.
+    ("GET", "/api/public/visit-booking/{token}"),
+    ("GET", "/api/public/visit-booking/{token}/slots"),
+    ("POST", "/api/public/visit-booking/{token}/book"),
+    ("GET", "/api/public/visit-booking/manage/{key}"),
+    ("GET", "/api/public/visit-booking/manage/{key}/slots"),
+    ("POST", "/api/public/visit-booking/manage/{key}/cancel"),
+    ("POST", "/api/public/visit-booking/manage/{key}/reschedule"),
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (F04/F07, `public_submissions`,
     # `stima_pdf`). Le ricevute degli invii pubblici: autenticate dall'identita'
     # dell'invio (UUID) piu' la prova `X-Receipt-Key`, di cui nel database vive
@@ -337,6 +349,46 @@ TENANT_PREFIXES = (
     # sessione (`require_operator` su ogni rotta, mai dal client) - quindi
     # dichiara il cookie e SOLO il cookie, come verifica il test 6.
     "/api/trash",
+    # SENTINELLA AGGIORNATA DA BLOCCO-1B: dati dell'agenzia e logo. Superficie
+    # operatore come le altre - l'agenzia viene dalla sessione (`require_operator`
+    # su ogni rotta, corpo chiuso senza agency_id) - quindi dichiara il cookie e
+    # SOLO il cookie, come verifica il test 6.
+    "/api/agency-profile",
+    # SENTINELLA AGGIORNATA DA BLOCCO-2A: valutazioni dell'agente. Superficie
+    # operatore come le altre - agenzia, autore e approvatore dalla sessione
+    # (`require_operator` su ogni rotta, corpi chiusi) - quindi dichiara il
+    # cookie e SOLO il cookie, come verifica il test 6.
+    "/api/property-valuations",
+    # SENTINELLA AGGIORNATA DA REPORT-PROPRIETARIO-1: il report attivita' per il
+    # proprietario. Superficie operatore come le altre - agenzia dalla sessione
+    # (`require_operator` su ogni rotta, corpo chiuso) - quindi dichiara il
+    # cookie e SOLO il cookie, come verifica il test 6.
+    "/api/owner-reports",
+    # SENTINELLA AGGIORNATA DA BLOCCO-4A: i messaggi WhatsApp ricevuti. Superficie
+    # operatore come le altre - agenzia dalla sessione (`require_operator` su
+    # ogni rotta, corpo chiuso) - quindi dichiara il cookie e SOLO il cookie,
+    # come verifica il test 6. Il webhook `/webhook/whatsapp` resta pubblico
+    # per progetto (firma), sopra.
+    "/api/inbound-messages",
+    # SENTINELLA AGGIORNATA DA BLOCCO-4B: la risposta WhatsApp manuale. Superficie
+    # operatore come le altre - agenzia, destinatario e numero mittente dal
+    # server (`require_operator` su ogni rotta, corpo chiuso) - quindi dichiara
+    # il cookie e SOLO il cookie, come verifica il test 6.
+    "/api/message-replies",
+    # SENTINELLA AGGIORNATA DA BLOCCO-4C: i suggerimenti di risposta. Una sola
+    # GET, agenzia e visibilita' dalla sessione (`require_operator`): dichiara
+    # il cookie e SOLO il cookie, come verifica il test 6.
+    "/api/reply-suggestions",
+    # SENTINELLA AGGIORNATA DA BLOCCO-4D: il motore delle risposte automatiche
+    # (solo simulazione). Agenzia dalla sessione, corpo chiuso: cookie e SOLO cookie.
+    "/api/auto-replies",
+    # SENTINELLA AGGIORNATA DA BLOCCO-5A: i collegamenti di prenotazione delle
+    # visite, lato operatore (agenzia dalla sessione, corpo chiuso).
+    "/api/visit-booking-links",
+    # SENTINELLA AGGIORNATA DA BLOCCO-6A: i fogli visita (visibilita' dell'Agenda).
+    "/api/visit-sheets",
+    # SENTINELLA AGGIORNATA DA BLOCCO-6B: le richieste di firma (oggi solo simulate).
+    "/api/signature-requests",
 )
 
 

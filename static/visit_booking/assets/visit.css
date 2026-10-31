@@ -1,0 +1,8 @@
+/* BLOCCO-5A: aggiunte minime allo stile della prenotazione (/prenota/assets/booking.css). */
+.week-nav { flex-wrap: wrap; gap: 8px; }
+.week-nav .week-range { flex: 1 1 100%; text-align: center; order: -1; }
+[data-manage-link] { overflow-wrap: anywhere; word-break: break-all; }
+.visit-days, .slot-grid, .form, .panel { min-width: 0; max-width: 100%; }
+.visit-days { display: grid; gap: 12px; min-width: 0; }
+.visit-days .slot-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+.visit-when { font-weight: 700; overflow-wrap: anywhere; margin: 0 0 12px; }

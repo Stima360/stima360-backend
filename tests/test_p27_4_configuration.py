@@ -174,6 +174,8 @@ def service(monkeypatch):
         return {**row, "settings": dict(row["settings"])}
 
     monkeypatch.setattr(repo, "get_agency", _get)
+    # BLOCCO-1B: la PATCH legge la riga bloccata (`lock_agency`); stesso archivio finto.
+    monkeypatch.setattr(repo, "lock_agency", _get)
     monkeypatch.setattr(repo, "update_agency", _update)
 
     def _record(**kwargs):

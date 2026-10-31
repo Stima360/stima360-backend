@@ -36,7 +36,10 @@ REDACTED = "[REDACTED]"
 #: Il logger che uvicorn usa per l'access log (h11 e httptools).
 ACCESS_LOGGER = "uvicorn.access"
 
-_TOKEN_NEL_PATH = re.compile(r"^(/api/public/booking/|/prenota/)(?!assets(?:/|$))[^/?#]+")
+# BLOCCO-5A: anche i token dei link di visita per immobile e di gestione
+# della prenotazione (`/visita/`, `/visita-gestione/`, `/api/public/visit-booking/`).
+_TOKEN_NEL_PATH = re.compile(r"^(/api/public/booking/|/prenota/|/api/public/visit-booking/(?:manage/)?"
+                             r"|/visita/|/visita-gestione/)(?!assets(?:/|$))[^/?#]+")
 
 
 def redact_path(path: str) -> str:

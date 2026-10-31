@@ -138,7 +138,9 @@ def test_D1_linsieme_degli_origin_e_chiuso_e_contiene_il_dispatcher():
     # l'agenzia viene dal link risolto per impronta sul server, non dal client.
     assert context.SYSTEM_CONTEXT_ORIGINS == (
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
-        "public_booking", "appointment_reminder", "public_consent")
+        "public_booking", "appointment_reminder", "public_consent",
+        # SENTINELLA AGGIORNATA DA BLOCCO-4B: lo STOP WhatsApp ricevuto da un'agenzia.
+        "whatsapp_inbound")
     assert dispatcher.DISPATCH_ORIGIN == "communication_dispatch"
 
 
