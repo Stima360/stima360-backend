@@ -363,6 +363,10 @@ TENANT_PREFIXES = (
     # server (`require_operator` su ogni rotta, corpo chiuso) - quindi dichiara
     # il cookie e SOLO il cookie, come verifica il test 6.
     "/api/message-replies",
+    # SENTINELLA AGGIORNATA DA BLOCCO-4C: i suggerimenti di risposta. Una sola
+    # GET, agenzia e visibilita' dalla sessione (`require_operator`): dichiara
+    # il cookie e SOLO il cookie, come verifica il test 6.
+    "/api/reply-suggestions",
 )
 
 

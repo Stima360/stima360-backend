@@ -132,6 +132,7 @@ export async function mountWhatsappReply(container, { senderPhone }) {
   container.appendChild(root);
   let requestId = null;
   let lastText = '';
+  let composer = null;   // il compositore attuale, se la risposta è possibile
 
   async function load(notice) {
     let st;
@@ -188,6 +189,7 @@ export async function mountWhatsappReply(container, { senderPhone }) {
       for (const r of st.replies) list.appendChild(replyItem(r, resumeReply));
       root.appendChild(list);
     }
+    composer = null;
     if (!st.can_reply) {
       const blocks = el('div', 'wa-reply-blocks');
       blocks.setAttribute('data-wa-reply-blocks', '');
@@ -241,7 +243,27 @@ export async function mountWhatsappReply(container, { senderPhone }) {
     const field = el('label', 'wa-reply-field');
     field.append(el('span', null, 'Testo della risposta (solo testo)'), text, counter);
     root.append(field, prepare, confirmBox);
+    composer = { text, counter, prepare, confirmBox, max: st.text_max };
   }
 
   await load();
+  return {
+    /**
+     * BLOCCO-4C: mette un testo (un suggerimento rivisto dall'operatore) nel
+     * compositore. NON invia: restano «Prepara invio» e «Conferma invio».
+     * Una nuova chiave di richiesta, come per ogni testo cambiato.
+     */
+    setDraft(value) {
+      if (!composer) return false;
+      const draft = String(value || '').slice(0, composer.max);
+      composer.text.value = draft;
+      lastText = draft;
+      requestId = null;
+      composer.counter.textContent = `${draft.length}/${composer.max}`;
+      composer.confirmBox.hidden = true;
+      composer.prepare.hidden = false;
+      composer.text.focus();
+      return true;
+    },
+  };
 }

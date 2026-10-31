@@ -734,6 +734,17 @@ DOMAINS = (
              "conversazione inesistente -> 404, nessun invio",
     ),
     Domain(
+        "REPLY_SUGGESTIONS", "/api/reply-suggestions",
+        # BLOCCO-4C. SOLA LETTURA: una GET che calcola un suggerimento e non
+        # scrive nulla. L'agenzia viene SOLO dalla sessione: un messaggio che
+        # non e' dell'agenzia della sessione e' 404, nessun metodo di scrittura.
+        certifier="reply_suggestions",
+        depends_on=None,
+        api_delete=False,
+        note="una rotta sondata: anonimo e Basic -> 401, messaggio inesistente -> 404, "
+             "POST -> 405, nessun invio",
+    ),
+    Domain(
         "LEGACY_ADMIN", "/api/admin",
         listing="/api/admin/stime?day=oggi",
         note="le sette route /api/admin che toccano dati di tenant, migrate "
@@ -7526,6 +7537,58 @@ def certify_message_replies(report, http, cert, domain, jars, owned, context) ->
                                 payload={"text": "x", "client_request_id": str(_uuid.uuid4()), "confirm": True})
         report.check(f"MESSAGE_REPLIES-nessun-invio-{etichetta}", risposta.status in (404, 503),
                      f"{etichetta}: POST {percorso} -> {risposta.status} (atteso 404 o 503, mai un invio)")
+
+
+REPLY_SUGGESTIONS_PERCORSO = "/messages/999999999"
+
+
+def _ultimo_messaggio(http, jar) -> int | None:
+    """L'id dell'ultimo messaggio ricevuto visibile alla sessione, se c'e'."""
+    risposta = http.request("GET", "/api/inbound-messages/conversations", jar=jar)
+    try:
+        voci = (risposta.json() or {}).get("items") or []
+    except Exception:
+        return None
+    for voce in voci if isinstance(voci, list) else []:
+        ultimo = (voce or {}).get("last_message") or {}
+        if isinstance(ultimo.get("id"), int):
+            return ultimo["id"]
+    return None
+
+
+def certify_reply_suggestions(report, http, cert, domain, jars, owned, context) -> None:
+    """REPLY_SUGGESTIONS (BLOCCO-4C): solo letture, nessuna scrittura possibile.
+
+        anonimo, Basic                          -> 401 (mount)
+        GET messaggio inesistente               -> 404, per ogni agenzia
+        GET messaggio dell'ALTRA agenzia        -> 404, A->B e B->A (l'ultimo
+                                                   messaggio visibile all'altra
+                                                   sessione; se non ne ha, un id
+                                                   inesistente)
+        POST sulla stessa rotta                 -> 405: la rotta non scrive
+    """
+    base = domain.prefix
+    percorso = base + REPLY_SUGGESTIONS_PERCORSO
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    risposta = http.request("GET", percorso)
+    report.check("REPLY_SUGGESTIONS-anonimo", risposta.status == 401,
+                 f"GET {percorso} senza sessione -> {risposta.status} (atteso 401)")
+    risposta = http.request("GET", percorso, headers={"Authorization": f"Basic {credenziale}"})
+    report.check("REPLY_SUGGESTIONS-basic", risposta.status == 401,
+                 f"GET {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        altrui = _ultimo_messaggio(http, jars[altro])
+        bersaglio = f"{base}/messages/{altrui or 999999999}"
+        risposta = http.request("GET", bersaglio, jar=jars[etichetta])
+        report.check(f"REPLY_SUGGESTIONS-messaggio-altrui-{etichetta}-{altro}", risposta.status == 404,
+                     f"{etichetta}: GET {bersaglio} (messaggio di {altro}"
+                     f"{'' if altrui else ': nessuno visibile, id inesistente'}) -> {risposta.status} (atteso 404)")
+        risposta = http.request("GET", percorso, jar=jars[etichetta])
+        report.check(f"REPLY_SUGGESTIONS-inesistente-{etichetta}", risposta.status == 404,
+                     f"{etichetta}: GET {percorso} -> {risposta.status} (atteso 404)")
+        risposta = http.request("POST", percorso, jar=jars[etichetta], payload={})
+        report.check(f"REPLY_SUGGESTIONS-nessuna-scrittura-{etichetta}", risposta.status == 405,
+                     f"{etichetta}: POST {percorso} -> {risposta.status} (atteso 405, la rotta non scrive)")
 
 
 def certify_communication(report, http, cert, domain, jars, owned, context) -> None:

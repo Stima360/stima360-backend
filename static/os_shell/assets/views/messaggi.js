@@ -13,6 +13,7 @@
 
 import { apiGet, apiPost } from '../core/api-client.js';
 import { mountWhatsappReply } from '../components/whatsapp-reply.js';
+import { mountReplySuggestion } from '../components/suggested-reply.js';
 
 const API = '/api/inbound-messages';
 
@@ -213,6 +214,7 @@ export async function renderMessaggi(container, params = []) {
       return;
     }
     detail.replaceChildren(el('h3', null, `Conversazione con ${phoneText(sender)}`));
+    let composer = null;
     for (const m of data.messages) {
       const card = el('div', 'messages-message');
       card.setAttribute('data-message', String(m.id));
@@ -232,9 +234,11 @@ export async function renderMessaggi(container, params = []) {
         });
         card.appendChild(toggle);
       }
+      // BLOCCO-4C: suggerimento per QUESTO messaggio (il suo immobile, non l'ultimo).
+      if (m.is_text) mountReplySuggestion(card, { messageId: m.id, getComposer: () => composer });
       detail.appendChild(card);
     }
-    await mountWhatsappReply(detail, { senderPhone: sender });
+    composer = await mountWhatsappReply(detail, { senderPhone: sender });
   }
 
   allBtn.addEventListener('click', () => { onlyUnlinked = false; allBtn.classList.add('active'); unlinkedBtn.classList.remove('active'); loadList(); });

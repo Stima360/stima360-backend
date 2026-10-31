@@ -2145,6 +2145,15 @@ class FakeHttp(cert.HttpProbe):
                 return self._reply(method, path, 200, b'{"reply": {"status": "sent"}}')
         return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
 
+    def _reply_suggestions(self, method, path, agency, payload):
+        """BLOCCO-4C. Il doppio di `/api/reply-suggestions`: un messaggio che
+        non e' dell'agenzia della sessione e' 404 (la POST la rifiuta gia' il
+        router vero con 405). Rotto `isolation`: la GET risponde 200 con il
+        suggerimento, e la certificazione deve fallire."""
+        if self._broken("isolation", "reply_suggestions"):
+            return self._reply(method, path, 200, b'{"text": "suggerimento di un\'altra agenzia"}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
+
     def _inbound_messages(self, method, path, agency, payload):
         """BLOCCO-4A. Il doppio di `/api/inbound-messages`: elenco della sola
         agenzia della sessione, corpo dell'associazione chiuso (modello VERO).
@@ -2572,6 +2581,10 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA BLOCCO-4B
         if path.startswith("/api/message-replies"):
             return self._message_replies(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA BLOCCO-4C
+        if path.startswith("/api/reply-suggestions"):
+            return self._reply_suggestions(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3561,6 +3574,26 @@ def test_13q_a_reply_that_sends_fails_the_matrix(monkeypatch):
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("MESSAGE_REPLIES-nessun-invio") for i in falliti), falliti
+
+
+def test_13r_reply_suggestions_are_certified_read_only(monkeypatch):
+    """BLOCCO-4C: la sezione REPLY_SUGGESTIONS gira nella matrice e ogni prova
+    e' un PASS: anonimo + Basic + 3 domande per agenzia (inesistente, messaggio
+    dell'altra agenzia, nessuna scrittura)."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("REPLY_SUGGESTIONS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 2 + 3 * 2, righe
+
+
+def test_13s_a_suggestion_of_another_agency_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="reply_suggestions"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("REPLY_SUGGESTIONS-messaggio-altrui-A-B") for i in falliti), falliti
 
 
 def test_13d_voice_leaking_a_command_fails_the_matrix(monkeypatch):

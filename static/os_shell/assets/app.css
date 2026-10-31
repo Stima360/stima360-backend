@@ -1688,3 +1688,9 @@ a.census-unit-main { text-decoration: none; }
 .wa-reply-counter { font-size: 12px; justify-self: end; }
 .wa-reply-confirm { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 10px; display: grid; gap: 6px; }
 .wa-reply .btn[data-wa-reply-prepare] { justify-self: start; }
+/* BLOCCO-4C: suggerimento di risposta sotto un messaggio. */
+.wa-suggestion { border-left: 3px solid var(--border); padding: 6px 0 6px 10px; display: grid; gap: 6px; min-width: 0; }
+.wa-suggestion h4 { margin: 0; font-size: 14px; }
+.wa-suggestion p { margin: 0; font-size: 13px; }
+.wa-suggestion textarea { width: 100%; box-sizing: border-box; }
+.wa-suggestion-sources { margin: 0; padding-left: 18px; font-size: 13px; }
