@@ -85,6 +85,7 @@ from property_valuations.router import router as property_valuations_router
 from owner_report.router import router as owner_report_router
 # BLOCCO-4A: ricezione WhatsApp (persistenza dal webhook) e consultazione `/api/inbound-messages`.
 from inbound_messages import parser as inbound_parser
+from inbound_messages import relay as inbound_relay
 from inbound_messages import service as inbound_service
 from inbound_messages.router import router as inbound_messages_router
 # BLOCCO-4B: risposta WhatsApp manuale alle conversazioni (`/api/message-replies`).
@@ -2264,16 +2265,37 @@ async def whatsapp_webhook(request: Request):
     idempotente sull'identificativo del provider. La risposta 200 arriva solo
     dopo il commit: un errore di scrittura risponde 500 e Meta ritenta, senza
     duplicati. Nessuna risposta viene inviata e nessun allegato scaricato.
+
+    Inoltro dal ricevitore esistente (`inbound_messages/relay.py`): stessa
+    rotta, firma propria al posto di quella Meta, filtro dei mittenti
+    obbligatorio. I mittenti esclusi non sono salvati.
     """
     raw_body = await request.body()
-    verify_whatsapp_signature(
-        raw_body,
-        request.headers.get("X-Hub-Signature-256"),
-    )
+    relayed = inbound_relay.is_relay(request.headers)
+    if relayed:
+        try:
+            inbound_relay.verify(raw_body, request.headers)
+        except inbound_relay.RelayRejected as exc:
+            raise HTTPException(status_code=exc.status, detail=exc.detail) from None
+    else:
+        verify_whatsapp_signature(
+            raw_body,
+            request.headers.get("X-Hub-Signature-256"),
+        )
+    allowed = inbound_relay.allowed_senders()
+    if relayed and allowed is None:
+        raise HTTPException(status_code=503, detail="Relay sender filter not configured")
     try:
-        parsed = inbound_parser.parse(json.loads(raw_body))
+        payload = json.loads(raw_body)
+        inbound_parser.parse(payload)
+        payload, dropped = inbound_relay.filter_payload(payload, allowed)
+        parsed = inbound_parser.parse(payload)
     except (ValueError, inbound_parser.MalformedPayload):
         raise HTTPException(status_code=400, detail="Invalid webhook payload")
+    if dropped:
+        logger.info("whatsapp_inbound_filtered dropped=%s relayed=%s", dropped, relayed)
+        if not parsed.messages and not parsed.events:
+            return {"ok": True}
     try:
         await run_in_threadpool(inbound_service.ingest, parsed)
     except inbound_service.NotInstalled as exc:
