@@ -162,7 +162,8 @@ def test_01_la_071_e_valida_e_in_coda():
     # SENTINELLA AGGIORNATA DA BLOCCO-6B: 122_signature_requests (richieste di firma; additiva).
     # SENTINELLA AGGIORNATA DA BLOCCO-4D: 123_whatsapp_auto_reply_send (modo d'invio; additiva).
     # SENTINELLA AGGIORNATA DA BLOCCO-6: 124_do_not_contact_and_link_revocation (additiva).
-    assert numeri[numeri.index(76):] == list(range(76, 125))
+    # SENTINELLA AGGIORNATA DA BLOCCO-5: 125_signature_provider_readiness (additiva).
+    assert numeri[numeri.index(76):] == list(range(76, 126))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

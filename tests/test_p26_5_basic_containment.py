@@ -121,6 +121,12 @@ PUBLIC_BY_DESIGN = {
     ("GET", "/api/public/visit-booking/manage/{key}/slots"),
     ("POST", "/api/public/visit-booking/manage/{key}/cancel"),
     ("POST", "/api/public/visit-booking/manage/{key}/reschedule"),
+    # SENTINELLA AGGIORNATA DA BLOCCO-5: gli eventi (webhook) di un fornitore di
+    # firma. Nessuna sessione: li chiama il fornitore; autenticati dall'adattatore
+    # con la firma del corpo grezzo (HMAC, confronto a tempo costante), una sola
+    # applicazione per id evento, stato sempre riletto dal fornitore. Nessun
+    # fornitore reale e' configurato: oggi risponde sempre 404.
+    ("POST", "/api/public/esign/webhooks/{provider}"),
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (F04/F07, `public_submissions`,
     # `stima_pdf`). Le ricevute degli invii pubblici: autenticate dall'identita'
     # dell'invio (UUID) piu' la prova `X-Receipt-Key`, di cui nel database vive

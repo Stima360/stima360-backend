@@ -109,8 +109,12 @@ def test_s_simulated_completion_is_never_a_signature(app):
         assert "SIMULAZIONE — NESSUNA FIRMA VALIDA" in text and "Non contiene alcuna firma elettronica" in text
     # il database rifiuta una simulazione «firmata», anche scritta a mano
     rid2 = _create(owner, sheet).json()["request"]["id"]
+    # SENTINELLA AGGIORNATA DA BLOCCO-5 (125): anche con documento, data e livello
+    # (le prove che la 125 pretende per «signed») resta il vincolo della simulazione
     with pytest.raises(Exception, match="simulated_never_signed"):
-        _q(app, "UPDATE signature_requests SET status = 'signed', closed_at = NOW() WHERE id = %s", (rid2,))
+        _q(app, "UPDATE signature_requests SET status = 'signed', closed_at = NOW(), received_document = 'x', "
+                "received_document_sha256 = repeat('a', 64), received_at = NOW(), signed_at = NOW(), "
+                "signature_level = 'qes' WHERE id = %s", (rid2,))
     declined = owner.post(f"{API}/{rid2}/simulate", json={"outcome": "declined"}).json()
     assert declined["status"] == "declined" and declined["has_document"] is False
     assert owner.post(f"{API}/{rid2}/simulate", json={"outcome": "signed"}).status_code == 422
