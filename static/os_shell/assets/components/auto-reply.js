@@ -65,6 +65,11 @@ export function renderDecision(d) {
   if (d.handoff && d.handoff.task === 'planned') {
     box.appendChild(el('p', 'muted', 'Intervento dell’agente: attività solo pianificata, non creata (simulazione).'));
   }
+  if (d.data_used && d.data_used.booking_link_id) {
+    box.appendChild(el('p', 'muted', `Collegamento di prenotazione proposto: n. ${d.data_used.booking_link_id}`
+      + (d.data_used.owner_approval_required ? ' (serve l’assenso del proprietario)' : '')
+      + '. Nel testo resta un segnaposto: l’indirizzo non viene conservato.'));
+  }
   const fields = (d.data_used && d.data_used.fields) || [];
   if (fields.length) {
     box.appendChild(el('p', 'muted', `Dati usati: ${fields.map((f) => f.value).join(' · ')}`));

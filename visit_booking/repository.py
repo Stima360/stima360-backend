@@ -102,3 +102,12 @@ def increment_and_check(cur, *, link_id, scope, window_start, limit, client_ip_h
                 "DO UPDATE SET request_count = property_visit_booking_rate_limits.request_count + 1 "
                 "RETURNING request_count", (link_id, scope, client_ip_hash, window_start))
     return cur.fetchone()["request_count"] <= limit
+
+
+def active_link_for_property(cur, agency_id: int, property_id: int) -> dict | None:
+    """BLOCCO-5B: il collegamento attivo (non scaduto) piu' recente dell'immobile."""
+    cur.execute(f"SELECT {LINK_COLUMNS} FROM property_visit_booking_links WHERE agency_id = %s AND property_id = %s "
+                "AND status = 'active' AND (expires_at IS NULL OR expires_at > NOW()) "
+                "ORDER BY created_at DESC, id DESC LIMIT 1", (agency_id, property_id))
+    row = cur.fetchone()
+    return dict(row) if row else None

@@ -116,7 +116,7 @@ def test_c_certain_answer_from_the_message_property_without_internal_code(ar):
     out = _tick(ar)
     assert out["status"] == "simulated" and out["sent"] == 0 and out["queued"] == 0
     decision, reason, text, version, mode, data, handoff = _decision(ar, mid)
-    assert (decision, reason, version, mode, handoff) == ("answer", None, "4d-1", "simulate", None)
+    assert (decision, reason, version, mode, handoff) == ("answer", None, "5b-1", "simulate", None)
     assert text == ("Buongiorno, grazie per il messaggio. Per l'immobile di cui ci scrive: il prezzo richiesto è "
                     "€ 185.000; c'è l'ascensore.")
     assert code not in text and "Trilocale" not in text

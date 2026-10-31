@@ -13,7 +13,7 @@ MODES = (MODE_OFF, MODE_SIMULATE)
 
 #: Versione delle regole: una decisione per (messaggio, versione). Cambiare
 #: regole o testi (anche quelli del 4C) vuol dire cambiare questa stringa.
-RULES_VERSION = "4d-1"
+RULES_VERSION = "5b-1"          # BLOCCO-5B: visita con collegamento di prenotazione
 
 #: Quanti messaggi al massimo per giro e per agenzia.
 TICK_LIMIT = 50
@@ -33,10 +33,24 @@ SKIP_REASONS = {
     "attachment": "Allegato o messaggio non di testo: non viene interpretato, serve un operatore.",
 }
 DECISION_LABELS = {
-    "answer": "Risposta con dati certi",
+    "answer": "Risposta proposta",
     "ask_reference": "Domanda di chiarimento sull'immobile",
     "handoff": "Intervento dell'agente",
     "none": "Nessuna risposta",
     SKIPPED: "Nessuna risposta automatica",
 }
 SIMULATION_LABEL = "Simulazione — non inviato"
+
+#: BLOCCO-5B. Il collegamento di prenotazione NON si scrive nel registro: il
+#: token esiste solo come impronta. Il testo simulato porta questo segnaposto
+#: e la decisione conserva l'id del collegamento; un invio reale dovra'
+#: sostituirlo con l'indirizzo vero (decisione aperta: vedi la roadmap).
+BOOKING_LINK_PLACEHOLDER = "[collegamento di prenotazione della visita]"
+VISIT_BOOKING_TEXT = ("Buongiorno, grazie per l'interesse. Può scegliere giorno e orario disponibili per la visita "
+                      "da qui: {link}. L'appuntamento è fissato solo quando la pagina conferma la prenotazione.")
+VISIT_BOOKING_OWNER_TEXT = (" Per questo immobile ogni visita richiede l'assenso del proprietario: la conferma "
+                            "arriverà dall'agenzia dopo il suo consenso.")
+ANSWER_REASONS = {
+    "visit_booking_link": "Richiesta di visita: proposto il collegamento di prenotazione; nessun appuntamento "
+                          "è confermato finché la prenotazione non risulta conclusa nel sistema.",
+}

@@ -30,6 +30,9 @@ L'ORDINE DEI CONTROLLI (il primo che vale decide)
     6. mittente senza contatto                         -> skipped (umano)
     7. regole del 4C sull'immobile di QUEL messaggio   -> answer /
        ask_reference / handoff
+    8. BLOCCO-5B: richiesta di visita, immobile identificato e prenotazione
+       abilitata (link attivo, agente attivo, incarico in corso) -> answer con
+       il collegamento (segnaposto) e nessuna conferma d'appuntamento
 
 Ogni decisione si registra UNA volta per (messaggio, versione delle regole):
 `ON CONFLICT DO NOTHING` sull'unicita' della 119. Un passaggio all'agente
@@ -51,9 +54,12 @@ from message_replies.enums import WINDOW_HOURS, WINDOW_SAFETY_MINUTES
 from operator_auth.context import SystemAgencyContext
 from operator_auth.permissions import sees_all_agency_records
 from reply_suggestions import service as suggestions
+from visit_booking import service as visit_booking
 
 from . import repository
 from .enums import (
+    ANSWER_REASONS,
+    BOOKING_LINK_PLACEHOLDER,
     DECISION_LABELS,
     GLOBAL_ENV,
     GLOBAL_SIMULATE,
@@ -66,6 +72,8 @@ from .enums import (
     SKIP_REASONS,
     SKIPPED,
     TICK_LIMIT,
+    VISIT_BOOKING_OWNER_TEXT,
+    VISIT_BOOKING_TEXT,
 )
 
 NOT_INSTALLED_MESSAGE = "Le risposte automatiche non sono ancora installate su questo ambiente (migrazione 119)."
@@ -177,6 +185,19 @@ def decide(cur, agency_id: int, message: dict, *, now=None) -> dict:
                              "topics": s["topics"], "missing": s["missing"],
                              "fields": [{"field": x["field"], "value": x["value"]} for x in s["sources"]],
                              "followup_assigned": s["followup_assigned"]}
+    # BLOCCO-5B: una richiesta di visita sull'immobile IDENTIFICATO di questo
+    # messaggio, con la prenotazione davvero abilitata, riceve il collegamento
+    # (come segnaposto: il token non si conserva) e nessuna conferma.
+    if (s["handoff"] or {}).get("code") == "visit":
+        link = visit_booking.booking_link_for_visit(cur, agency_id, (s["property"] or {}).get("id"))
+        if link is not None:
+            text = VISIT_BOOKING_TEXT.format(link=BOOKING_LINK_PLACEHOLDER)
+            if link["owner_authorization"] == "per_visit":
+                text += VISIT_BOOKING_OWNER_TEXT
+            decision.update({"decision": "answer", "reason_code": "visit_booking_link", "proposed_text": text})
+            decision["data_used"]["booking_link_id"] = link["id"]
+            decision["data_used"]["owner_approval_required"] = link["owner_authorization"] == "per_visit"
+            return decision
     if s["outcome"] == "handoff":
         decision["handoff"] = {
             "task": "planned", "created": False, "simulation": True,
@@ -263,7 +284,8 @@ def _visible_conversation(cur, ctx, sender_phone: str) -> list[dict]:
 
 
 def _decision_view(d: dict) -> dict:
-    reason = SKIP_REASONS.get(d["reason_code"]) if d["decision"] == SKIPPED else None
+    reason = (SKIP_REASONS.get(d["reason_code"]) if d["decision"] == SKIPPED
+              else ANSWER_REASONS.get(d["reason_code"]))
     handoff = d.get("handoff") or None
     return {"message_id": d["inbound_message_id"], "decision": d["decision"],
             "decision_label": DECISION_LABELS[d["decision"]], "reason_code": d["reason_code"],

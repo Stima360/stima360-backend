@@ -404,3 +404,18 @@ def manage_reschedule(raw_key: str, *, start_at: datetime, new_key: str) -> dict
     with core_cursor() as (_, cur):
         nuovo = repository.booking_by_submission(cur, link["id"], submit)
         return _booking_view(cur, nuovo, raw_key=new_key)
+
+
+def booking_link_for_visit(cur, agency_id: int, property_id: int | None) -> dict | None:
+    """BLOCCO-5B: il collegamento da proporre a chi chiede una visita, SOLO se
+    l'immobile e' identificato e la prenotazione e' davvero possibile adesso:
+    migrazione presente, link attivo e non scaduto, agente ancora attivo,
+    incarico reale in corso. Altrimenti None (la richiesta va all'agente)."""
+    if property_id is None or not repository.installed(cur):
+        return None
+    link = repository.active_link_for_property(cur, agency_id, property_id)
+    if link is None or not appointment_repository.active_membership(cur, agency_id, link["assigned_user_id"]):
+        return None
+    if not writes.mandate_open(cur, agency_id, property_id):
+        return None
+    return link

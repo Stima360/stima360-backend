@@ -61,11 +61,19 @@ Mancano, e vanno decisi e costruiti prima di qualsiasi invio:
 3. Il passaggio all'agente deve creare l'attività reale (tabella `tasks`) con
    un assegnatario certo; solo allora i testi possono promettere un ricontatto
    (`followup_assigned`).
-4. Un riferimento pubblico verificato dell'annuncio, se si vuole citarlo nei
+4. BLOCCO-5B: per le richieste di visita il motore propone il collegamento di
+   prenotazione solo se l'immobile del messaggio è identificato e la
+   prenotazione è abilitata (link attivo, agente attivo, incarico in corso).
+   Il testo simulato contiene il segnaposto
+   `[collegamento di prenotazione della visita]` perché il token del link è
+   conservato solo come impronta. Per l'invio reale serve decidere come avere
+   l'indirizzo: conservarlo cifrato (come i token di `calendar_sync`) oppure
+   generare un collegamento dedicato per conversazione.
+5. Un riferimento pubblico verificato dell'annuncio, se si vuole citarlo nei
    testi (oggi nessun codice interno compare).
-5. Una verifica della disponibilità reale dell'immobile: `commercial_status`
+6. Una verifica della disponibilità reale dell'immobile: `commercial_status`
    non basta e la disponibilità non viene mai affermata.
-6. Revisione legale dei testi automatici e dell'informativa al cliente.
+7. Revisione legale dei testi automatici e dell'informativa al cliente.
 
 ## Arresto e pausa
 
