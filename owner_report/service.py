@@ -139,16 +139,23 @@ def build_report(ctx, property_id: int, date_from: date | None = None, date_to: 
     agency_id = ctx.require_agency()
     with core_cursor() as (_, cur):
         prop = _property(cur, ctx, property_id)
-        start_day, end_day = resolve_period(prop, date_from, date_to)
-        start, end = _rome_midnight(start_day), _rome_midnight(end_day + timedelta(days=1))
-        interested = repository.interested_contacts(cur, agency_id, property_id, start, end)
-        visits = repository.completed_visits(cur, agency_id, property_id, start, end)
-        now = datetime.now(timezone.utc)
-        upcoming_end = now + timedelta(days=UPCOMING_DAYS)
-        upcoming = repository.upcoming_visits(cur, agency_id, property_id, now, upcoming_end)
-        proposals = repository.proposals_by_status(cur, agency_id, property_id)
-        prices = repository.price_history(cur, property_id, start, end)
-        statuses = repository.status_history(cur, property_id, start, end)
+        return _compose(cur, agency_id, prop, date_from, date_to)
+
+
+def _compose(cur, agency_id: int, prop: dict, date_from: date | None, date_to: date | None) -> dict:
+    """Il report di un immobile GIA' autorizzato dal chiamante (operatore o
+    proprietario): stessi dati, stesse esclusioni."""
+    property_id = prop["id"]
+    start_day, end_day = resolve_period(prop, date_from, date_to)
+    start, end = _rome_midnight(start_day), _rome_midnight(end_day + timedelta(days=1))
+    interested = repository.interested_contacts(cur, agency_id, property_id, start, end)
+    visits = repository.completed_visits(cur, agency_id, property_id, start, end)
+    now = datetime.now(timezone.utc)
+    upcoming_end = now + timedelta(days=UPCOMING_DAYS)
+    upcoming = repository.upcoming_visits(cur, agency_id, property_id, now, upcoming_end)
+    proposals = repository.proposals_by_status(cur, agency_id, property_id)
+    prices = repository.price_history(cur, property_id, start, end)
+    statuses = repository.status_history(cur, property_id, start, end)
 
     months = _months(start_day, end_day)
     for at in interested:
@@ -222,3 +229,63 @@ def render_pdf(ctx, property_id: int, date_from: date | None, date_to: date | No
     period = report["period"]
     return {"data": data, "sha256": hashlib.sha256(data).hexdigest(),
             "filename": f"report-proprietario-immobile-{property_id}-{period['from']}-{period['to']}.pdf"}
+
+
+# ---------------------------------------------------------------------------
+# BLOCCO-7: lo stesso report nell'area proprietario
+# ---------------------------------------------------------------------------
+
+def _owner_property(cur, owner_account_id: int, property_id: int) -> dict:
+    """L'immobile, solo se il proprietario ha ADESSO un'autorizzazione attiva
+    (`owner_property_access`, riletta a ogni richiesta: la revoca vale subito)."""
+    from owner import repository as owner_repository
+
+    from core.exceptions import NotFoundError
+
+    try:
+        access = owner_repository.require_property(owner_account_id, property_id)
+    except NotFoundError:
+        access = None
+    if not access:
+        raise NotFound("PROPERTY_NOT_FOUND", PROPERTY_NOT_FOUND_MESSAGE)
+    cur.execute("SELECT agency_id FROM properties WHERE id = %s", (property_id,))
+    row = cur.fetchone()
+    prop = repository.get_property(cur, row["agency_id"], property_id) if row else None
+    if prop is None or prop.pop("trash_marker") is not None:
+        raise NotFound("PROPERTY_NOT_FOUND", PROPERTY_NOT_FOUND_MESSAGE)
+    return prop
+
+
+def build_owner_report(owner_account_id: int, property_id: int, date_from: date | None = None,
+                       date_to: date | None = None) -> dict:
+    """Il report per il proprietario autorizzato: identico a quello del
+    consulente (stesse esclusioni: note interne, prezzo minimo, recapiti degli
+    interessati, importi delle proposte), senza «indicazioni dell'agente»."""
+    with core_cursor() as (_, cur):
+        prop = _owner_property(cur, owner_account_id, property_id)
+        report = _compose(cur, prop["agency_id"], prop, date_from, date_to)
+    report["audience"] = "owner"
+    return report
+
+
+def render_owner_pdf_for_owner(owner_account_id: int, property_id: int, date_from: date | None,
+                               date_to: date | None) -> dict:
+    from operator_auth.context import SystemAgencyContext
+    from property_valuations.pdf_render import PdfLogoError
+
+    from .pdf_render import render_owner_report_pdf
+
+    report = build_owner_report(owner_account_id, property_id, date_from, date_to)
+    with core_cursor() as (_, cur):
+        cur.execute("SELECT agency_id FROM properties WHERE id = %s", (property_id,))
+        agency_id = cur.fetchone()["agency_id"]
+    # L'intestazione dell'agenzia dell'immobile, letta come sistema per conto del
+    # proprietario autenticato (origine `owner_login`, il principale proprietario).
+    identity = _identity(SystemAgencyContext(agency_id=agency_id, origin="owner_login"))
+    try:
+        data = render_owner_report_pdf(report, identity, agent_notes=None, generated_at=datetime.now(timezone.utc))
+    except PdfLogoError as exc:
+        raise ReportPdfError("LOGO_UNREADABLE", LOGO_UNREADABLE_MESSAGE) from exc
+    period = report["period"]
+    return {"data": data, "sha256": hashlib.sha256(data).hexdigest(),
+            "filename": f"report-immobile-{property_id}-{period['from']}-{period['to']}.pdf"}

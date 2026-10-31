@@ -2002,3 +2002,12 @@ button:disabled {
 .home-notification-open {
   flex: 0 0 auto;
 }
+/* BLOCCO-7: report attività. */
+.owner-report-section { display: grid; gap: 12px; min-width: 0; }
+.owner-report-form { display: flex; flex-wrap: wrap; gap: 8px; align-items: end; }
+.owner-report-form label { display: grid; gap: 4px; font-size: 0.9rem; }
+.owner-report-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 8px; }
+.owner-report-row { display: grid; gap: 2px; padding: 8px 10px; border: 1px solid rgba(0, 0, 0, 0.1); border-radius: 8px; }
+.owner-report-label { font-size: 0.85rem; opacity: 0.75; }
+.owner-report-prices { margin: 0; padding-left: 18px; }
+.owner-report-section[hidden] { display: none; }

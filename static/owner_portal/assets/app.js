@@ -1238,6 +1238,11 @@
       addSummaryRow('Immobile principale', primaryValue ? 'Sì' : 'No');
     }
     showPropertyState('content');
+    // BLOCCO-7: il report attività dell'immobile selezionato (owner-report.js).
+    // Facoltativo: senza `CustomEvent` (ambienti ridotti) il portale resta invariato.
+    if (typeof CustomEvent === 'function' && typeof document.dispatchEvent === 'function') {
+      document.dispatchEvent(new CustomEvent('owner-report:property', { detail: { propertyId: state.selectedPropertyId } }));
+    }
   }
 
   function createTimelineCard(item) {

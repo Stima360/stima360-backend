@@ -1,3 +1,4 @@
+from datetime import date
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from fastapi.responses import StreamingResponse
 
@@ -243,6 +244,38 @@ def prop(p: int, s=Depends(current_owner)):
         "documents": nf(r.portal_shared_documents, account, p),
         "visit_feedback": nf(r.portal_visit_feedback, account, p),
     }
+
+
+def _owner_report_call(fn, *args):
+    """BLOCCO-7: errori del report per il proprietario. Un immobile non
+    autorizzato (o non piu' autorizzato) e' 404, come ogni altra risorsa."""
+    from owner_report import service as owner_report_service
+
+    try:
+        return fn(*args)
+    except owner_report_service.ReportError as exc:
+        status = 404 if exc.status in (403, 404) else exc.status
+        raise HTTPException(status, {"code": exc.code, "message": str(exc)}) from exc
+
+
+@router.get("/properties/{p}/report")
+def property_report(p: int, date_from: date | None = Query(None), date_to: date | None = Query(None),
+                    s=Depends(current_owner)):
+    """BLOCCO-7: il report attivita' dell'immobile per il proprietario autorizzato."""
+    from owner_report import service as owner_report_service
+
+    return _owner_report_call(owner_report_service.build_owner_report, s["owner_account_id"], p, date_from, date_to)
+
+
+@router.get("/properties/{p}/report.pdf")
+def property_report_pdf(p: int, date_from: date | None = Query(None), date_to: date | None = Query(None),
+                        s=Depends(current_owner)):
+    from owner_report import service as owner_report_service
+
+    out = _owner_report_call(owner_report_service.render_owner_pdf_for_owner, s["owner_account_id"], p,
+                             date_from, date_to)
+    return Response(content=out["data"], media_type="application/pdf", headers={
+        "Content-Disposition": f'attachment; filename="{out["filename"]}"', "Cache-Control": "no-store"})
 
 
 @router.get("/properties/{p}/timeline")

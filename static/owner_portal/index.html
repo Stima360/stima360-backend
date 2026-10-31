@@ -565,6 +565,22 @@
                 </div>
               </section>
 
+              <section id="owner-report-section" class="owner-report-section" aria-labelledby="owner-report-title" hidden>
+                <div class="subsection-heading">
+                  <p class="eyebrow">Report attività</p>
+                  <h3 id="owner-report-title">Andamento dell'immobile</h3>
+                  <p>Contatti interessati, visite, proposte e storico del prezzo richiesto nel periodo scelto. Dove manca una fonte attendibile il dato è indicato come non disponibile.</p>
+                </div>
+                <form id="owner-report-form" class="owner-report-form">
+                  <label>Dal <input id="owner-report-from" type="date" name="date_from"></label>
+                  <label>Al <input id="owner-report-to" type="date" name="date_to"></label>
+                  <button class="secondary-button" type="submit">Mostra report</button>
+                  <button id="owner-report-pdf" class="secondary-button" type="button">Scarica PDF</button>
+                </form>
+                <div id="owner-report-status" role="status" aria-live="polite"></div>
+                <div id="owner-report-content"></div>
+              </section>
+
               <section id="requests-section" class="requests-section" aria-labelledby="requests-title">
                 <div class="subsection-heading requests-heading">
                   <p class="eyebrow">Contatto con il consulente</p>
@@ -745,5 +761,6 @@
 
   <script src="/owner/assets/home-view-model.js"></script>
   <script src="/owner/assets/app.js"></script>
+  <script src="/owner/assets/owner-report.js"></script>
 </body>
 </html>
