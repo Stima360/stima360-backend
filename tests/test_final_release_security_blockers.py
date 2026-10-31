@@ -201,6 +201,13 @@ def test_legacy_admin_routes_are_reachable_with_a_live_session(
         assert response.status_code == 409, response.text
         assert response.json()["code"] == "NOT_PURGEABLE"
         assert connection.commit_count == 0
+    elif path == "/api/admin/whatsapp/reply":
+        # SENTINELLA AGGIORNATA DALLA CHIUSURA PRE-RILASCIO 123-125: l'invio legacy e'
+        # disattivato. Anche con una sessione valida: 410, nessuna chiamata a Meta,
+        # nessuna scrittura (prove complete in test_legacy_whatsapp_reply_disabled.py).
+        assert response.status_code == 410, response.text
+        assert response.json()["detail"]["code"] == "LEGACY_SEND_DISABLED"
+        assert connection.commit_count == 0
     else:
         assert response.status_code == 200
 
@@ -350,3 +357,46 @@ def test_whatsapp_get_verification_contract_is_preserved(client, monkeypatch):
 
     assert response.status_code == 200
     assert response.json() == 123456
+
+
+@pytest.mark.parametrize("payload", [
+    {"to": "3331234567", "text": "Test"},
+    {"to": "+39 333 1234567", "text": "Messaggio libero", "agency_id": 2},
+    {"to": "3331234567", "text": "x", "contact_id": 1, "confirm": True},
+])
+@pytest.mark.parametrize("role", ["agency_owner", "agency_admin", "agent"])
+def test_legacy_whatsapp_reply_can_never_send(client, main_module, admin_env, agency_scope, monkeypatch,
+                                              payload, role):
+    """CHIUSURA PRE-RILASCIO 123-125: dalla rotta legacy non parte nulla, per
+    nessun ruolo e con nessun corpo: nessuna chiamata a Meta (ne' la funzione
+    di invio ne' una richiesta HTTP), nessuna connessione al database."""
+    import requests
+
+    calls = {"whatsapp": 0, "http": 0, "database": 0}
+
+    def count(name):
+        def inner(*_a, **_k):
+            calls[name] += 1
+            raise AssertionError(f"{name} non doveva essere chiamato")
+        return inner
+
+    monkeypatch.setattr(main_module, "invia_whatsapp_text", count("whatsapp"))
+    monkeypatch.setattr(requests, "post", count("http"))
+    monkeypatch.setattr(main_module, "get_connection", count("database"))
+
+    from tests.operator_session_helpers import operator_session
+
+    with operator_session(monkeypatch, client, agency_id=1, role=role):
+        response = client.post("/api/admin/whatsapp/reply", json=payload)
+    assert response.status_code == 410, response.text
+    assert response.json()["detail"]["code"] == "LEGACY_SEND_DISABLED"
+    assert calls == {"whatsapp": 0, "http": 0, "database": 0}
+
+
+def test_legacy_whatsapp_reply_has_no_send_code_left():
+    import inspect
+
+    import main
+    body = inspect.getsource(main.admin_whatsapp_reply)
+    for forbidden in ("invia_whatsapp", "requests", "get_connection", "INSERT", "graph.facebook"):
+        assert forbidden not in body, forbidden
