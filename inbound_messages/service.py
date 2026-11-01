@@ -210,6 +210,8 @@ def conversation(ctx, sender_phone: str) -> dict:
     with core_cursor() as (_, cur):
         _require_installed(cur)
         rows = repository.conversation_messages(cur, agency_id, sender_phone, agent_user_id=agent, limit=LIST_LIMIT)
+        # Tutti i contatti con questo numero: anche quando uno e' gia' collegato,
+        # cosi' l'operatore puo' cambiare la scelta automatica.
         candidates = repository.candidate_contacts(cur, agency_id, sender_phone) if agent is None and rows else []
         contact_ids = sorted({r["contact_id"] for r in rows if r.get("contact_id")})
         stime = repository.related_stime(cur, agency_id, sender_phone, contact_ids) if rows else []
@@ -219,13 +221,16 @@ def conversation(ctx, sender_phone: str) -> dict:
     current = next((r for r in rows if r.get("contact_id")), None)
     return {"sender_phone": sender_phone, "messages": [_message(r) for r in rows], "can_link": agent is None,
             "contact": ({"id": current["contact_id"], "name": _contact_name(current),
-                         "match": current["contact_match"]} if current else None),
+                         "match": current["contact_match"],
+                         "others_with_number": max(0, len([c for c in candidates
+                                                           if c["id"] != current["contact_id"]]))} if current else None),
             "sender_profile_name": next((r["sender_profile_name"] for r in rows if r.get("sender_profile_name")), None),
             "stime": [_stima(x) for x in stime],
             "contact_candidates": [{"id": c["id"], "name": _contact_name({"contact_name": c["display_name"],
                                                                            "contact_first_name": c["first_name"],
                                                                            "contact_last_name": c["last_name"]}),
-                                    "on_phone": bool(c.get("on_phone"))}
+                                    "on_phone": bool(c.get("on_phone")), "status": c.get("status"),
+                                    "created_at": _iso(c.get("created_at"))}
                                    for c in candidates]}
 
 

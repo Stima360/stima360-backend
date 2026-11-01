@@ -132,15 +132,6 @@ function replyCard(r) {
 function contactPanel(data, sender, onDone) {
   const panel = el('div', 'messages-contact');
   panel.setAttribute('data-messages-contact', data.contact ? String(data.contact.id) : 'none');
-  if (data.contact) {
-    const how = data.contact.match === 'manual' ? 'associato manualmente' : 'riconosciuto dalla rubrica';
-    panel.append(el('strong', null, data.contact.name || `Contatto n. ${data.contact.id}`),
-      el('span', 'muted', ` · ${phoneText(sender)} · ${how}`), openButton('Apri scheda contatto', 'contatti', data.contact.id));
-    return panel;
-  }
-  panel.append(el('strong', null, data.sender_profile_name ? `${data.sender_profile_name} (nome del profilo WhatsApp)` : phoneText(sender)),
-    el('span', 'muted', ' · nessun contatto collegato'));
-  if (!data.can_link) return panel;
   const status = el('p', 'muted');
   status.setAttribute('role', 'status');
   const linkTo = async (contactId) => {
@@ -152,17 +143,31 @@ function contactPanel(data, sender, onDone) {
       status.className = 'error-box';
     }
   };
-  if (data.contact_candidates && data.contact_candidates.length) {
-    panel.appendChild(el('p', 'muted', 'Più contatti hanno questo numero: scegli quello giusto.'));
+  const others = (data.contact_candidates || []).filter((c) => !data.contact || c.id !== data.contact.id);
+  if (data.contact) {
+    const how = data.contact.match === 'manual' ? 'associato manualmente'
+      : (others.length ? `riconosciuto dalla rubrica: il contatto attivo creato per primo fra ${others.length + 1} con questo numero` : 'riconosciuto dalla rubrica');
+    panel.append(el('strong', null, data.contact.name || `Contatto n. ${data.contact.id}`),
+      el('span', 'muted', ` · ${phoneText(sender)} · ${how}`), openButton('Apri scheda contatto', 'contatti', data.contact.id));
+    if (!data.can_link || !others.length) return panel;
+  } else {
+    panel.append(el('strong', null, data.sender_profile_name ? `${data.sender_profile_name} (nome del profilo WhatsApp)` : phoneText(sender)),
+      el('span', 'muted', ' · nessun contatto collegato'));
+    if (!data.can_link) return panel;
+  }
+  if (others.length) {
+    panel.appendChild(el('p', 'muted', data.contact ? 'Altri contatti hanno questo numero: puoi cambiare l’associazione (la scelta manuale prevale).'
+      : 'Più contatti hanno questo numero: scegli quello giusto.'));
     const select = el('select');
     select.setAttribute('data-messages-contact-candidates', '');
     select.appendChild(el('option', null, '— scegli il contatto —')).value = '';
-    for (const c of data.contact_candidates) {
-      const o = el('option', null, `${c.name || `Contatto n. ${c.id}`}${c.on_phone ? '' : ' (secondo telefono)'}`);
+    for (const c of others) {
+      const note = [c.on_phone ? '' : 'secondo telefono', c.status && c.status !== 'active' ? `stato: ${c.status}` : ''].filter(Boolean).join(', ');
+      const o = el('option', null, `${c.name || `Contatto n. ${c.id}`}${note ? ` (${note})` : ''}`);
       o.value = String(c.id);
       select.appendChild(o);
     }
-    const link = button('Collega conversazione', 'primary', 'data-messages-contact-link');
+    const link = button(data.contact ? 'Cambia contatto' : 'Collega conversazione', 'primary', 'data-messages-contact-link');
     link.addEventListener('click', () => { if (select.value) linkTo(Number(select.value)); });
     panel.append(select, link);
   } else {

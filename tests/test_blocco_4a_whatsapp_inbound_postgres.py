@@ -299,17 +299,21 @@ def test_a_same_sender_to_two_agencies_stays_separated(wa):
     assert a["messages"][0]["contact"]["id"] == contact_a and b["messages"][0]["contact"] is None
 
 
-def test_a_duplicate_contacts_require_manual_association(wa):
+def test_a_duplicate_contacts_link_the_oldest_active_and_keep_the_others_as_candidates(wa):
+    """REGOLA AGGIORNATA: fra piu' contatti con lo stesso numero si collega da
+    solo il contatto attivo creato per primo (a parita' l'id piu' basso); gli
+    altri restano candidati e l'operatore puo' cambiare (la scelta manuale prevale)."""
     ids = wa["ids"]
     sender = _sender()
     c1, c2 = _contact(wa, ids["a"], "Doppio Uno", sender), _contact(wa, ids["a"], "Doppio Due", sender)
     assert wa["post"](_payload(_change(NUMBER_A, [_message(sender)]))).status_code == 200
     row = _rows(wa, "sender_phone = %s", (sender,))[0]
-    assert row[6] is None and row[7] == "ambiguous"
+    assert row[6] == c1 and row[7] == "matched"
     conv = wa["login"]("owner_a").get(f"{API}/conversations/{sender}").json()
     assert {c["id"] for c in conv["contact_candidates"]} == {c1, c2}
+    assert conv["contact"] == {"id": c1, "name": "Doppio Uno", "match": "matched", "others_with_number": 1}
     unlinked = wa["login"]("owner_a").get(f"{API}/conversations", params={"only_unlinked": "true"}).json()
-    assert any(c["sender_phone"] == sender for c in unlinked["items"])
+    assert any(c["sender_phone"] == sender for c in unlinked["items"])        # senza immobile: ancora da associare
 
 
 # ---------------------------------------------------------------------------

@@ -8,8 +8,11 @@ Regole:
   (tramite `phone_normalized`, ricalcolato dal valore grezzo se manca) e
   `secondary_phone` (normalizzato in lettura, non ha una colonna normalizzata);
 - solo i contatti vivi della STESSA agenzia;
-- il collegamento automatico avviene solo con UN contatto; con piu' contatti
-  si resta in `ambiguous` e sceglie l'operatore; senza contatti si resta in
+- con UN contatto si collega quello; con PIU' contatti si collega da solo il
+  contatto ATTIVO (`status = 'active'`, non eliminato) creato per primo
+  (`created_at` piu' vecchio, a parita' l'id piu' basso): gli altri restano
+  candidati e l'operatore puo' cambiare la scelta; se nessuno e' attivo si
+  resta in `ambiguous` e sceglie l'operatore; senza contatti si resta in
   `none` (l'operatore puo' crearlo);
 - un'associazione manuale precedente della stessa conversazione vince sempre
   su quella automatica e si eredita sui messaggi successivi;
@@ -45,12 +48,20 @@ def candidates(cur, agency_id: int, phone: str, *, limit: int = 20) -> list[dict
     if not canon:
         return []
     cur.execute(
-        "SELECT c.id, c.display_name, c.first_name, c.last_name, "
+        "SELECT c.id, c.display_name, c.first_name, c.last_name, c.status, c.created_at, "
         "(coalesce(c.phone_normalized, " + _NORMALIZED.format(col="c.phone") + ") = %(phone)s) AS on_phone "
         f"FROM contacts c WHERE c.agency_id = %(agency)s AND {_LIVE_CONTACT} AND {MATCH_SQL} "
-        "ORDER BY c.id LIMIT %(limit)s",
+        "ORDER BY c.created_at, c.id LIMIT %(limit)s",
         {"phone": canon, "agency": agency_id, "limit": limit})
     return [dict(r) for r in cur.fetchall()]
+
+
+def automatic_choice(found: list[dict]) -> dict | None:
+    """Il contatto da collegare da solo fra i candidati (gia' ordinati per
+    `created_at`, id): l'unico, oppure il primo ATTIVO. None se non c'e'."""
+    if len(found) == 1:
+        return found[0]
+    return next((c for c in found if c.get("status") == "active"), None)
 
 
 def previous_manual_link(cur, agency_id: int, sender_phone: str) -> dict | None:
@@ -72,9 +83,10 @@ def resolve(cur, agency_id: int, sender_phone: str) -> dict:
     if manual is not None:
         return {"contact_id": manual["contact_id"], "match": MATCH_MANUAL,
                 "linked_by_user_id": manual["linked_by_user_id"], "linked_at": manual["linked_at"]}
-    found = candidates(cur, agency_id, sender_phone, limit=3)
-    if len(found) == 1:
-        return {"contact_id": found[0]["id"], "match": MATCH_MATCHED, "linked_by_user_id": None, "linked_at": None}
+    found = candidates(cur, agency_id, sender_phone)
+    chosen = automatic_choice(found)
+    if chosen is not None:
+        return {"contact_id": chosen["id"], "match": MATCH_MATCHED, "linked_by_user_id": None, "linked_at": None}
     return {"contact_id": None, "match": MATCH_AMBIGUOUS if found else MATCH_NONE,
             "linked_by_user_id": None, "linked_at": None}
 
@@ -82,8 +94,9 @@ def resolve(cur, agency_id: int, sender_phone: str) -> dict:
 def reconcile(cur, agency_id: int) -> dict:
     """Riconciliazione delle conversazioni gia' ricevute: i messaggi instradati
     dell'agenzia SENZA contatto e non decisi a mano (`none`/`ambiguous`)
-    prendono il contatto se la rubrica ne ha uno solo con quel numero, o
-    ereditano l'associazione manuale della conversazione. `manual` (anche lo
+    prendono il contatto scelto dalla stessa regola della ricezione (unico,
+    o il piu' vecchio attivo), o ereditano l'associazione manuale della
+    conversazione. `manual` (anche lo
     scollegamento manuale) non si tocca. Immobili e stime non cambiano."""
     cur.execute("SELECT DISTINCT sender_phone FROM whatsapp_inbound_messages WHERE agency_id = %s "
                 "AND routing_status = 'routed' AND contact_id IS NULL AND contact_match IN (%s, %s) ORDER BY 1",

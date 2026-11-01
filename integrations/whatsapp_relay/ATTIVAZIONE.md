@@ -384,8 +384,10 @@ Il revert è provato: `git revert --no-edit ef3777d` su una copia di `main` ripo
   ricevuto il numero intero (formato internazionale: `+39`, `0039`, `39`, spazi,
   trattini e numeri nazionali sono la stessa cosa) è cercato in `phone` e
   `secondary_phone` dei contatti vivi della stessa agenzia. Un solo contatto → collegato
-  da solo; più contatti → candidati e scelta dell'operatore per tutta la conversazione;
-  nessuno → «Nuovo contatto con questo numero», telefono già compilato. Un'associazione
+  da solo; più contatti → collegato da solo il contatto **attivo creato per primo**
+  (`created_at` più vecchio, a parità l'id più basso), gli altri restano candidati e
+  l'operatore può cambiare («Cambia contatto»); nessuno → «Nuovo contatto con questo
+  numero», telefono già compilato. Un'associazione
   manuale precedente vince e si eredita. Mai immobili o stime dal numero.
 - **Riconciliazione** delle conversazioni già ricevute: pulsante «Riconosci contatti in
   rubrica» (titolare/amministratore) o `POST /api/inbound-messages/reconcile`, oppure il

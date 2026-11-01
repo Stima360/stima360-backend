@@ -3,7 +3,8 @@
 
     F  formati italiani: +39, 0039, 39, spazi, trattini, numero nazionale, secondo telefono
     U  un solo contatto: collegamento automatico di messaggi e conversazione, nome in casella
-    A  piu' contatti: nessuna scelta arbitraria, candidati e scelta manuale di tutta la conversazione
+    A  piu' contatti: si collega il piu' vecchio ATTIVO (a parita' l'id piu' basso), gli altri
+       restano candidati; la scelta manuale di tutta la conversazione prevale; nessun attivo = ambiguo
     G  agenzie: la rubrica dell'altra agenzia non conta
     M  associazione manuale: vince e si eredita; lo scollegamento manuale resta
     R  riconciliazione retroattiva: in blocco, senza toccare manuali e ambigue
@@ -107,7 +108,7 @@ def test_u_a_single_contact_links_the_whole_conversation_and_names_it(wa):
     item = next(c for c in owner.get(f"{API}/conversations").json()["items"] if c["sender_phone"] == sender)
     assert item["last_message"]["contact"] == {"id": contact, "name": "Anna Bianchi"}
     conv = _conv(owner, sender)
-    assert conv["contact"] == {"id": contact, "name": "Anna Bianchi", "match": "matched"}
+    assert conv["contact"] == {"id": contact, "name": "Anna Bianchi", "match": "matched", "others_with_number": 0}
     assert conv["sender_profile_name"] == "Stima360"
     assert all(m["property"] is None for m in conv["messages"])            # mai un immobile dal numero
 
@@ -116,30 +117,61 @@ def test_u_a_single_contact_links_the_whole_conversation_and_names_it(wa):
 # A - piu' contatti
 # ---------------------------------------------------------------------------
 
-def test_a_two_contacts_mean_candidates_and_a_manual_choice_for_the_conversation(wa):
+def test_a_the_oldest_active_contact_wins_then_the_lowest_id_and_the_operator_can_change(wa):
     ids = wa["ids"]
     sender = _sender()
-    c1 = _contact(wa, ids["a"], "Doppio Uno", sender)
-    c2 = _raw_contact(wa, ids["a"], "Doppio Due", phone="+39 02 55555555", phone_normalized="390255555555",
-                      secondary=f"0039{sender[2:]}")
+    # id crescenti ma date invertite: vince la data di creazione, non l'id
+    c_new = _contact(wa, ids["a"], "Creato dopo", sender)
+    c_old = _raw_contact(wa, ids["a"], "Creato prima", phone="+39 02 55555555", phone_normalized="390255555555",
+                         secondary=f"0039{sender[2:]}")
+    _q(wa, "UPDATE contacts SET created_at = NOW() - interval '30 days' WHERE id = %s", (c_old,))
+    _q(wa, "UPDATE contacts SET created_at = NOW() - interval '1 day' WHERE id = %s", (c_new,))
     _send(wa, sender, "Chi sono?")
     _send(wa, sender, "Ancora io")
-    assert {(r[6], r[7]) for r in _rows(wa, "sender_phone = %s", (sender,))} == {(None, "ambiguous")}
+    assert {(r[6], r[7]) for r in _rows(wa, "sender_phone = %s", (sender,))} == {(c_old, "matched")}
     owner = wa["login"]("owner_a")
     conv = _conv(owner, sender)
-    assert conv["contact"] is None
-    assert {(c["id"], c["on_phone"]) for c in conv["contact_candidates"]} == {(c1, True), (c2, False)}
+    assert conv["contact"]["id"] == c_old and conv["contact"]["others_with_number"] == 1
+    assert [c["id"] for c in conv["contact_candidates"]] == [c_old, c_new]          # ordine: data, poi id
+    c1, c2 = c_old, c_new
     r = owner.post(f"{API}/conversations/{sender}/link", json={"contact_id": c2})
     assert r.status_code == 200 and r.json()["changed"] == 2
-    assert r.json()["contact"] == {"id": c2, "name": "Doppio Due", "match": "manual"}
+    assert r.json()["contact"] == {"id": c2, "name": "Creato dopo", "match": "manual", "others_with_number": 1}
     assert {(x[6], x[7]) for x in _rows(wa, "sender_phone = %s", (sender,))} == {(c2, "manual")}
     assert _q(wa, "SELECT count(*) FROM whatsapp_inbound_message_links l JOIN whatsapp_inbound_messages m "
                   "ON m.id = l.message_id WHERE m.sender_phone = %s AND l.contact_id = %s", (sender, c2))[0][0] == 2
-    # il messaggio successivo eredita la scelta manuale, anche se il numero resta ambiguo
+    # il messaggio successivo eredita la scelta manuale, non la regola automatica
     _send(wa, sender, "Terzo")
     assert [x[7] for x in _rows(wa, "sender_phone = %s", (sender,))] == ["manual"] * 3
     assert _q(wa, "SELECT linked_by_user_id FROM whatsapp_inbound_messages WHERE sender_phone = %s ORDER BY id DESC "
                   "LIMIT 1", (sender,))[0][0] == ids["owner_a"]
+
+
+def test_a_same_created_at_means_lowest_id_and_inactive_contacts_never_win(wa):
+    ids = wa["ids"]
+    sender = _sender()
+    a, b = _contact(wa, ids["a"], "Pari A", sender), _contact(wa, ids["a"], "Pari B", sender)
+    _q(wa, "UPDATE contacts SET created_at = TIMESTAMPTZ '2026-01-01 10:00:00+01' WHERE id IN (%s, %s)", (a, b))
+    _send(wa, sender)
+    assert _rows(wa, "sender_phone = %s", (sender,))[0][6] == min(a, b)
+    # un contatto piu' vecchio ma archiviato non vince; uno eliminato non conta affatto
+    sender2 = _sender()
+    archived = _contact(wa, ids["a"], "Archiviato", sender2)
+    deleted = _contact(wa, ids["a"], "Eliminato", sender2)
+    active = _contact(wa, ids["a"], "Attivo recente", sender2)
+    _q(wa, "UPDATE contacts SET status = 'archived', created_at = NOW() - interval '400 days' WHERE id = %s", (archived,))
+    _q(wa, "UPDATE contacts SET deleted_at = NOW(), deleted_reason = 'test_record', created_at = NOW() - interval '500 days' "
+           "WHERE id = %s", (deleted,))
+    _send(wa, sender2)
+    assert _rows(wa, "sender_phone = %s", (sender2,))[0][6] == active
+    conv = _conv(wa["login"]("owner_a"), sender2)
+    assert {c["id"] for c in conv["contact_candidates"]} == {archived, active}      # l'eliminato non compare
+    # solo contatti non attivi: nessuna scelta automatica, resta all'operatore
+    sender3 = _sender()
+    x, y = _contact(wa, ids["a"], "Inattivo X", sender3), _contact(wa, ids["a"], "Inattivo Y", sender3)
+    _q(wa, "UPDATE contacts SET status = 'inactive' WHERE id IN (%s, %s)", (x, y))
+    _send(wa, sender3)
+    assert (_rows(wa, "sender_phone = %s", (sender3,))[0][6], _rows(wa, "sender_phone = %s", (sender3,))[0][7]) == (None, "ambiguous")
 
 
 def test_a_an_agent_cannot_link_a_conversation(wa):
@@ -207,21 +239,21 @@ def test_r_reconciliation_links_only_the_unambiguous_unlinked_conversations(wa):
     assert all(r[6] is None for r in _rows(wa, "sender_phone IN (%s, %s, %s)", (s_single, s_double, s_none)))
     # la rubrica si aggiorna DOPO la ricezione
     c_single = _raw_contact(wa, ids["a"], "Arrivato dopo", phone=f"+39 {s_single[2:]}")
-    _contact(wa, ids["a"], "D1", s_double)
+    d1 = _contact(wa, ids["a"], "D1", s_double)
     _contact(wa, ids["a"], "D2", s_double)
     _contact(wa, ids["b"], "Beta", s_later)
     owner = wa["login"]("owner_a")
     r = owner.post(f"{API}/reconcile")
     assert r.status_code == 200
     out = r.json()
-    assert out["linked_conversations"] >= 1 and out["linked_messages"] >= 2 and out["ambiguous_conversations"] >= 1
+    assert out["linked_conversations"] >= 2 and out["linked_messages"] >= 3
     assert {(x[6], x[7]) for x in _rows(wa, "sender_phone = %s", (s_single,))} == {(c_single, "matched")}
-    assert {(x[6], x[7]) for x in _rows(wa, "sender_phone = %s", (s_double,))} == {(None, "ambiguous")}
+    assert {(x[6], x[7]) for x in _rows(wa, "sender_phone = %s", (s_double,))} == {(d1, "matched")}   # il piu' vecchio
     assert {(x[6], x[7]) for x in _rows(wa, "sender_phone = %s", (s_none,))} == {(None, "none")}
     assert _rows(wa, "sender_phone = %s", (s_later,))[0][6] is None        # l'agenzia B non e' stata toccata
     assert _q(wa, "SELECT count(*) FROM whatsapp_inbound_message_links l JOIN whatsapp_inbound_messages m "
                   "ON m.id = l.message_id WHERE m.sender_phone = %s", (s_single,))[0][0] == 0   # automatico, non manuale
-    assert owner.post(f"{API}/reconcile").json()["linked_conversations"] == 0 or True   # ripetibile
+    assert owner.post(f"{API}/reconcile").json()["linked_conversations"] == 0        # ripetibile, nulla da rifare
 
 
 # ---------------------------------------------------------------------------
