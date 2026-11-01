@@ -5,6 +5,13 @@ Da eseguire come Render One-Off Job sul servizio TEST (legge le variabili del
 servizio). Non apre connessioni, non invia nulla, non stampa alcun valore:
 solo OK / STOP per ogni controllo. Esce con 0 solo se tutto e' superato.
 
+Due ambiti separati:
+- INOLTRO IN INGRESSO e risposte del nuovo CRM: decidono l'esito.
+- SERVIZIO DELLE STIME (`WHATSAPP_SERVICE_URL`, template della stima dal form
+  pubblico): fuori dall'inoltro, solo informativo (INFO), mai un STOP. La
+  variabile non va tolta ne' cambiata per il collaudo: la ricezione non la
+  usa mai (provato da tests/test_whatsapp_relay_postgres.py).
+
     python scripts/check_whatsapp_relay_config.py
     python scripts/check_whatsapp_relay_config.py --expected-phone-number-id <Phone ID confermato in Meta>
 
@@ -70,10 +77,13 @@ def run(env, *, business=BUSINESS_NUMBER, expected_phone_number_id=None, out=pri
          "WHATSAPP_AUTO_REPLY_MODE non e' send (risposte automatiche spente)")
     need((env.get("COMMUNICATION_AUTO_REPLY_TICK") or "").strip() != "1",
          "COMMUNICATION_AUTO_REPLY_TICK non e' 1 (nessun giro delle risposte automatiche)")
-    need(not (env.get("WHATSAPP_SERVICE_URL") or "").strip(),
-         "WHATSAPP_SERVICE_URL assente (il TEST non invia il template della stima)")
 
-    out("ESITO: " + ("CONFIGURAZIONE PRONTA PER IL MESSAGGIO DI PROVA" if not problems
+    # --- servizio delle stime: ambito separato, solo informativo
+    out("INFO servizio delle stime (WHATSAPP_SERVICE_URL): "
+        + ("configurato" if (env.get("WHATSAPP_SERVICE_URL") or "").strip() else "non configurato")
+        + " - fuori dall'inoltro, non valutato e da non modificare")
+
+    out("ESITO INOLTRO: " + ("CONFIGURAZIONE PRONTA PER IL MESSAGGIO DI PROVA" if not problems
                      else f"{len(problems)} CONTROLLI NON SUPERATI"))
     return problems
 

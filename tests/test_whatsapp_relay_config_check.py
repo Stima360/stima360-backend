@@ -48,11 +48,18 @@ def test_a_safe_configuration_passes_and_prints_no_value():
     ({"WHATSAPP_OUTBOUND_MODE": "meta"}, "risposta manuale"),
     ({"WHATSAPP_AUTO_REPLY_MODE": "send"}, "risposte automatiche"),
     ({"COMMUNICATION_AUTO_REPLY_TICK": "1"}, "giro"),
-    ({"WHATSAPP_SERVICE_URL": "https://servizio.example/send"}, "template della stima"),
 ])
 def test_each_unsafe_or_confused_setting_stops(change, fragment):
     problems, _ = _run({**GOOD, **change})
     assert any(fragment in p for p in problems), problems
+
+
+def test_the_estimate_service_is_reported_apart_and_never_decides_the_outcome():
+    for value in ("https://servizio-stime.example/send", ""):
+        problems, text = _run({**GOOD, "WHATSAPP_SERVICE_URL": value})
+        assert problems == [] and "PRONTA" in text
+        assert "INFO servizio delle stime" in text and "servizio-stime" not in text
+    assert "configurato - fuori" in _run({**GOOD, "WHATSAPP_SERVICE_URL": "https://x.example/send"})[1]
 
 
 def test_a_different_phone_id_than_the_confirmed_one_stops():

@@ -151,7 +151,14 @@ Controlla:
 - il segreto;
 - **un solo** mittente, diverso dal numero business;
 - una sola rotta, la cui chiave è il Phone ID e non un numero di telefono;
-- invio manuale, risposte automatiche, loro giro e template della stima spenti.
+- invio manuale, risposte automatiche e loro giro spenti.
+
+Il servizio delle stime (`WHATSAPP_SERVICE_URL`) è un ambito separato: il controllo lo
+riporta solo come `INFO` e non decide l'esito. **Non va tolto né modificato:** serve al
+template della stima. La ricezione e l'inoltro non lo usano mai. Lo prova
+`test_s_a_relayed_message_cannot_trigger_any_whatsapp_send`: con il servizio configurato e
+le credenziali Meta presenti, un messaggio inoltrato non provoca alcun invio, né dal
+webhook, né dal giro automatico, né dalla risposta manuale.
 
 Esce con 0 solo se è tutto superato.
 
