@@ -881,12 +881,40 @@ def tick(ctx, *, now: datetime | None = None, limit: int = LIMITE_PREDEFINITO,
     adesso = now or utcnow()
     conteggi = _conteggi()
     ctx.require_agency()
+    if cur is None:
+        _riconosci_consensi_del_sito(ctx)
     for nome, fase in FASI:
         with cursore(cur) as (_, c):
             _pretendi_schema(c)
             fase(ctx, c, adesso, limit, conteggi)
     logger.info("journey_tick agency_id=%s %s", ctx.require_agency(), conteggi)
     return conteggi
+
+
+def _riconosci_consensi_del_sito(ctx) -> None:
+    """Prima delle iscrizioni: le spunte del sito di QUESTA agenzia che ora
+    hanno prove complete diventano consensi email (riconoscimento C3.4/C3.5).
+
+    Lo facevano solo l'import del sito e l'apertura della scheda: senza import
+    attivo, un contatto con un consenso valido restava fuori dal V3 per
+    sempre. Stesse prove e stesse esclusioni (revoche successive, canali gia'
+    decisi): niente si inventa. Fuori dalle transazioni del motore, un
+    contatto alla volta; un errore si registra e non ferma il giro.
+    """
+    from consent import site_recognition
+    from operator_auth.context import SystemAgencyContext
+    agenzia_del_giro = ctx.require_agency()
+    try:
+        with cursore(None) as (_, c):
+            pendenti = site_recognition.pending_contacts(c, agency_id=agenzia_del_giro)
+    except Exception:  # noqa: BLE001 - il giro delle sequenze va fatto comunque
+        logger.exception("journey_tick_site_consents_unavailable agency_id=%s", agenzia_del_giro)
+        return
+    for agenzia, contatto in pendenti:
+        try:
+            site_recognition.recognize(SystemAgencyContext(agency_id=agenzia, origin="public_stima"), contatto)
+        except Exception:  # noqa: BLE001 - un contatto non ferma il giro
+            logger.exception("journey_tick_site_consent_failed agency_id=%s contact_id=%s", agenzia, contatto)
 
 
 # ---------------------------------------------------------------------------

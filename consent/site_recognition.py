@@ -366,7 +366,7 @@ def _nota_prova(spunta: dict[str, Any]) -> str:
     return f"{base}, registrata nel CRM prima della spunta."
 
 
-def pending_contacts(cur, *, limit: int = 200) -> list[tuple[int, int]]:
+def pending_contacts(cur, *, limit: int = 200, agency_id: int | None = None) -> list[tuple[int, int]]:
     """(agency_id, contact_id) con una spunta del sito che ORA si puo'
     riconoscere su almeno un canale della casella:
 
@@ -380,13 +380,18 @@ def pending_contacts(cur, *, limit: int = 200) -> list[tuple[int, int]]:
     Le spunte che non potranno mai essere riconosciute (nessuna prova,
     superate, gia' concesse) restano fuori: non occupano il lotto a ogni giro
     e non nascondono quelle riconoscibili. La valutazione completa resta di
-    `assess`; questa e' solo la selezione dei candidati."""
+    `assess`; questa e' solo la selezione dei candidati.
+
+    `agency_id`: solo le spunte di quell'agenzia (il giro del motore delle
+    sequenze di un'agenzia non tocca le altre)."""
     prova = site_checkbox_evidence()
     finestre = [(f["from"], f["to"]) for f in (prova or {}).get("windows") or []]
     coperta_da_documenti = " OR ".join(["ce.decided_at BETWEEN %s AND %s"] * len(finestre)) or "FALSE"
     recapito = {"email": "c.email_normalized", "whatsapp": "c.phone_normalized"}
     canale_aperto = []
     parametri: list[Any] = [PURPOSE_MARKETING, SOURCE_PUBLIC_STIMA, EVIDENCE_STIMA]
+    if agency_id is not None:
+        parametri.append(agency_id)
     for canale in SITE_CHECKBOX_CHANNELS:
         canale_aperto.append(f"""(
             COALESCE({recapito[canale]}, '') <> ''
@@ -444,6 +449,7 @@ def pending_contacts(cur, *, limit: int = 200) -> list[tuple[int, int]]:
               JOIN contacts c ON c.id = ce.contact_id AND c.agency_id = ce.agency_id
              WHERE ce.purpose = %s AND ce.channel IS NULL AND ce.source = %s AND ce.decision = 'granted'
                AND ce.evidence_type = %s AND c.deleted_at IS NULL
+               {"AND ce.agency_id = %s" if agency_id is not None else ""}
                AND ({" OR ".join(canale_aperto)})
                AND {prova_possibile}
              GROUP BY ce.agency_id, ce.contact_id

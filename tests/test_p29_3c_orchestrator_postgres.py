@@ -1863,13 +1863,19 @@ def test_66_le_query_degli_stop_non_crescono_con_l_universo_ne_a_sei_per_riga(
         # canale, proiezione per canale, opt-out per indirizzo). Nessuna
         # statement rifiutata da escludere: l'elenco resta vuoto.
         rifiutate = [q for q in sql if "communication_email_optouts" in q]
-        consenso = [q for q in sql if "consent_events" in q and "insert" not in q and q not in rifiutate]
+        # SENTINELLA AGGIORNATA DA V3 (consenso del sito dal giro): la SELEZIONE
+        # delle spunte del sito da riconoscere non e' una lettura decisionale;
+        # si conta a parte, e deve restare UNA per giro, qualunque l'universo.
+        riconoscimento = [q for q in sql if "consent_events ce" in q and "ce.channel is null" in q]
+        consenso = [q for q in sql if "consent_events" in q and "insert" not in q and q not in rifiutate
+                    and q not in riconoscimento]
         # La lettura del consenso nomina anch'essa `contacts ... = ANY(...)`:
         # va tolta dal conto del blocco, o si conterebbe due volte.
         blocco = [q for q in sql if "= any(" in q and q not in consenso and q not in rifiutate and any(
             tabella in q for tabella in ("stima_acquisitions", "stima_inspections",
                                          "from leads", "from contacts", "seller_timeline_events"))]
-        return {"fresche": len(fresche), "consenso": len(consenso), "blocco": len(blocco)}
+        return {"fresche": len(fresche), "consenso": len(consenso), "blocco": len(blocco),
+                "riconoscimento": len(riconoscimento)}
 
     misure = []
     for quanti in (1, 12):
@@ -1885,6 +1891,7 @@ def test_66_le_query_degli_stop_non_crescono_con_l_universo_ne_a_sei_per_riga(
     # per riga: due, non sei, e non sei per candidato.
     assert uno["fresche"] == 1 and dodici["fresche"] == 12, misure
     assert uno["consenso"] == 1 and dodici["consenso"] == 12, misure
+    assert uno["riconoscimento"] <= 1 and dodici["riconoscimento"] == uno["riconoscimento"], misure
     # La fase STOP resta in blocco: l'universo passa da 0 a 1 iscrizione
     # aperta e le sue query per famiglia non si moltiplicano.
     assert dodici["blocco"] == uno["blocco"], misure
