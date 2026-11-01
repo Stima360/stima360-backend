@@ -16,6 +16,9 @@ Regole:
   `none` (l'operatore puo' crearlo);
 - un'associazione manuale precedente della stessa conversazione vince sempre
   su quella automatica e si eredita sui messaggi successivi;
+- e' il comportamento PREDEFINITO, senza azioni dell'operatore: all'arrivo di
+  un messaggio (anche per i messaggi precedenti della stessa conversazione) e
+  all'apertura della casella (riconciliazione dell'agenzia, idempotente);
 - il numero non collega mai da solo un immobile o una stima.
 """
 from __future__ import annotations
@@ -91,6 +94,20 @@ def resolve(cur, agency_id: int, sender_phone: str) -> dict:
             "linked_by_user_id": None, "linked_at": None}
 
 
+def backfill_conversation(cur, agency_id: int, sender_phone: str, decided: dict) -> int:
+    """I messaggi PRECEDENTI della stessa conversazione ancora senza contatto e
+    non decisi a mano prendono il contatto appena deciso. Ritorna quanti."""
+    if decided["contact_id"] is None:
+        return 0
+    cur.execute(
+        "UPDATE whatsapp_inbound_messages SET contact_id = %s, contact_match = %s, linked_by_user_id = %s, "
+        "linked_at = %s WHERE agency_id = %s AND sender_phone = %s AND routing_status = 'routed' "
+        "AND contact_id IS NULL AND contact_match IN (%s, %s) RETURNING id",
+        (decided["contact_id"], decided["match"], decided["linked_by_user_id"], decided["linked_at"],
+         agency_id, sender_phone, MATCH_NONE, MATCH_AMBIGUOUS))
+    return len(cur.fetchall())
+
+
 def reconcile(cur, agency_id: int) -> dict:
     """Riconciliazione delle conversazioni gia' ricevute: i messaggi instradati
     dell'agenzia SENZA contatto e non decisi a mano (`none`/`ambiguous`)
@@ -107,15 +124,8 @@ def reconcile(cur, agency_id: int) -> dict:
     for sender in senders:
         decided = resolve(cur, agency_id, sender)
         if decided["contact_id"] is not None:
-            cur.execute(
-                "UPDATE whatsapp_inbound_messages SET contact_id = %s, contact_match = %s, linked_by_user_id = %s, "
-                "linked_at = %s WHERE agency_id = %s AND sender_phone = %s AND routing_status = 'routed' "
-                "AND contact_id IS NULL AND contact_match IN (%s, %s) RETURNING id",
-                (decided["contact_id"], decided["match"], decided["linked_by_user_id"], decided["linked_at"],
-                 agency_id, sender, MATCH_NONE, MATCH_AMBIGUOUS))
-            n = len(cur.fetchall())
             out["linked_conversations"] += 1
-            out["linked_messages"] += n
+            out["linked_messages"] += backfill_conversation(cur, agency_id, sender, decided)
         elif decided["match"] == MATCH_AMBIGUOUS:
             cur.execute("UPDATE whatsapp_inbound_messages SET contact_match = %s WHERE agency_id = %s "
                         "AND sender_phone = %s AND contact_id IS NULL AND contact_match = %s",

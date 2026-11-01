@@ -8,6 +8,8 @@
     G  agenzie: la rubrica dell'altra agenzia non conta
     M  associazione manuale: vince e si eredita; lo scollegamento manuale resta
     R  riconciliazione retroattiva: in blocco, senza toccare manuali e ambigue
+    Z  comportamento predefinito: nessun pulsante; i messaggi precedenti della conversazione
+       si allineano all'arrivo del nuovo; l'apertura della casella riconcilia da sola
     N  numero assente: nulla collegato, creazione e poi collegamento della conversazione
     P  mai parziale: ultime cifre uguali non collegano
 """
@@ -275,3 +277,41 @@ def test_n_unknown_number_then_contact_created_and_conversation_linked(wa):
     assert r.status_code == 200 and r.json()["contact"]["id"] == cid
     _send(wa, sender, "Di nuovo")                      # ora il numero e' in rubrica: anche da solo si collega
     assert {x[6] for x in _rows(wa, "sender_phone = %s", (sender,))} == {cid}
+
+
+# ---------------------------------------------------------------------------
+# Z - predefinito, senza azioni dell'operatore
+# ---------------------------------------------------------------------------
+
+def test_z_a_new_message_backfills_the_earlier_unlinked_messages_of_the_conversation(wa):
+    ids = wa["ids"]
+    sender = _sender()
+    _send(wa, sender, "Prima della rubrica")
+    assert _rows(wa, "sender_phone = %s", (sender,))[0][6] is None
+    contact = _contact(wa, ids["a"], "Arrivato in rubrica", sender)
+    _send(wa, sender, "Secondo messaggio")                       # nessuna GET, nessun pulsante
+    assert {(r[6], r[7]) for r in _rows(wa, "sender_phone = %s", (sender,))} == {(contact, "matched")}
+
+
+def test_z_opening_the_inbox_reconciles_without_any_button_and_respects_manual_links(wa):
+    ids = wa["ids"]
+    s_new, s_manual = _sender(), _sender()
+    _send(wa, s_new, "Sconosciuto al momento")
+    _send(wa, s_manual, "Deciso a mano")
+    owner = wa["login"]("owner_a")
+    chosen = _raw_contact(wa, ids["a"], "Scelto a mano", phone="+39 011 9999999", phone_normalized="390119999999")
+    assert owner.post(f"{API}/conversations/{s_manual}/link", json={"contact_id": chosen}).status_code == 200
+    older = _contact(wa, ids["a"], "Rubrica Vecchio", s_new)
+    newer = _contact(wa, ids["a"], "Rubrica Nuovo", s_new)
+    _q(wa, "UPDATE contacts SET created_at = NOW() - interval '10 days' WHERE id = %s", (older,))
+    _contact(wa, ids["a"], "Omonimo del manuale", s_manual)      # la rubrica ora conoscerebbe anche s_manual
+    # un agente apre la casella: la riconciliazione e' del sistema, non un suo permesso
+    listing = wa["login"]("agent_a").get(f"{API}/conversations")
+    assert listing.status_code == 200
+    assert {(r[6], r[7]) for r in _rows(wa, "sender_phone = %s", (s_new,))} == {(older, "matched")}
+    assert {(r[6], r[7]) for r in _rows(wa, "sender_phone = %s", (s_manual,))} == {(chosen, "manual")}
+    item = next(c for c in owner.get(f"{API}/conversations").json()["items"] if c["sender_phone"] == s_new)
+    assert item["last_message"]["contact"] == {"id": older, "name": "Rubrica Vecchio"}
+    conv = _conv(owner, s_new)
+    assert conv["contact"]["id"] == older and conv["contact"]["others_with_number"] == 1
+    assert [c["id"] for c in conv["contact_candidates"]] == [older, newer]

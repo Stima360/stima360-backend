@@ -389,9 +389,10 @@ Il revert è provato: `git revert --no-edit ef3777d` su una copia di `main` ripo
   l'operatore può cambiare («Cambia contatto»); nessuno → «Nuovo contatto con questo
   numero», telefono già compilato. Un'associazione
   manuale precedente vince e si eredita. Mai immobili o stime dal numero.
-- **Riconciliazione** delle conversazioni già ricevute: pulsante «Riconosci contatti in
-  rubrica» (titolare/amministratore) o `POST /api/inbound-messages/reconcile`, oppure il
-  Job qui sotto. Non tocca le associazioni manuali né quelle ambigue.
+- **Riconciliazione automatica** delle conversazioni già ricevute: avviene da sola,
+  all'arrivo di un nuovo messaggio della conversazione e all'apertura della casella
+  (nessun pulsante). Restano `POST /api/inbound-messages/reconcile` e il Job qui sotto per
+  eseguirla a comando. Non tocca le associazioni manuali né quelle ambigue.
 - **Allowlist dei destinatari** `WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS`: obbligatoria per
   qualsiasi invio (manuale o automatico). Assente o vuota = nessun invio. Applicata dal
   server tre volte: nello stato della conversazione, subito prima di chiamare Meta e

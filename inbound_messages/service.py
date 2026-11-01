@@ -103,6 +103,11 @@ def ingest(parsed: ParsedPayload, routes: dict[str, set[int]] | None = None) -> 
                                             linked_by_user_id=decided["linked_by_user_id"],
                                             linked_at=decided["linked_at"])
             summary["messages_new" if new else "messages_duplicate"] += 1
+            if new and status == ROUTED:
+                # La conversazione resta coerente: i messaggi precedenti senza contatto
+                # prendono quello deciso adesso (mai quelli decisi a mano).
+                summary["backfilled"] = summary.get("backfilled", 0) + contact_match.backfill_conversation(
+                    cur, agency_id, m.sender_phone, decided)
             if new and is_stop_request(m) and status == ROUTED and contact_id is not None:
                 _record_stop(cur, SystemAgencyContext(agency_id=agency_id, origin=INBOUND_ORIGIN),
                              contact_id=contact_id, provider_message_id=m.provider_message_id,
@@ -183,9 +188,25 @@ def _require_installed(cur):
         raise NotInstalled("NOT_INSTALLED", NOT_INSTALLED_MESSAGE)
 
 
+def _auto_reconcile(agency_id: int) -> None:
+    """Riconoscimento predefinito, senza pulsanti: prima di mostrare la casella
+    le conversazioni dell'agenzia senza contatto e non decise a mano prendono
+    il contatto della rubrica (stessa regola della ricezione). Transazione
+    propria, idempotente; un errore qui non impedisce la lettura."""
+    try:
+        with core_cursor(commit=True) as (_, cur):
+            if repository.installed(cur):
+                summary = contact_match.reconcile(cur, agency_id)
+                if summary["linked_conversations"]:
+                    log.info("whatsapp_inbound_auto_reconcile agency=%s %s", agency_id, json.dumps(summary))
+    except Exception as exc:  # pragma: no cover - difesa: la casella si legge comunque
+        log.warning("whatsapp_inbound_auto_reconcile_failed agency=%s error_type=%s", agency_id, type(exc).__name__)
+
+
 def list_conversations(ctx, *, only_unlinked: bool = False) -> dict:
     agency_id = ctx.require_agency()
     agent = _agent_scope(ctx)
+    _auto_reconcile(agency_id)
     with core_cursor() as (_, cur):
         _require_installed(cur)
         reads = repository.reads_installed(cur)
@@ -207,6 +228,7 @@ def list_conversations(ctx, *, only_unlinked: bool = False) -> dict:
 def conversation(ctx, sender_phone: str) -> dict:
     agency_id = ctx.require_agency()
     agent = _agent_scope(ctx)
+    _auto_reconcile(agency_id)
     with core_cursor() as (_, cur):
         _require_installed(cur)
         rows = repository.conversation_messages(cur, agency_id, sender_phone, agent_user_id=agent, limit=LIST_LIMIT)

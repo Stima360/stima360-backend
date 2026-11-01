@@ -277,23 +277,7 @@ export async function renderMessaggi(container, params = []) {
   const allBtn = button('Tutte', 'chip active', 'data-messages-filter-all');
   const unlinkedBtn = button('Da associare', 'chip', 'data-messages-filter-unlinked');
   filters.append(allBtn, unlinkedBtn);
-  // Riconciliazione retroattiva (titolare/amministratore): le conversazioni
-  // senza contatto prendono quello della rubrica, se è uno solo con quel numero.
-  const reconcileBtn = button('Riconosci contatti in rubrica', 'ghost', 'data-messages-reconcile');
-  reconcileBtn.hidden = true;
-  reconcileBtn.addEventListener('click', async () => {
-    reconcileBtn.disabled = true;
-    try {
-      const r = await apiPost(`${API}/reconcile`, {});
-      say(`Riconoscimento completato: ${r.linked_conversations} conversazioni collegate (${r.linked_messages} messaggi), ${r.ambiguous_conversations} con più contatti possibili, ${r.unmatched_conversations} senza contatto in rubrica.`, 'ok');
-      await loadList();
-    } catch (error) {
-      say(errorMessage(error), 'error');
-    } finally {
-      reconcileBtn.disabled = false;
-    }
-  });
-  filters.appendChild(reconcileBtn);
+  // Il riconoscimento dei contatti e' automatico (server): nessun pulsante da premere.
   const dialog = el('dialog', 'modal');
   dialog.setAttribute('data-messages-contact-dialog', '');
   const layout = el('div', 'messages-layout');
@@ -324,7 +308,6 @@ export async function renderMessaggi(container, params = []) {
       return;
     }
     list.replaceChildren();
-    reconcileBtn.hidden = !data.can_link;
     if (!data.items.length) {
       list.appendChild(el('p', 'muted', onlyUnlinked ? 'Nessun messaggio da associare.' : 'Nessun messaggio ricevuto.'));
       detail.replaceChildren();
