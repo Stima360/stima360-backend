@@ -7,9 +7,9 @@ tick, contatto per contatto (il prefiltro usa il predicato che il pacchetto
 del consenso fornisce, e non conosce le sue colonne).
 
 Chi NON entra, per costruzione:
-  * (V3) chi non e' proprietario/venditore VERIFICATO: vedi
-    `PROPRIETARIO_VERIFICATO` (acquirenti e richiedenti dal sito senza ruolo
-    registrato da un operatore restano fuori);
+  * (V3) chi non e' proprietario/venditore VERIFICATO (`PROPRIETARIO_VERIFICATO`)
+    e non ha nemmeno CHIESTO UNA VALUTAZIONE (`RICHIESTA_VALUTAZIONE`): gli
+    acquirenti senza valutazione restano fuori;
   * contatti non attivi, nel Cestino, archiviati, senza email scrivibile;
   * chi e' gia' in una sequenza aperta (indice unico per contatto) o in pausa
     manuale (`communication_automation_controls`);
@@ -73,6 +73,18 @@ PROPRIETARIO_VERIFICATO = """(EXISTS (SELECT 1 FROM contact_roles r
                         WHERE pc.contact_id = c.id AND pc.role IN ('owner', 'seller')
                           AND p.agency_id = c.agency_id AND p.deleted_at IS NULL))"""
 
+#: Decisione del titolare: entra nel V3 anche chi ha CHIESTO UNA VALUTAZIONE.
+#: Le prove sono le stesse della relazione di servizio
+#: (`followup_rules.service_relationship`): una stima collegata al contatto
+#: tramite un suo lead, o la mail di servizio con il PDF della stima mandata a
+#: lui. Sempre nella stessa agenzia. Un acquirente senza valutazione resta fuori.
+RICHIESTA_VALUTAZIONE = """(EXISTS (SELECT 1 FROM leads l JOIN lead_stime ls ON ls.lead_id = l.id
+                    WHERE l.contact_id = c.id AND l.agency_id = c.agency_id)
+            OR EXISTS (SELECT 1 FROM communication_messages m
+                        WHERE m.agency_id = c.agency_id AND m.contact_id = c.id
+                          AND m.stima_id IS NOT NULL AND m.communication_type = 'service'
+                          AND m.reason_code = 'stima_pdf'))"""
+
 
 def candidates(cur, ctx, *, now: datetime, limit: int) -> list[dict[str, Any]]:
     """I candidati di oggi, gia' deduplicati per indirizzo, al massimo `limit`.
@@ -104,7 +116,7 @@ def candidates(cur, ctx, *, now: datetime, limit: int) -> list[dict[str, Any]]:
                AND NOT {channel_optout_after_grant_sql('c', CANALE)}
                AND NOT EXISTS (SELECT 1 FROM seller_revival_suppressions s
                                 WHERE s.contact_id = c.id AND s.expires_at > %s)
-               AND {PROPRIETARIO_VERIFICATO}
+               AND ({PROPRIETARIO_VERIFICATO} OR {RICHIESTA_VALUTAZIONE})
              ORDER BY {channel_granted_at_sql('c', CANALE)} DESC NULLS LAST, c.id
              LIMIT %s""",
         (agenzia, now, now, now, LETTURA))

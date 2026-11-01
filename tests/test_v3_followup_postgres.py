@@ -351,3 +351,32 @@ def test_10_verifica_coda_in_sola_lettura(v3):
     assert righe and righe[0][3] == "queued" and righe[0][4] == 1 and righe[0][7] == 1
     assert any(s[1] == "stima_lead" and s[2] == 3 and s[3] == "active" and s[5] == 1 for s in r["sequenze"])
     assert "coda@example.it" not in str(r)
+
+
+def test_11_entra_anche_chi_ha_chiesto_una_valutazione(v3):
+    """Decisione del titolare: nel V3 entrano anche i contatti che hanno CHIESTO
+    UNA VALUTAZIONE (le stesse due prove della relazione di servizio: una stima
+    collegata al contatto tramite lead, o la mail di servizio con il PDF della
+    stima). Restano fuori gli acquirenti senza valutazione e chi non ha il
+    consenso email valido."""
+    from communication import service as communication_service
+    from tests.test_delete_arch_0_postgres import _lead, _stima
+    m = v3
+    _attiva(m)
+    con_stima = _proprietario(m, "richiesta.stima@example.it", ruolo=None)
+    _q(m, "INSERT INTO lead_stime (lead_id, stima_id, relation_type) VALUES (%s, %s, 'origin')",
+       (_lead(m, con_stima), _stima(m)))
+    con_pdf = _proprietario(m, "pdf.stima@example.it", ruolo=None)
+    communication_service.enqueue(
+        _sistema(1), contact_id=con_pdf, stima_id=_stima(m), channel="email", communication_type="service",
+        mode="automatic", reason_code="stima_pdf", destination_snapshot="pdf.stima@example.it",
+        subject_snapshot="La tua stima", rendered_body="<p>stima</p>",
+        idempotency_key=f"stima:{uuid.uuid4().hex}", metadata={"pdf_url": "https://crm-test.example.invalid/p.pdf"})
+    acquirente = _proprietario(m, "solo.acquirente@example.it", ruolo="buyer")
+    senza_consenso = _contatto(m, "stima.senza.consenso@example.it", ruolo=None)
+    _q(m, "INSERT INTO lead_stime (lead_id, stima_id, relation_type) VALUES (%s, %s, 'origin')",
+       (_lead(m, senza_consenso), _stima(m)))
+    _tick(m, T0)
+    iscritti = {e["contact_id"] for e in _iscrizioni(m, agency_id=1) if e["status"] == "active"}
+    assert {con_stima, con_pdf} <= iscritti
+    assert acquirente not in iscritti and senza_consenso not in iscritti

@@ -135,6 +135,11 @@ def test_06_proprietari_verificati_e_attivita_15():
     filtro = audience.PROPRIETARIO_VERIFICATO
     assert "contact_roles" in filtro and "property_contacts" in filtro and "deleted_at IS NULL" in filtro
     assert "'owner', 'seller'" in filtro and "'contact'" not in filtro and "'buyer'" not in filtro
+    # Decisione del titolare: entra anche chi ha chiesto una valutazione (stima
+    # collegata tramite lead, o mail di servizio con il PDF della stima).
+    valutazione = audience.RICHIESTA_VALUTAZIONE
+    assert "lead_stime" in valutazione and "'stima_pdf'" in valutazione
+    assert "l.agency_id = c.agency_id" in valutazione and "m.agency_id = c.agency_id" in valutazione
     assert integrations._e_l_email_15_v3({"enrollment_id": 1, "template_key": "followup_v3_m15"})
     assert not integrations._e_l_email_15_v3({"enrollment_id": 1, "template_key": "followup_v3_m14"})
     assert not integrations._e_l_email_15_v3({"enrollment_id": None, "template_key": "followup_v3_m15"})

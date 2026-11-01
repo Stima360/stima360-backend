@@ -10,9 +10,12 @@ attivazione si impostano a mano su Render, dopo l'autorizzazione del titolare.
 - Sequenza `stima_lead` versione 3, «Follow-up proprietari 180 giorni»,
   16 email ai giorni 4, 8, 12, 18, 25, 33, 42, 52, 63, 75, 88, 102, 117, 135,
   157, 180. Testi approvati: communication/followup_v3_texts.py.
-- Entra SOLO chi e' proprietario/venditore verificato (ruolo del contatto o
-  immobile collegato come owner/seller) E ha un consenso Marketing Email
-  valido. Mai acquirenti, mai chi ha revocato.
+- Entra chi ha un consenso Marketing Email valido E e' proprietario/venditore
+  verificato (ruolo del contatto o immobile collegato come owner/seller)
+  OPPURE ha chiesto una valutazione (stima collegata tramite un suo lead, o
+  mail della stima ricevuta). Mai acquirenti senza valutazione, mai chi ha
+  revocato. Vale per i contatti gia' presenti e per ogni nuovo consenso: il
+  cron li controlla a ogni giro, senza iscrizioni manuali.
 - Una sola sequenza aperta per persona/indirizzo in tutta la piattaforma.
   Finita al giorno 180 non riparte.
 - Prima di ogni invio il dispatcher ricontrolla il consenso; disiscrizione
