@@ -227,8 +227,11 @@ def test_G3_il_consenso_non_e_interrogato_fuori_dal_dispatcher():
         # subito a chi scrive che non partira'. Non e' un secondo gate di
         # invio - quello resta nel dispatcher, immediatamente prima di
         # spedire - e' un rifiuto anticipato che evita una coda inutile.
+        # SENTINELLA AGGIORNATA DA SBLOCCO FOLLOW-UP: `consent_bulk.py` legge
+        # la guardia (bulk) SOLO per mostrare lo stato nel quadro, come il
+        # Contact 360; non manda niente.
         if nome in ("dispatcher.py", "journey_service.py", "journey_tick.py",
-                    "contact_view.py"):
+                    "contact_view.py", "consent_bulk.py"):
             continue
         assert "can_send_marketing" not in corpo, f"{nome} interroga il consenso"
 
@@ -400,6 +403,11 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
     # livello mount. L'unica superficie senza sessione resta l'unsubscribe.
     assert percorsi == [
         "/api/communication/consent/notices",
+        # SENTINELLA AGGIORNATA DA SBLOCCO FOLLOW-UP: la gestione multipla dei
+        # consensi (quadro in sola lettura; registrazione per piu' contatti,
+        # stessa funzione e stessi rifiuti della scheda), sessione operatore.
+        "/api/communication/consents/bulk-grant",
+        "/api/communication/consents/overview",
         "/api/communication/contacts/{contact_id}/automation/pause",
         "/api/communication/contacts/{contact_id}/automation/resume",
         "/api/communication/contacts/{contact_id}/consent",

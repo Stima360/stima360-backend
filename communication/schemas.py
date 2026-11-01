@@ -126,6 +126,13 @@ class ConsentGrantRequest(BaseModel):
         return valore
 
 
+class ConsentBulkGrantRequest(ConsentGrantRequest):
+    """Gestione multipla: lo stesso consenso per piu' contatti (da 1 a 200),
+    ognuno con il suo evento e la dichiarazione dell'operatore."""
+
+    contact_ids: list[int] = Field(min_length=1, max_length=200)
+
+
 class ConsentRefusalRequest(BaseModel):
     """Fase B: un rifiuto o una revoca espressi al personale.
 

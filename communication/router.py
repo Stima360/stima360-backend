@@ -40,7 +40,7 @@ from . import journey_service
 from . import journey_tick
 from .dependencies import require_dispatch_context
 from .exceptions import ConflictError, NotFoundError, ValidationError
-from .schemas import (ConsentGrantRequest, ConsentRefusalRequest, DispatchRequest,
+from .schemas import (ConsentBulkGrantRequest, ConsentGrantRequest, ConsentRefusalRequest, DispatchRequest,
                       JourneyActivateRequest, JourneyTickRequest, ManualMessageRequest)
 
 router = APIRouter(prefix="/api/communication", tags=["communication"])
@@ -232,6 +232,30 @@ def contact_consent_grant(
             "channels": esito["channels"],
             "event_ids": [e["event"]["id"] for e in esito["events"]], "notice": esito["notice"],
             "start": avvio}
+
+
+@router.get("/consents/overview")
+def consents_overview(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    """Gestione multipla: tutti i contatti dell'agenzia con email e lo stato
+    del consenso email (valido / revocato / da documentare). Nessun indirizzo
+    in chiaro."""
+    from . import consent_bulk
+    return _tradotto_consenso(lambda: consent_bulk.overview(ctx))
+
+
+@router.post("/consents/bulk-grant", status_code=201)
+def consents_bulk_grant(
+    payload: ConsentBulkGrantRequest,
+    ctx: OperatorContext = Depends(legacy_basic_agency_context),
+):
+    """Gestione multipla: lo stesso consenso registrato contatto per contatto,
+    con la dichiarazione dell'operatore; esito per contatto; partenza
+    immediata del follow-up per ogni consenso email registrato."""
+    from . import consent_bulk
+    return _tradotto_consenso(lambda: consent_bulk.bulk_grant(
+        ctx, contact_ids=payload.contact_ids, channels=payload.channels, decided_at=payload.decided_at,
+        evidence_type=payload.evidence_type, evidence_ref=payload.evidence_ref, notice_id=payload.notice_id,
+        note=payload.note, attestation=payload.attestation))
 
 
 @router.post("/contacts/{contact_id}/consent/refusal", status_code=201)

@@ -130,6 +130,7 @@ const TABS = [
   { key: 'regole', label: 'Regole' },
   { key: 'cronologia', label: 'Cronologia' },
   { key: 'sequenze', label: 'Sequenze email' },
+  { key: 'consensi', label: 'Consensi email' },
 ];
 
 // V3: le sequenze email (journey) in sola lettura. Una sola chiamata,
@@ -209,6 +210,7 @@ export async function renderAutomazioni(container) {
     if (key === 'regole') return loadRegole();
     if (key === 'cronologia') return loadCronologia();
     if (key === 'sequenze') return loadSequenze();
+    if (key === 'consensi') return loadConsensi();
   }
 
   async function loadSequenze() {
@@ -222,6 +224,151 @@ export async function renderAutomazioni(container) {
         : `Sequenze email temporaneamente non disponibili: ${escapeHtml(error.message)}`;
       contentEl.innerHTML = `<div class="error-box">${testo}</div>`;
     }
+  }
+
+  // Gestione multipla dei consensi email: il quadro (valido / revocato / da
+  // documentare) e la registrazione dello STESSO consenso per i contatti
+  // scelti, uno per uno, con la dichiarazione dell'operatore. Tutto via DOM e
+  // textContent: i dati arrivano dall'API.
+  async function loadConsensi() {
+    contentEl.innerHTML = '<p class="muted">Caricamento…</p>';
+    let quadro;
+    let informative;
+    try {
+      [quadro, informative] = await Promise.all([
+        apiGet('/api/communication/consents/overview'),
+        apiGet('/api/communication/consent/notices').catch(() => ({ notices: [] })),
+      ]);
+    } catch (error) {
+      contentEl.innerHTML = `<div class="error-box">${escapeHtml(error.message || 'Consensi non disponibili.')}</div>`;
+      return;
+    }
+    contentEl.innerHTML = '';
+    contentEl.appendChild(renderConsensiTab(quadro || {}, (informative && informative.notices) || []));
+  }
+
+  function renderConsensiTab(quadro, informative) {
+    const radice = document.createElement('div');
+    const conteggi = document.createElement('div');
+    conteggi.className = 'card';
+    const c = quadro.counts || {};
+    conteggi.textContent = `Contatti con email: ${quadro.total || 0} · consenso valido: ${c.valid || 0} · `
+      + `da documentare: ${c.to_document || 0} · revocati: ${c.revoked || 0}`;
+    radice.appendChild(conteggi);
+
+    const card = document.createElement('div');
+    card.className = 'card';
+    const tabella = document.createElement('table');
+    tabella.className = 'table';
+    const testa = tabella.createTHead().insertRow();
+    for (const t of ['', 'Contatto', 'Email', 'Consenso email', 'Sequenza']) {
+      const th = document.createElement('th'); th.textContent = t; testa.appendChild(th);
+    }
+    const corpo = tabella.createTBody();
+    const ETICHETTE = { valid: 'Valido', revoked: 'Revocato', to_document: 'Da documentare' };
+    const TONI = { valid: 'ok', revoked: 'bad', to_document: 'warn' };
+    for (const k of quadro.contacts || []) {
+      const riga = corpo.insertRow();
+      const cella = riga.insertCell();
+      if (k.state === 'to_document') {
+        const box = document.createElement('input');
+        box.type = 'checkbox'; box.name = 'contact_ids'; box.value = String(k.contact_id);
+        box.setAttribute('data-consent-pick', String(k.contact_id));
+        cella.appendChild(box);
+      }
+      riga.insertCell().textContent = `${k.display_name || ''} (#${k.contact_id})`;
+      riga.insertCell().textContent = k.email_masked || '';
+      const stato = riga.insertCell();
+      const badge = document.createElement('span');
+      badge.className = `badge ${TONI[k.state] || 'gray'}`;
+      badge.textContent = (ETICHETTE[k.state] || k.state) + (k.site_tick && k.state === 'to_document' ? ' · spunta sito senza prova' : '');
+      stato.appendChild(badge);
+      riga.insertCell().textContent = k.paused ? 'in pausa manuale' : (k.in_sequence ? 'in corso' : '—');
+      riga.setAttribute('data-consent-row', String(k.contact_id));
+    }
+    card.appendChild(tabella);
+    radice.appendChild(card);
+
+    const form = document.createElement('form');
+    form.className = 'card';
+    form.setAttribute('data-consent-bulk-form', '');
+    const titolo = document.createElement('h3');
+    titolo.textContent = 'Registra lo stesso consenso per i contatti selezionati';
+    form.appendChild(titolo);
+    const nota = document.createElement('p');
+    nota.className = 'muted';
+    nota.textContent = 'Solo consensi realmente ottenuti e documentabili. Ogni contatto riceve il suo evento con la tua dichiarazione; con l’email, se il contatto è idoneo, la prima email del follow-up parte subito.';
+    form.appendChild(nota);
+    const campo = (etichetta, el) => {
+      const l = document.createElement('label'); l.textContent = etichetta; l.appendChild(el); form.appendChild(l); return el;
+    };
+    const canali = document.createElement('div');
+    for (const [v, t] of [['email', 'Email'], ['whatsapp', 'WhatsApp'], ['sms', 'SMS'], ['phone', 'Telefonate']]) {
+      const l = document.createElement('label'); l.className = 'checkbox-label';
+      const b = document.createElement('input'); b.type = 'checkbox'; b.name = 'channels'; b.value = v;
+      if (v === 'email') b.checked = true;
+      l.appendChild(b); l.appendChild(document.createTextNode(` ${t}`)); canali.appendChild(l);
+    }
+    form.appendChild(canali);
+    const data = campo('Data e ora della raccolta ', document.createElement('input'));
+    data.type = 'datetime-local'; data.name = 'decided_at'; data.required = true;
+    const modalita = campo('Modalità di acquisizione ', document.createElement('select'));
+    modalita.name = 'evidence_type';
+    for (const [v, t] of [['in_person', 'Di persona'], ['phone_call', 'Telefono'], ['email_message', 'Email'],
+      ['document', 'Documento'], ['paper_form', 'Modulo cartaceo'], ['digital_form', 'Modulo digitale']]) {
+      const o = document.createElement('option'); o.value = v; o.textContent = t; modalita.appendChild(o);
+    }
+    const prova = campo('Prova / documentazione (non il recapito del cliente) ', document.createElement('input'));
+    prova.type = 'text'; prova.name = 'evidence_ref'; prova.required = true; prova.minLength = 6; prova.maxLength = 100;
+    const informativa = campo('Informativa presentata ', document.createElement('select'));
+    informativa.name = 'notice_id'; informativa.required = true;
+    for (const n of informative) {
+      const o = document.createElement('option'); o.value = String(n.id);
+      o.textContent = `${n.version} — ${n.context || ''}`; informativa.appendChild(o);
+    }
+    const dichiarazione = document.createElement('label'); dichiarazione.className = 'checkbox-label';
+    const att = document.createElement('input'); att.type = 'checkbox'; att.name = 'attestation'; att.required = true;
+    dichiarazione.appendChild(att);
+    dichiarazione.appendChild(document.createTextNode(' Dichiaro che il consenso è stato realmente ottenuto da ciascun contatto selezionato, nei modi e nella data indicati.'));
+    form.appendChild(dichiarazione);
+    const invia = document.createElement('button'); invia.type = 'submit'; invia.className = 'btn primary';
+    invia.textContent = 'Registra per i selezionati'; invia.disabled = !informative.length;
+    form.appendChild(invia);
+    const esito = document.createElement('div'); esito.setAttribute('data-consent-bulk-result', ''); form.appendChild(esito);
+    form.addEventListener('submit', async (evento) => {
+      evento.preventDefault();
+      esito.textContent = '';
+      const scelti = Array.from(contentEl.querySelectorAll('[data-consent-pick]:checked')).map((b) => Number(b.value));
+      const canaliScelti = Array.from(form.querySelectorAll('input[name=channels]:checked')).map((b) => b.value);
+      if (!scelti.length || !canaliScelti.length || !att.checked) {
+        esito.textContent = 'Seleziona almeno un contatto e un canale, e conferma la dichiarazione.';
+        return;
+      }
+      invia.disabled = true;
+      try {
+        const r = await apiPost('/api/communication/consents/bulk-grant', {
+          contact_ids: scelti, channels: canaliScelti,
+          decided_at: new Date(data.value).toISOString(),
+          evidence_type: modalita.value, evidence_ref: prova.value, notice_id: Number(informativa.value),
+          note: null, attestation: true,
+        });
+        const lista = document.createElement('ul');
+        for (const x of r.results || []) {
+          const li = document.createElement('li');
+          const avvio = x.start ? ` — follow-up: ${x.start.reason_label || x.start.status}` : '';
+          li.textContent = x.recorded ? `#${x.contact_id}: consenso registrato${avvio}` : `#${x.contact_id}: non registrato — ${x.error}`;
+          lista.appendChild(li);
+        }
+        esito.textContent = `Registrati: ${r.recorded} · rifiutati: ${r.rejected}`;
+        esito.appendChild(lista);
+      } catch (error) {
+        esito.textContent = error.message || 'Registrazione non riuscita.';
+      } finally {
+        invia.disabled = false;
+      }
+    });
+    radice.appendChild(form);
+    return radice;
   }
 
   async function loadPanoramica(force = false) {

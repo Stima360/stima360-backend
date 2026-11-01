@@ -681,6 +681,15 @@ def bridge_public_stima(
                 contact_scope + [contact_data["phone_normalized"]],
             )
             phone_matches = [dict(item) for item in cur.fetchall()]
+            # Decisione del titolare: lo STESSO numero con un'email DIVERSA non
+            # e' la stessa persona (caso reale: due Giorgi con il telefono di
+            # casa). Con un'email in arrivo, chi ha quel numero ma un'altra
+            # email e' un altro contatto e non si considera; chi ha il numero
+            # e nessuna email resta riconoscibile dal numero, come prima.
+            if contact_data.get("email_normalized"):
+                phone_matches = [c for c in phone_matches
+                                 if not c.get("email_normalized")
+                                 or c["email_normalized"] == contact_data["email_normalized"]]
 
         if len(email_matches) > 1 or len(phone_matches) > 1:
             return result("conflict", reason="ambiguous_identity")

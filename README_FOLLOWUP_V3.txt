@@ -101,6 +101,31 @@ USO REALE (solo dopo il collaudo e su autorizzazione del titolare):
   5. Primi giorni: controllo quotidiano del quadro «Sequenze email».
 
 
+4b. CONSENSI: COME ENTRANO, COME SI REGISTRANO
+-------------------------------------------
+- Dal sito: la casella marketing arriva senza canale; diventa consenso EMAIL
+  (data, origine, informativa, prova `stima:<id>`) con il riconoscimento
+  C3.4/C3.5, che gira all'arrivo della valutazione, a ogni giro del cron
+  di importazione e a ogni giro del cron delle comunicazioni. Riconosciuto
+  = il follow-up parte subito (prima email anche fuori finestra).
+  Perche' il riconoscimento riesca per le spunte FUTURE: in Super Admin >
+  Informative deve esistere un'informativa marketing con contesto che
+  nomina «stima360.it», canali che includono email, valida alla data della
+  spunta e registrata PRIMA della spunta (o con il testo esatto provato).
+- Dalla scheda del contatto: «Registra consenso» (canale per canale,
+  modalita', data, informativa, prova, dichiarazione obbligatoria).
+- Da Automazioni > «Consensi email»: il quadro di tutti i contatti con email
+  (valido / da documentare / revocato) e la registrazione dello STESSO
+  consenso per i contatti selezionati, uno per uno, con dichiarazione.
+- Mai dal solo indirizzo email, mai dal vecchio flag del contatto.
+- Stesso telefono con email diversa = persona diversa: il ponte della
+  valutazione crea un contatto nuovo, non unisce.
+- Un contatto da tenere FUORI dalle automazioni (storico e consensi
+  intatti): scheda > «Metti in pausa le automazioni»; il cron non lo
+  reiscrive finche' una persona non toglie la pausa.
+- Una stima agganciata al contatto sbagliato: scripts/v3_separa_stima.py
+  (prova senza --esegui, poi --esegui).
+
 5. ARRESTO D'EMERGENZA
 ----------------------
 - Bloccare SUBITO tutto il marketing: impostare

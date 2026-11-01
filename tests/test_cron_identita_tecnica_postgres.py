@@ -119,7 +119,9 @@ def test_03_il_segreto_non_apre_nessun_altra_rotta(giro):
                if "tests" not in f.parts and f.name != "run_communication_dispatch_cron.py"
                and ("COMMUNICATION_CRON_TOKEN" in f.read_text(encoding="utf-8", errors="ignore")
                     or "X-Stima360-Cron-Token" in f.read_text(encoding="utf-8", errors="ignore"))}
-    assert lettori == {"communication/cron_router.py"}, lettori
+    # SENTINELLA AGGIORNATA DA SBLOCCO FOLLOW-UP: lo script di diagnosi in sola
+    # lettura dice SOLO se il segreto e' configurato (mai il valore).
+    assert lettori == {"communication/cron_router.py", "scripts/v3_diagnosi.py"}, lettori
 
 
 def _nessun_altra_rotta(client, intestazioni):

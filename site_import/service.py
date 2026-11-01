@@ -261,7 +261,7 @@ class Importer:
         finally:
             lock_conn.close()
 
-    def _riconosci_consensi_sito(self, conn) -> None:
+    def _riconosci_consensi_sito(self, conn) -> None:  # noqa: D401 - vedi sotto
         """C3.4: a ogni giro, i consensi del sito che ORA hanno prove complete
         (per esempio l'informativa del sito registrata nel frattempo per le
         spunte successive). Idempotente, limitato, un contatto alla volta."""
@@ -273,9 +273,10 @@ class Importer:
         conn.rollback()
         for agenzia, contatto in pendenti:
             try:
-                esito = site_recognition.recognize(
-                    SystemAgencyContext(agency_id=agenzia, origin="public_stima"), contatto)
+                contesto = SystemAgencyContext(agency_id=agenzia, origin="public_stima")
+                esito = site_recognition.recognize(contesto, contatto)
                 self.counts["site_consents_recognized"] += len(esito["granted"])
+                _avvio_immediato(contesto, contatto, esito["granted"])
             except Exception as exc:  # noqa: BLE001 - un contatto non ferma il giro
                 log.warning("site_consent_recognition_failed contact_id=%s error_type=%s",
                             contatto, type(exc).__name__)
@@ -451,6 +452,9 @@ class Importer:
             # per chi ha gia' dato un consenso valido.
             riconosciuti = site_recognition.recognize(ctx, ponte["contact_id"])["granted"]
             if riconosciuti:
+                # Regola del titolare: consenso email riconosciuto -> il
+                # follow-up parte subito (prima email anche fuori finestra).
+                _avvio_immediato(ctx, ponte["contact_id"], riconosciuti)
                 return {"state": "done", "status": "recognized",
                         "channels": sorted(r["channel"] for r in riconosciuti)}
             esito = consent_page.request_from_site_checkbox(
@@ -623,3 +627,17 @@ def run_once(config: Config | None = None, *, source=None, archive=None, connect
     finally:
         if proprio:
             source.close()
+
+
+def _avvio_immediato(ctx, contact_id: int, concessi) -> dict | None:
+    """Partenza immediata del V3 dopo un consenso EMAIL riconosciuto dal sito.
+    Non solleva mai: il consenso e' registrato comunque, il cron riprova."""
+    if not any(g.get("channel") == "email" for g in concessi or ()):
+        return None
+    try:
+        from communication import avvio_immediato
+        return avvio_immediato.avvia(ctx, int(contact_id))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("site_consent_immediate_start_failed contact_id=%s error_type=%s",
+                    contact_id, type(exc).__name__)
+        return None

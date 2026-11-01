@@ -88,6 +88,10 @@ FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py
                     # immediata del V3 dopo un consenso email (orchestra motore
                     # e dispatcher); il nucleo non la importa.
                     "avvio_immediato.py",
+                    # SENTINELLA AGGIORNATA DA SBLOCCO FOLLOW-UP: la gestione
+                    # multipla dei consensi (quadro + registrazione per piu'
+                    # contatti); il nucleo non la importa.
+                    "consent_bulk.py",
                     # FOLLOW-UP FASE B (108): la platea e le regole della
                     # journey sul contatto. Il nucleo non li importa.
                     "audience.py", "followup_rules.py",
