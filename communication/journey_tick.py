@@ -115,6 +115,17 @@ def _base_pubblica() -> str:
         raise ValidationError(
             f"{BASE_ENV} is not configured: a marketing message cannot be built "
             "without an unsubscribe link that points somewhere real")
+    # Conferma del consenso, disiscrizione e guida devono arrivare a QUESTO
+    # servizio. Un host `*.onrender.com` diverso da quello che Render dichiara
+    # per il servizio in esecuzione e' un ALTRO servizio (caso reale: il
+    # backend del sito, default storico del codice): i suoi link non
+    # arriverebbero mai qui. Un dominio proprio non si giudica.
+    servizio = (os.getenv("RENDER_EXTERNAL_HOSTNAME") or "").strip().lower()
+    host = base.split("://", 1)[-1].split("/", 1)[0].split("@")[-1].split(":", 1)[0].lower()
+    if servizio and host.endswith(".onrender.com") and host != servizio:
+        raise ValidationError(
+            f"{BASE_ENV} punta a un altro servizio Render ({host}), non a questo ({servizio}): "
+            "i link di conferma e di disiscrizione non arriverebbero qui")
     return base.rstrip("/")
 
 

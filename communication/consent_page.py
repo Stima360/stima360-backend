@@ -347,7 +347,8 @@ def confirm_page(invio: dict[str, Any] | None, *, now: datetime) -> str:
 
 
 _CONFERME = {
-    "confirmed": ("ok", "Grazie: il tuo indirizzo email è confermato."),
+    "confirmed": ("ok", "Consenso email confermato. Grazie: riceverai via email analisi di mercato e "
+                        "aggiornamenti da STIMA360; puoi revocare in qualsiasi momento dal link presente in ogni email."),
     "already_confirmed": ("ok", "Il tuo indirizzo è già confermato."),
     "expired": ("errore", "Il link di conferma è scaduto. Puoi chiederne uno nuovo all'agenzia."),
     "cancelled": ("errore", "Questa richiesta non è più valida."),
@@ -357,7 +358,8 @@ _CONFERME = {
 
 def confirm_result_page(esito: dict[str, Any]) -> str:
     classe, testo = _CONFERME.get(esito["status"], ("errore", NEUTRAL))
-    return _documento("Conferma email", f"<h1>Conferma email</h1>"
+    titolo = "Consenso email confermato" if esito["status"] == "confirmed" else "Conferma email"
+    return _documento(titolo, f"<h1>{escape(titolo)}</h1>"
                       f"<p class=\"{classe}\" data-esito=\"{escape(esito['status'])}\">{escape(testo)}</p>")
 
 

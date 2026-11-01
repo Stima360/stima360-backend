@@ -708,5 +708,32 @@ export function mountCommunications(mount, contactId, { readOnly = false } = {})
     }
   });
 
+  // Una conferma email «Da confermare»: quando il cliente clicca il link, la
+  // scheda si aggiorna da sola (ogni 30 secondi mentre c'e' l'attesa, e al
+  // ritorno sulla pagina), senza schermata di caricamento e senza toccarla
+  // mentre l'operatore ha un modulo aperto. Si spegne quando la scheda non c'e' piu'.
+  async function aggiornaSeInAttesa() {
+    if (!document.body.contains(mount)) { smetti(); return; }
+    if (document.hidden || !mount.querySelector('[data-consent-pending]')) return;
+    if (mount.querySelector('details[open]') || mount.contains(document.activeElement)
+        && document.activeElement !== document.body && document.activeElement.closest('form')) return;
+    try {
+      const stato = await loadCommunications(contactId);
+      if (!document.body.contains(mount) || mount.querySelector('details[open]')) return;
+      mount.innerHTML = renderCommunications(stato);
+      if (readOnly) soloLettura();
+      mountDoNotContact(mount, contactId, { readOnly }).catch(() => {});
+    } catch (_errore) {
+      // un aggiornamento automatico fallito non disturba: riprova al giro dopo
+    }
+  }
+  const orologio = setInterval(aggiornaSeInAttesa, 30000);
+  const alRitorno = () => { if (!document.hidden) aggiornaSeInAttesa(); };
+  document.addEventListener('visibilitychange', alRitorno);
+  function smetti() {
+    clearInterval(orologio);
+    document.removeEventListener('visibilitychange', alRitorno);
+  }
+
   return ridisegna();
 }
