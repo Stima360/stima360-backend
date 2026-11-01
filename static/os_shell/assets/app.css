@@ -1652,34 +1652,81 @@ a.census-unit-main { text-decoration: none; }
   .owner-report-fact { grid-template-columns: 1fr; }
 }
 
-/* BLOCCO-4A: «Messaggi WhatsApp». */
-.messages-page { display: grid; gap: 12px; }
-.messages-notice { font-size: 13px; border-left: 3px solid var(--primary); padding-left: 8px; }
-.messages-layout { display: grid; grid-template-columns: minmax(0, 320px) minmax(0, 1fr); gap: 12px; align-items: start; }
-.messages-list { display: grid; gap: 6px; min-width: 0; }
-.messages-list .btn.messages-conversation { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: start;
-  align-items: start; gap: 2px; text-align: left; width: 100%; height: auto; white-space: normal; }
-.messages-list .btn.messages-conversation.active { outline: 2px solid var(--primary); }
-.messages-message .btn[data-message-link-open] { justify-self: start; }
-.messages-preview { overflow-wrap: anywhere; font-size: 13px; }
-.messages-detail { display: grid; gap: 10px; min-width: 0; }
-.messages-message { border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px; display: grid; gap: 6px; }
-.messages-message-head { display: flex; flex-wrap: wrap; gap: 8px; align-items: baseline; }
-.messages-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
-.messages-links, .messages-hint { margin: 0; font-size: 13px; }
-.messages-link-form { display: grid; gap: 8px; }
-.messages-list .btn.messages-conversation.unread strong { font-weight: 800; }
-.messages-stime { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; font-size: 13px; }
-.messages-stime h4 { margin: 0 0 4px; font-size: 14px; }
-.messages-stime ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
-.messages-stime li, .messages-links a { overflow-wrap: anywhere; }
-.messages-contact { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; }
-.messages-contact select { min-width: 0; max-width: 100%; }
-.messages-message-out { background: #f1f7ee; border-color: #cfe3c4; margin-left: 24px; }
-@media (max-width: 767px) { .messages-message-out { margin-left: 8px; } }
-.messages-field { display: grid; gap: 4px; min-width: 0; }
+/* WhatsApp: la chat (views/messaggi.js). */
+.wa-chat { display: grid; grid-template-columns: minmax(0, 340px) minmax(0, 1fr); height: calc(100vh - 150px); min-height: 420px;
+  border: 1px solid var(--border); border-radius: var(--radius); background: #fff; overflow: hidden; }
+.wa-side { display: grid; grid-template-rows: auto minmax(0, 1fr); border-right: 1px solid var(--border); min-width: 0; }
+.wa-side-head { padding: 12px 12px 8px; display: grid; gap: 8px; border-bottom: 1px solid var(--border); }
+.wa-title { margin: 0; font-size: 18px; }
+.wa-search { width: 100%; box-sizing: border-box; padding: 8px 12px; border: 1px solid var(--border); border-radius: 999px; background: var(--bg); font: inherit; }
+.wa-filters { margin: 0; }
+.wa-list { overflow-y: auto; min-height: 0; }
+.wa-empty, .wa-loading { padding: 16px; }
+.wa-list .btn.wa-item { display: grid; grid-template-columns: 40px minmax(0, 1fr); gap: 10px; align-items: center; width: 100%; height: auto;
+  padding: 10px 12px; border: 0; border-bottom: 1px solid var(--border); border-radius: 0; background: #fff; text-align: left; white-space: normal; }
+.wa-list .btn.wa-item:hover { background: var(--bg); }
+.wa-list .btn.wa-item.active { background: #e8eefc; }
+.wa-avatar { width: 40px; height: 40px; border-radius: 50%; background: #dfe7fb; color: var(--primary); font-weight: 700; display: inline-grid; place-items: center; font-size: 14px; flex: none; }
+.wa-item-body { display: grid; gap: 2px; min-width: 0; }
+.wa-item-top, .wa-item-bottom { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; min-width: 0; }
+.wa-item-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-item-time { font-size: 12px; color: var(--muted); flex: none; }
+.wa-item-preview { font-size: 13px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.wa-item.unread .wa-item-name, .wa-item.unread .wa-item-preview { font-weight: 700; color: inherit; }
+.wa-unread { background: var(--primary); color: #fff; border-radius: 999px; min-width: 20px; height: 20px; padding: 0 6px; font-size: 12px; font-weight: 700; display: inline-grid; place-items: center; flex: none; }
+.wa-dot { width: 8px; height: 8px; border-radius: 50%; background: #d97706; flex: none; }
+.wa-main { display: grid; grid-template-rows: auto auto auto minmax(0, 1fr) auto; min-width: 0; background: var(--bg); }
+.wa-placeholder { grid-row: 1 / -1; display: grid; place-items: center; color: var(--muted); padding: 24px; text-align: center; }
+.wa-head { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: #fff; border-bottom: 1px solid var(--border); min-width: 0; }
+.wa-head .wa-back { display: none; padding: 4px 10px; font-size: 20px; line-height: 1; }
+.wa-head-title { display: grid; min-width: 0; flex: 1; }
+.wa-head-name { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-head-sub { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wa-head-actions { position: relative; display: flex; gap: 6px; align-items: center; flex: none; }
+.wa-head-btn { padding: 6px 10px; }
+.wa-more { font-size: 18px; line-height: 1; padding: 4px 10px; }
+.wa-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 20; background: #fff; border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: 0 8px 24px rgba(15, 23, 42, .12); display: grid; min-width: 220px; padding: 4px; }
+.wa-menu .btn.wa-menu-item { border: 0; background: transparent; text-align: left; justify-content: flex-start; border-radius: 8px; height: auto; padding: 8px 10px; white-space: normal; }
+.wa-menu .btn.wa-menu-item:hover { background: var(--bg); }
+.wa-notice:empty { display: none; }
+.wa-notice { padding: 8px 12px 0; }
+.wa-sheet { background: #fff; border-bottom: 1px solid var(--border); padding: 10px 12px; display: grid; gap: 8px; max-height: 45%; overflow-y: auto; }
+.wa-sheet-section { display: grid; gap: 8px; font-size: 14px; }
+.wa-sheet-section h4 { margin: 0; font-size: 14px; }
+.wa-sheet-section p { margin: 0; }
+.wa-sheet-section select, .wa-sheet-section input { max-width: 100%; min-width: 0; }
+.wa-sheet-list { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
+.wa-sheet-close { justify-self: end; }
+.wa-messages { overflow-y: auto; min-height: 0; padding: 12px 16px; display: flex; flex-direction: column; gap: 4px; }
+.wa-day { align-self: center; font-size: 12px; color: var(--muted); background: #fff; border: 1px solid var(--border); border-radius: 999px; padding: 2px 10px; margin: 8px 0; }
+.wa-bubble { position: relative; max-width: min(72%, 560px); padding: 7px 10px 18px; border-radius: 12px; font-size: 14px; line-height: 1.4; min-width: 0; }
+.wa-bubble-in { align-self: flex-start; background: #fff; border: 1px solid var(--border); border-top-left-radius: 4px; }
+.wa-bubble-out { align-self: flex-end; background: #dbe7ff; border: 1px solid #c5d6fb; border-top-right-radius: 4px; }
+.wa-bubble-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.wa-bubble-kind { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+.wa-bubble-meta { position: absolute; right: 8px; bottom: 3px; font-size: 11px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
+.wa-tick { font-weight: 700; letter-spacing: -2px; }
+.wa-tick.is-read { color: #1a73e8; }
+.wa-tick.is-failed { color: #b91c1c; letter-spacing: 0; }
+.wa-bubble-error { display: block; margin-top: 6px; font-size: 12px; color: #b91c1c; }
+.wa-reply-compact { border-top: 1px solid var(--border); background: #fff; padding: 8px 12px; gap: 6px; }
+.wa-composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.wa-composer textarea { width: 100%; box-sizing: border-box; resize: none; border: 1px solid var(--border); border-radius: 20px; padding: 10px 14px; font: inherit; line-height: 1.3; max-height: 160px; background: var(--bg); }
+.wa-composer .btn.wa-send { width: 42px; height: 42px; border-radius: 50%; padding: 0; font-size: 18px; display: inline-grid; place-items: center; }
+.wa-composer.is-disabled textarea { color: var(--muted); }
+.wa-reply-compact .wa-reply-confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
+.wa-reply-compact .wa-reply-confirm p { margin: 0; }
+.wa-reply-compact .wa-reply-blocks { display: grid; gap: 6px; }
+.wa-reply-compact .wa-reply-window { font-size: 12px; }
 @media (max-width: 767px) {
-  .messages-layout { grid-template-columns: minmax(0, 1fr); }
+  .wa-chat { grid-template-columns: minmax(0, 1fr); border-radius: var(--radius); }
+  .wa-main { display: none; }
+  .wa-chat.is-chat-open .wa-side { display: none; }
+  .wa-chat.is-chat-open .wa-main { display: grid; }
+  .wa-head .wa-back { display: inline-grid; }
+  .wa-bubble { max-width: 86%; }
+  .wa-messages { padding: 10px; }
 }
 
 /* BLOCCO-4B: risposta WhatsApp manuale. */

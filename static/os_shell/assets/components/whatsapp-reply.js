@@ -132,28 +132,35 @@ function replyItem(r, onResume) {
  * `history`: 'all' (predefinito) elenca tutte le risposte nel pannello;
  * 'pending' solo quelle che richiedono attenzione (in attesa, in invio, esito
  * incerto), quando la conversazione le mostra già nella sua cronologia.
+ * `compact`: il compositore da chat (campo in basso e pulsante di invio); gli
+ * avvisi restano solo quando servono all'operatore. `onChange(notice)`: dopo un
+ * invio o una ripresa la vista ricarica la chat, invece del solo pannello.
+ * `recipientName`: il nome mostrato nella conferma.
  */
-export async function mountWhatsappReply(container, { senderPhone, history = 'all' }) {
-  const root = el('div', 'wa-reply');
+export async function mountWhatsappReply(container, { senderPhone, history = 'all', compact = false, onChange = null, recipientName = null }) {
+  const root = el('div', compact ? 'wa-reply wa-reply-compact' : 'wa-reply');
   root.setAttribute('data-wa-reply-panel', '');
   container.appendChild(root);
   let requestId = null;
   let lastText = '';
   let composer = null;   // il compositore attuale, se la risposta è possibile
+  const done = (notice) => (onChange ? onChange(notice) : load(notice));
+  const toName = recipientName || `+${senderPhone}`;
 
   async function load(notice) {
     let st;
     try {
       st = await apiGet(`${API}/${encodeURIComponent(senderPhone)}`);
     } catch (error) {
-      root.replaceChildren(el('h4', null, 'Rispondi su WhatsApp'), el('div', 'error-box', errorMessage(error)));
+      root.replaceChildren(el('div', 'error-box', errorMessage(error)));
       return;
     }
-    root.replaceChildren(el('h4', null, 'Rispondi su WhatsApp'));
+    root.replaceChildren();
+    if (!compact) root.appendChild(el('h4', null, 'Rispondi su WhatsApp'));
     function resumeReply(r, item, resume) {
       resume.hidden = true;
       const box = el('div', 'wa-reply-confirm');
-      box.appendChild(el('p', null, `Confermi l'invio di questa risposta, rimasta in attesa, a +${senderPhone}?`));
+      box.appendChild(el('p', null, `Confermi l'invio di questa risposta, rimasta in attesa, a ${toName}?`));
       const send = button('Conferma invio', 'primary', 'data-wa-reply-resume-confirm');
       const cancel = button('Annulla', 'ghost');
       const actions = el('div', 'agency-actions');
@@ -167,9 +174,9 @@ export async function mountWhatsappReply(container, { senderPhone, history = 'al
         try {
           const out = await apiPost(`${API}/${encodeURIComponent(senderPhone)}/replies/${encodeURIComponent(String(r.id))}/resume`,
             { confirm: true });
-          await load(outcomeNotice(out));
+          await done(outcomeNotice(out));
         } catch (error) {
-          await load({ kind: 'error', text: `Risposta non inviata. ${errorMessage(error)}` });
+          await done({ kind: 'error', text: `Risposta non inviata. ${errorMessage(error)}` });
         }
       });
     }
@@ -178,11 +185,14 @@ export async function mountWhatsappReply(container, { senderPhone, history = 'al
       box.setAttribute('data-wa-reply-notice', '');
       root.appendChild(box);
     }
-    const win = el('p', 'muted wa-reply-window', st.window.open
-      ? `Finestra di risposta aperta fino al ${dateTimeText(st.window.closes_at)} (24 ore dall'ultimo messaggio del cliente).`
-      : `Finestra di risposta chiusa il ${dateTimeText(st.window.closes_at)}.`);
-    win.setAttribute('data-wa-reply-window', st.window.open ? 'open' : 'closed');
-    root.appendChild(win);
+    // La finestra di 24 ore: in chat si dice solo quando è chiusa (il resto è funzionamento normale).
+    if (!compact || !st.window.open) {
+      const win = el('p', 'muted wa-reply-window', st.window.open
+        ? `Finestra di risposta aperta fino al ${dateTimeText(st.window.closes_at)} (24 ore dall'ultimo messaggio del cliente).`
+        : `Finestra di risposta chiusa il ${dateTimeText(st.window.closes_at)}.`);
+      win.setAttribute('data-wa-reply-window', st.window.open ? 'open' : 'closed');
+      root.appendChild(win);
+    }
     if (st.stop.requested) {
       const stop = el('div', 'wa-reply-stop', st.stop.notice);
       stop.setAttribute('data-wa-reply-stop', '');
@@ -201,41 +211,58 @@ export async function mountWhatsappReply(container, { senderPhone, history = 'al
     }
     composer = null;
     if (!st.can_reply) {
-      // Invio non possibile: il pulsante resta visibile ma disabilitato, con il
+      // Invio non possibile: il campo resta visibile ma disabilitato, con il
       // motivo deciso dal server (destinatario non autorizzato, finestra chiusa, ...).
       const blocks = el('div', 'wa-reply-blocks');
       blocks.setAttribute('data-wa-reply-blocks', '');
-      for (const b of st.blocks) {
+      const shown = compact ? st.blocks.slice(0, 1) : st.blocks;
+      for (const b of shown) {
         const line = el('p', 'wa-reply-error', b.message);
         line.setAttribute('data-wa-reply-block', b.code);
         blocks.appendChild(line);
       }
-      const disabled = button('Invia', 'primary', 'data-wa-reply-disabled');
+      const bar = el('div', 'wa-composer is-disabled');
+      const text = el('textarea');
+      text.name = 'wa_reply_text';
+      text.rows = 1;
+      text.disabled = true;
+      text.placeholder = 'Non puoi rispondere a questa chat ora';
+      const disabled = button(compact ? '➤' : 'Invia', 'primary wa-send', 'data-wa-reply-disabled');
       disabled.disabled = true;
       disabled.title = st.blocks.map((b) => b.message).join(' ');
-      blocks.appendChild(disabled);
+      disabled.setAttribute('aria-label', 'Invia');
+      bar.append(text, disabled);
+      blocks.appendChild(bar);
       root.appendChild(blocks);
       return;
     }
     const text = el('textarea');
     text.name = 'wa_reply_text';
-    text.rows = 3;
+    text.rows = compact ? 1 : 3;
     text.maxLength = st.text_max;
     text.value = lastText;
+    text.placeholder = compact ? 'Scrivi un messaggio…' : '';
     const counter = el('span', 'muted wa-reply-counter', `${text.value.length}/${st.text_max}`);
-    const prepare = button('Invia', 'primary', 'data-wa-reply-prepare');
+    const prepare = button(compact ? '➤' : 'Invia', 'primary wa-send', 'data-wa-reply-prepare');
+    prepare.setAttribute('aria-label', 'Invia');
+    prepare.title = 'Invia (ti verrà chiesta una conferma)';
     const confirmBox = el('div', 'wa-reply-confirm');
     confirmBox.hidden = true;
+    const grow = () => { if (compact) { text.style.height = 'auto'; text.style.height = `${Math.min(text.scrollHeight, 160)}px`; } };
     text.addEventListener('input', () => {
       counter.textContent = `${text.value.length}/${st.text_max}`;
       if (text.value !== lastText) { requestId = null; confirmBox.hidden = true; prepare.hidden = false; }
       lastText = text.value;
+      grow();
+    });
+    text.addEventListener('keydown', (e) => {
+      if (compact && e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); prepare.click(); }
     });
     prepare.addEventListener('click', () => {
       if (!text.value.trim()) { text.focus(); return; }
       if (!requestId) requestId = newRequestId();
       confirmBox.replaceChildren(
-        el('p', null, `Confermi l'invio di questo testo a +${senderPhone}? Partirà dal numero WhatsApp dell'agenzia e resterà registrato con il tuo nome.`),
+        el('p', null, compact ? `Inviare a ${toName}?` : `Confermi l'invio di questo testo a ${toName}? Partirà dal numero WhatsApp dell'agenzia e resterà registrato con il tuo nome.`),
       );
       const send = button('Conferma invio', 'primary', 'data-wa-reply-confirm');
       const cancel = button('Annulla', 'ghost', 'data-wa-reply-cancel');
@@ -244,7 +271,7 @@ export async function mountWhatsappReply(container, { senderPhone, history = 'al
       confirmBox.appendChild(actions);
       confirmBox.hidden = false;
       prepare.hidden = true;
-      cancel.addEventListener('click', () => { confirmBox.hidden = true; prepare.hidden = false; });
+      cancel.addEventListener('click', () => { confirmBox.hidden = true; prepare.hidden = false; text.focus(); });
       send.addEventListener('click', async () => {
         send.disabled = true; cancel.disabled = true; text.disabled = true;
         send.textContent = 'Invio in corso…';
@@ -253,16 +280,22 @@ export async function mountWhatsappReply(container, { senderPhone, history = 'al
             { text: text.value, client_request_id: requestId, confirm: true });
           const notice = outcomeNotice(r);
           requestId = null; lastText = '';
-          await load(notice);
+          await done(notice);
         } catch (error) {
           // Stessa chiave: riprovare non manda due volte la stessa risposta.
-          await load({ kind: 'error', text: `Risposta non inviata. ${errorMessage(error)}` });
+          await done({ kind: 'error', text: `Risposta non inviata. ${errorMessage(error)}` });
         }
       });
     });
-    const field = el('label', 'wa-reply-field');
-    field.append(el('span', null, 'Testo della risposta (solo testo)'), text, counter);
-    root.append(field, prepare, confirmBox);
+    if (compact) {
+      const bar = el('div', 'wa-composer');
+      bar.append(text, prepare);
+      root.append(bar, confirmBox);
+    } else {
+      const field = el('label', 'wa-reply-field');
+      field.append(el('span', null, 'Testo della risposta (solo testo)'), text, counter);
+      root.append(field, prepare, confirmBox);
+    }
     composer = { text, counter, prepare, confirmBox, max: st.text_max };
   }
 
