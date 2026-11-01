@@ -368,7 +368,9 @@ def test_13_la_rotta_pubblica_non_e_dietro_l_autenticazione_operatore():
         ("POST", "/api/public/communication/consent/{token}"),
         # SENTINELLA AGGIORNATA DA V3: la guida PDF dell'email 6, solo GET,
         # solo il file approvato e integro (altrimenti 404).
-        ("GET", "/api/public/communication/guida-vendere-casa-2026.pdf")}
+        ("GET", "/api/public/communication/guida-vendere-casa-2026.pdf"),
+        # SENTINELLA AGGIORNATA DA GRAFICA EMAIL V3: il logo delle email.
+        ("GET", "/api/public/communication/logo-stima360.jpg")}
 
 
 # ---------------------------------------------------------------------------

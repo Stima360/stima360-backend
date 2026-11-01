@@ -92,6 +92,9 @@ FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py
                     # multipla dei consensi (quadro + registrazione per piu'
                     # contatti); il nucleo non la importa.
                     "consent_bulk.py",
+                    # SENTINELLA AGGIORNATA DA GRAFICA EMAIL V3: le costanti del
+                    # marchio (logo e sua rotta pubblica). Il nucleo non le importa.
+                    "marchio.py",
                     # FOLLOW-UP FASE B (108): la platea e le regole della
                     # journey sul contatto. Il nucleo non li importa.
                     "audience.py", "followup_rules.py",

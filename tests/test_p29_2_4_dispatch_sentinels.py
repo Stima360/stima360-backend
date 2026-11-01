@@ -458,6 +458,8 @@ def test_N3_la_rotta_e_montata_e_non_e_aperta():
         # SENTINELLA AGGIORNATA DA V3: la guida PDF dell'email 6 (sola
         # lettura, solo il file approvato e integro), sul router pubblico.
         "/api/public/communication/guida-vendere-casa-2026.pdf",
+        # SENTINELLA AGGIORNATA DA GRAFICA EMAIL V3: il logo delle email.
+        "/api/public/communication/logo-stima360.jpg",
         "/api/public/communication/unsubscribe"], percorsi
 
     # Montata con l'ammissione di livello mount degli altri router di tenant.

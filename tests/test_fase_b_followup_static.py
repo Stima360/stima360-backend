@@ -319,7 +319,9 @@ def test_f2_le_rotte_pubbliche_restano_due_e_la_pagina_dice_l_ambito(monkeypatch
         ("POST", "/api/public/communication/consent/{token}"),
         # SENTINELLA AGGIORNATA DA V3: la guida PDF dell'email 6, solo GET,
         # solo il file approvato e integro (altrimenti 404).
-        ("GET", "/api/public/communication/guida-vendere-casa-2026.pdf")}
+        ("GET", "/api/public/communication/guida-vendere-casa-2026.pdf"),
+        # SENTINELLA AGGIORNATA DA GRAFICA EMAIL V3: il logo delle email.
+        ("GET", "/api/public/communication/logo-stima360.jpg")}
     app = FastAPI()
     app.include_router(public_router.router)
     client = TestClient(app)

@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Form, HTTPException, Query, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
-from . import consent_page, guida_pdf, unsubscribe
+from . import consent_page, guida_pdf, marchio, unsubscribe
 
 router = APIRouter(prefix="/api/public/communication", tags=["public-communication"])
 
@@ -180,3 +180,13 @@ def guida_vendere_casa():
         raise HTTPException(status_code=404, detail="Guida non disponibile")
     return FileResponse(guida_pdf.FILE, media_type="application/pdf", filename=guida_pdf.NOME_DOWNLOAD,
                         headers={"Cache-Control": "public, max-age=3600", "X-Content-Type-Options": "nosniff"})
+
+
+@router.get(marchio.LOGO_PERCORSO_RELATIVO)
+def logo_stima360():
+    """Il logo STIMA360 delle email del follow-up: file ufficiale del
+    repository, servito ai client di posta. Nessun dato personale."""
+    if not marchio.LOGO_FILE.is_file():
+        raise HTTPException(status_code=404, detail="Logo non disponibile")
+    return FileResponse(marchio.LOGO_FILE, media_type="image/jpeg",
+                        headers={"Cache-Control": "public, max-age=86400", "X-Content-Type-Options": "nosniff"})

@@ -101,6 +101,9 @@ PUBLIC_BY_DESIGN = {
     # dal link dell'email, senza login. Servita solo se il file nel
     # repository ha l'impronta attesa (`communication.guida_pdf`).
     ("GET", "/api/public/communication/guida-vendere-casa-2026.pdf"),
+    # SENTINELLA AGGIORNATA DA GRAFICA EMAIL V3: il logo STIMA360 delle email
+    # (file del repository, sola lettura, nessun dato personale).
+    ("GET", "/api/public/communication/logo-stima360.jpg"),
     # SENTINELLA AGGIORNATA DA CRON-TECNICO: il giro del cron delle
     # comunicazioni. Non una sessione: un SEGRETO DI SERVIZIO nelle variabili
     # protette di Render, confrontato a tempo costante, nell'intestazione

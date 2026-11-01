@@ -45,7 +45,7 @@ from typing import Any
 
 from database import invia_mail
 
-from . import email_format
+from . import email_brand_v3, email_format
 from .base import (OUTCOME_ACCEPTED, OUTCOME_UNKNOWN, ProviderCapabilities,
                    ProviderResult)
 
@@ -103,7 +103,13 @@ def send(message: dict[str, Any]) -> ProviderResult:
             # con Reply-To e List-Unsubscribe se la riga li porta. Tutto il
             # resto - le email di servizio, i corpi html - passa dal ramo di
             # sempre, con i tre argomenti di sempre.
-            accettata = invia_mail(destinatario, oggetto, email_format.testo_in_html(corpo),
+            # V3 (grafica delle 16 email): per i passi del follow-up l'html e'
+            # quello con il marchio; il testo che viaggia accanto resta il corpo.
+            if email_brand_v3.si_applica(message):
+                html = email_brand_v3.html(message)
+            else:
+                html = email_format.testo_in_html(corpo)
+            accettata = invia_mail(destinatario, oggetto, html,
                                    **email_format.argomenti_di_invio(corpo, metadata))
         else:
             accettata = invia_mail(destinatario, oggetto, corpo)
