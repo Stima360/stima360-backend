@@ -144,6 +144,7 @@ def test_n_manual_whatsapp_reply_and_auto_reply_respect_the_ban(wa, monkeypatch)
     fake = FakeTransport()
     monkeypatch.setenv("WHATSAPP_AUTO_REPLY_MODE", "send")
     monkeypatch.setenv("WHATSAPP_OUTBOUND_MODE", "meta")
+    monkeypatch.setenv("WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS", "*")
     for name, value in (("enabled", lambda: True), ("credentials_present", lambda: True),
                         ("graph_version", lambda: "v-prova"), ("current", lambda: fake)):
         monkeypatch.setattr(transport, name, value)

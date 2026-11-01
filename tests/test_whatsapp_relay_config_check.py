@@ -45,13 +45,31 @@ def test_a_safe_configuration_passes_and_prints_no_value():
     ({"WHATSAPP_INBOUND_ROUTES": f"{SENDER}:2"}, "non il numero di telefono business"),
     ({"WHATSAPP_INBOUND_ROUTES": f"{PHONE_ID}:2,900000000000002:3"}, "esattamente una voce"),
     ({"WHATSAPP_INBOUND_ROUTES": f"{PHONE_ID}:alfa"}, "formato"),
-    ({"WHATSAPP_OUTBOUND_MODE": "meta"}, "risposta manuale"),
+    ({"WHATSAPP_OUTBOUND_MODE": "meta"}, "esattamente un destinatario"),
+    ({"WHATSAPP_OUTBOUND_MODE": "meta", "WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS": "*", "WHATSAPP_TOKEN": "t",
+      "WHATSAPP_GRAPH_VERSION": "v21.0"}, "esattamente un destinatario"),
+    ({"WHATSAPP_OUTBOUND_MODE": "meta", "WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS": "393000000002", "WHATSAPP_TOKEN": "t",
+      "WHATSAPP_GRAPH_VERSION": "v21.0"}, "mittente di prova"),
+    ({"WHATSAPP_OUTBOUND_MODE": "meta", "WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS": "393295674589", "WHATSAPP_TOKEN": "t",
+      "WHATSAPP_GRAPH_VERSION": "v21.0"}, "mittente di prova"),
+    ({"WHATSAPP_OUTBOUND_MODE": "meta", "WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS": SENDER, "WHATSAPP_GRAPH_VERSION": "v21.0"},
+     "WHATSAPP_TOKEN"),
+    ({"WHATSAPP_OUTBOUND_MODE": "meta", "WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS": SENDER, "WHATSAPP_TOKEN": "t"},
+     "WHATSAPP_GRAPH_VERSION"),
+    ({"WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS": "*"}, "non e' *"),
     ({"WHATSAPP_AUTO_REPLY_MODE": "send"}, "risposte automatiche"),
     ({"COMMUNICATION_AUTO_REPLY_TICK": "1"}, "giro"),
 ])
 def test_each_unsafe_or_confused_setting_stops(change, fragment):
     problems, _ = _run({**GOOD, **change})
     assert any(fragment in p for p in problems), problems
+
+
+def test_manual_reply_towards_the_single_test_sender_passes():
+    env = {**GOOD, "WHATSAPP_OUTBOUND_MODE": "meta", "WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS": f"+{SENDER}",
+           "WHATSAPP_TOKEN": "token-sintetico", "WHATSAPP_GRAPH_VERSION": "v21.0"}
+    problems, text = _run(env, expected_phone_number_id=PHONE_ID)
+    assert problems == [] and "risposta manuale: ATTIVA" in text and "token-sintetico" not in text
 
 
 def test_the_estimate_service_is_reported_apart_and_never_decides_the_outcome():

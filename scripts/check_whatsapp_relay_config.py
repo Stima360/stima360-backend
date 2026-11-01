@@ -21,7 +21,9 @@ Tre identita' da non confondere:
 - Phone ID del numero business (`phone_number_id` di Meta): la chiave di
   `WHATSAPP_INBOUND_ROUTES`. Non e' il numero di telefono.
 - mittente di prova autorizzato: UN telefono diverso dal numero business,
-  l'unico in `WHATSAPP_INBOUND_ALLOWED_SENDERS`.
+  l'unico in `WHATSAPP_INBOUND_ALLOWED_SENDERS` e, se la risposta manuale e'
+  attiva (`WHATSAPP_OUTBOUND_MODE=meta`), l'unico in
+  `WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS`.
 """
 from __future__ import annotations
 
@@ -70,9 +72,23 @@ def run(env, *, business=BUSINESS_NUMBER, expected_phone_number_id=None, out=pri
     if expected_phone_number_id:
         need(pid == expected_phone_number_id.strip(), "Phone ID uguale a quello confermato in Meta")
 
-    # --- nessun invio
-    need((env.get("WHATSAPP_OUTBOUND_MODE") or "").strip().lower() != "meta",
-         "WHATSAPP_OUTBOUND_MODE non e' meta (risposta manuale spenta)")
+    # --- invii: risposta manuale SOLO verso il mittente di prova; automatiche spente
+    outbound = (env.get("WHATSAPP_OUTBOUND_MODE") or "").strip().lower()
+    recipients_raw = (env.get("WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS") or "").strip()
+    recipients = [_digits(x) for x in recipients_raw.split(",") if x.strip()]
+    if outbound == "meta":
+        out("INFO risposta manuale: ATTIVA (WHATSAPP_OUTBOUND_MODE=meta)")
+        need(recipients_raw != "*" and len(recipients) == 1,
+             "WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS contiene esattamente un destinatario (mai *)")
+        need(len(recipients) == 1 and recipients[0] == sender and sender != "",
+             "il destinatario autorizzato e' il mittente di prova")
+        need(business not in recipients, "il numero business non e' un destinatario")
+        need(bool((env.get("WHATSAPP_TOKEN") or "").strip()), "WHATSAPP_TOKEN presente")
+        need(bool(re.fullmatch(r"v[1-9][0-9]?\.[0-9]", (env.get("WHATSAPP_GRAPH_VERSION") or "").strip())),
+             "WHATSAPP_GRAPH_VERSION nel formato vNN.N")
+    else:
+        out("INFO risposta manuale: spenta (WHATSAPP_OUTBOUND_MODE assente)")
+        need(not recipients_raw or recipients_raw != "*", "WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS non e' *")
     need((env.get("WHATSAPP_AUTO_REPLY_MODE") or "").strip().lower() != "send",
          "WHATSAPP_AUTO_REPLY_MODE non e' send (risposte automatiche spente)")
     need((env.get("COMMUNICATION_AUTO_REPLY_TICK") or "").strip() != "1",

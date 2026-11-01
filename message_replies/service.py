@@ -10,7 +10,8 @@ Ordine di un invio, per non mandare mai due volte la stessa risposta:
 
     1. controlli: agenzia, visibilita' della conversazione, contatto collegato,
        numero mittente configurato per l'agenzia, finestra di 24 ore,
-       invio attivo sull'ambiente
+       invio attivo sull'ambiente, destinatario nell'allowlist
+       `WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS` (assente = nessun invio)
     2. `enqueue` con chiave di idempotenza dalla richiesta del browser: un
        doppio clic o un reinvio della stessa richiesta trovano il messaggio
        gia' registrato e NON lo rimandano
@@ -66,6 +67,7 @@ from .enums import (
     NOT_RESUMABLE_MESSAGE,
     OUTBOUND_DISABLED_MESSAGE,
     PROVIDER_LABEL,
+    RECIPIENT_NOT_ALLOWED_MESSAGE,
     SENDER_NOT_CONFIGURED_MESSAGE,
     STATUS_LABELS,
     STOP_NOTICE,
@@ -138,6 +140,8 @@ def _conversation(cur, ctx, sender_phone: str) -> dict:
         blocks.append(("CREDENTIALS_MISSING", CREDENTIALS_MISSING_MESSAGE))
     elif not transport_module.graph_version():
         blocks.append(("GRAPH_VERSION_MISSING", GRAPH_VERSION_MISSING_MESSAGE))
+    if not transport_module.recipient_allowed(sender_phone):
+        blocks.append(("RECIPIENT_NOT_ALLOWED", RECIPIENT_NOT_ALLOWED_MESSAGE))
     if agencies != {agency_id}:
         blocks.append(("SENDER_NOT_CONFIGURED", SENDER_NOT_CONFIGURED_MESSAGE))
     if last["contact_id"] is None:
@@ -259,6 +263,8 @@ def _deliver(ctx, sender_phone: str, message: dict) -> None:
     transport = transport_module.current() if reason is None else None
     if reason is None and transport is None:
         reason = "outbound_disabled"
+    if reason is None and not transport_module.recipient_allowed(sender_phone):
+        reason = "recipient_not_allowed"              # porta finale, anche con l'interfaccia aggirata
     if reason is not None:
         communication.finalize_suppressed(ctx, message["id"], token, reason=reason)
         return

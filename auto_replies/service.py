@@ -345,6 +345,8 @@ def _send_time_check(agency_id: int, message: dict, *, now=None) -> tuple[str | 
             return "credentials_missing", None
         if not transport_module.graph_version():
             return "graph_version_missing", None
+        if not transport_module.recipient_allowed(sender):
+            return "recipient_not_allowed", None
         if routing.configured_routes().get(meta.get("phone_number_id") or "") != {agency_id}:
             return "sender_not_configured", None
         inbound = inbound_repository.get_message(cur, agency_id, meta.get("inbound_message_id") or 0)

@@ -89,6 +89,10 @@ def rp(wa, monkeypatch):
     monkeypatch.setenv("WHATSAPP_OUTBOUND_MODE", "meta")
     monkeypatch.setenv("WHATSAPP_TOKEN", "token-sintetico-non-reale")
     monkeypatch.setenv("WHATSAPP_GRAPH_VERSION", "v99.0")          # sintetica, ben formata
+    # Allowlist dei destinatari: qui `*`, perche' ogni prova usa un mittente
+    # sintetico diverso; la restrizione a un numero ha le sue prove
+    # (tests/test_whatsapp_recipient_allowlist_postgres.py).
+    monkeypatch.setenv("WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS", "*")
     monkeypatch.setattr(transport, "current", lambda: fake)
     return {**wa, "fake": fake}
 

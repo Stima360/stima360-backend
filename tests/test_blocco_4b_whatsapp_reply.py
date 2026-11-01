@@ -46,6 +46,13 @@ class FakeSession:
 # adattatore Meta
 # ---------------------------------------------------------------------------
 
+
+@pytest.fixture(autouse=True)
+def _allow_every_recipient(monkeypatch):
+    """L'allowlist dei destinatari (WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS) ha le
+    sue prove; qui si guarda il trasporto, con i numeri sintetici di sempre."""
+    monkeypatch.setenv("WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS", "*")
+
 def test_sending_is_disabled_unless_explicitly_enabled(monkeypatch):
     monkeypatch.delenv("WHATSAPP_OUTBOUND_MODE", raising=False)
     monkeypatch.setenv("WHATSAPP_TOKEN", "x")

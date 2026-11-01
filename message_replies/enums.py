@@ -10,6 +10,13 @@ TOKEN_ENV = "WHATSAPP_TOKEN"
 #: sceglie prima dell'attivazione sulla documentazione ufficiale Meta.
 GRAPH_VERSION_ENV = "WHATSAPP_GRAPH_VERSION"
 GRAPH_VERSION_PATTERN = r"^v[1-9][0-9]?\.[0-9]$"
+#: Allowlist OBBLIGATORIA dei destinatari (numeri interi in formato
+#: internazionale, separati da virgola; `*` = tutti, solo per l'esercizio
+#: ordinario). Assente o vuota: nessun invio, verso nessuno. Vale per la
+#: risposta manuale e per quella automatica, ed e' applicata dal server subito
+#: prima di chiamare Meta: l'interfaccia non puo' aggirarla.
+ALLOWED_RECIPIENTS_ENV = "WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS"
+ALL_RECIPIENTS = "*"
 
 #: Regola della piattaforma (finestra di assistenza clienti): un messaggio
 #: libero, non template, si puo' inviare solo entro 24 ore dall'ultimo
@@ -48,6 +55,9 @@ GRAPH_VERSION_MISSING_MESSAGE = ("La versione dell'API WhatsApp non è configura
 STOP_NOTICE = ("Il cliente ha scritto STOP: ha rinunciato alle comunicazioni promozionali su WhatsApp di questa "
                "agenzia. Non è un consenso a riceverne altre: la risposta è possibile solo perché ha scritto nelle "
                "ultime 24 ore, e deve riguardare soltanto la sua richiesta.")
+
+RECIPIENT_NOT_ALLOWED_MESSAGE = ("Questo numero non è tra i destinatari autorizzati all'invio su questo ambiente: "
+                                 "la risposta non può partire.")
 
 #: BLOCCO-6 (migrazione 124): il contatto ha un divieto totale di contatto.
 DO_NOT_CONTACT_MESSAGE = ("Il contatto ha un divieto di contatto attivo: nessuna comunicazione, nemmeno di servizio, "

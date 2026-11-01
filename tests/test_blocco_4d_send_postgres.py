@@ -74,6 +74,7 @@ def sm(wa, monkeypatch):
     monkeypatch.setattr(transport, "credentials_present", lambda: True)
     monkeypatch.setattr(transport, "graph_version", lambda: "v-prova")
     monkeypatch.setattr(transport, "current", lambda: fake)
+    monkeypatch.setenv("WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS", "*")     # mittenti sintetici diversi a ogni prova
     owner = wa["login"]("owner_a")
     # off -> send: l'attivazione riparte adesso, i messaggi delle prove precedenti restano fuori
     assert owner.put(f"{API}/settings", json={"mode": "off"}).status_code == 200

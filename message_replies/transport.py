@@ -21,6 +21,8 @@ from dataclasses import dataclass
 import requests
 
 from .enums import (
+    ALL_RECIPIENTS,
+    ALLOWED_RECIPIENTS_ENV,
     GRAPH_VERSION_ENV,
     GRAPH_VERSION_PATTERN,
     META_WINDOW_ERROR,
@@ -47,6 +49,26 @@ def credentials_present() -> bool:
     return bool((os.getenv(TOKEN_ENV) or "").strip())
 
 
+def allowed_recipients():
+    """None se la variabile manca o e' vuota (nessun invio); ALL_RECIPIENTS con
+    `*`; altrimenti l'insieme dei numeri (solo cifre, 6-15)."""
+    raw = (os.getenv(ALLOWED_RECIPIENTS_ENV) or "").strip()
+    if not raw:
+        return None
+    if raw == ALL_RECIPIENTS:
+        return ALL_RECIPIENTS
+    out = frozenset(d for d in (re.sub(r"\D", "", x) for x in raw.split(",")) if 6 <= len(d) <= 15)
+    return out or None
+
+
+def recipient_allowed(to: str | None) -> bool:
+    """La porta finale: vale per QUALSIASI invio, da qualsiasi percorso."""
+    allowed = allowed_recipients()
+    if allowed is None or not to:
+        return False
+    return allowed == ALL_RECIPIENTS or re.sub(r"\D", "", to) in allowed
+
+
 def graph_version() -> str | None:
     """La versione dell'API, solo se dichiarata esplicitamente e ben formata (es. `v21.0`)."""
     value = (os.getenv(GRAPH_VERSION_ENV) or "").strip()
@@ -64,6 +86,10 @@ class MetaCloudTransport:
         self._session = session or requests
 
     def send(self, phone_number_id: str, to: str, text: str) -> SendResult:
+        if not recipient_allowed(to):
+            # Rifiuto certo, senza aprire alcuna connessione: il destinatario non
+            # e' in WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS (o l'allowlist manca).
+            return SendResult("rejected", error_code="provider_rejected", error_detail="recipient_not_allowed")
         url = f"https://graph.facebook.com/{self._version}/{phone_number_id}/messages"
         payload = {"messaging_product": "whatsapp", "recipient_type": "individual", "to": to,
                    "type": "text", "text": {"preview_url": False, "body": text}}
