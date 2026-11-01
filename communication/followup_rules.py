@@ -16,9 +16,8 @@ Le regole (decisioni del proprietario, Fase B):
 
   appuntamento aperto (requested/scheduled/confirmed, QUALUNQUE tipo:
      anche una visita da acquirente e' una relazione viva)     -> pausa
-     finche' l'orario non e' passato; passato e mai chiuso: richiesta
-     (requested) fino a +2 giorni come un mancato, fissato/confermato
-     fino a +14 giorni come uno svolto (BLOCCO 1)
+     finche' l'orario non e' passato; passato e mai chiuso NON sospende
+     piu' (decisione del titolare): la sequenza riprende dal calendario
   appuntamento svolto                        -> pausa fino a +14 giorni
   appuntamento annullato o mancato           -> pausa fino a  +2 giorni
   consulenza richiesta dal portale           -> pausa fino a +14 giorni
@@ -92,16 +91,13 @@ def pause_state(cur, agency_id: int, contact_id: int, now: datetime) -> tuple[st
                 ORDER BY a.id""",
             (agency_id, contact_id, contact_id))
         for a in cur.fetchall():
-            if a["status"] in _STATI_APERTI and (a["end_at"] is None or a["end_at"] > now):
-                candidati.append((PAUSED_BY_APPOINTMENT, None, f"appointment:{a['id']}"))
-            elif a["status"] in _STATI_APERTI:
-                # BLOCCO 1: aperto ma con l'orario gia' passato, mai chiuso. Non e'
-                # piu' una relazione viva: una richiesta mai confermata vale come
-                # mancata (+2 giorni); uno fissato/confermato e non chiuso puo'
-                # essersi svolto, quindi la regola piu' prudente (+14 giorni).
-                attesa = DOPO_APPUNTAMENTO_ANNULLATO if a["status"] == "requested" else DOPO_APPUNTAMENTO_SVOLTO
-                candidati.append((PAUSED_BY_APPOINTMENT, a["end_at"] + attesa,
-                                  f"appointment:{a['id']}:{a['status']}:expired"))
+            if a["status"] in _STATI_APERTI:
+                # Aperto: sospende solo finche' l'orario non e' passato. Passato
+                # e mai chiuso (richiesta mai confermata, fissato mai esitato)
+                # non e' una relazione viva e NON tiene ferma la sequenza
+                # (decisione del titolare): resta nel CRM com'e', da chiudere.
+                if a["end_at"] > now:
+                    candidati.append((PAUSED_BY_APPOINTMENT, None, f"appointment:{a['id']}"))
             elif a["status"] == "completed":
                 fine = max(x for x in (a["end_at"], a["completed_at"]) if x is not None)
                 candidati.append((PAUSED_BY_APPOINTMENT, fine + DOPO_APPUNTAMENTO_SVOLTO,
