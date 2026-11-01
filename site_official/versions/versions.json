@@ -1,0 +1,33 @@
+{
+  "_doc": "C3.5 - le versioni UFFICIALI dei testi del sito, conservate lato server (pacchetto site_official). Il backend conserva testo della casella e impronta della privacy mandati dal browser SOLO se coincidono con una versione qui con accepted=true; ogni file e' verificato con la sua impronta.",
+  "marketing_checkbox": [
+    {
+      "version": "casella-marketing-1",
+      "text": "Acconsento a ricevere analisi di mercato e aggiornamenti da Stima360 tramite email e WhatsApp. (Facoltativo e revocabile in qualsiasi momento)",
+      "channels": [
+        "email",
+        "whatsapp"
+      ],
+      "source": "dati_personali-283b4564.html",
+      "source_sha256": "283b4564fb2e4d8432a238726e9610180441ddf0aa4501f3356103ab8d4ea7d6",
+      "accepted": true,
+      "note": "casella facoltativa del modulo di valutazione; copia della pagina dati_personali.html del sito (GET 07/10/2026, identica all'originale ricevuto), conservata qui"
+    }
+  ],
+  "privacy": [
+    {
+      "version": "privacy-d615e05d",
+      "file": "privacy-d615e05d.html",
+      "sha256": "d615e05d94bac3816b089c077b6b7249c8d43f5957b48011cff0f06cb8b75d15",
+      "accepted": false,
+      "note": "versione ricevuta dal titolare il 24/10/2026 (privacy.zip); il marketing cita anche il telefono, non coerente con la casella: conservata solo come documentazione storica"
+    },
+    {
+      "version": "privacy-675f0724",
+      "file": "privacy-675f0724.html",
+      "sha256": "675f07248319b51842be988167bf244d4a93a3d97c3b4a98fd91d5495c38b005",
+      "accepted": true,
+      "note": "C3.5: allineata alla casella, marketing solo via email e WhatsApp; unica differenza dalla precedente in privacy.patch"
+    }
+  ]
+}

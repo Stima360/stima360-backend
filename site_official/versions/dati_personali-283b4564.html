@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <script>
+  !function(f,b,e,v,n,t,s)
+  {if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+  n.callMethod.apply(n,arguments):n.queue.push(arguments)};
+  if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+  n.queue=[];t=b.createElement(e);t.async=!0;
+  t.src=v;s=b.getElementsByTagName(e)[0];
+  s.parentNode.insertBefore(t,s)}(window, document,'script',
+  'https://connect.facebook.net/en_US/fbevents.js');
+  fbq('init', '1458312815299195');
+  fbq('track', 'PageView');
+  </script>
+  <noscript><img height="1" width="1" style="display:none" src="https://www.facebook.com/tr?id=1458312815299195&ev=PageView&noscript=1"/></noscript>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700;800&display=swap');
+
+    body {
+      font-family: 'Montserrat', sans-serif;
+      background: #fff;
+      margin: 0;
+      color: #2a2a2a;
+      overflow-x: hidden;
+    }
+
+    @keyframes moveClouds {
+      0%   { transform: translateX(0); }
+      50%  { transform: translateX(-30%); }
+      100% { transform: translateX(0); }
+    }
+
+    body::before { 
+      content: "";
+      position: fixed;
+      top: -100px;
+      left: 0;
+      width: 5000px;
+      height: 300px;
+      background: url("nuvole.png") repeat-x;
+      background-size: contain;
+      opacity: 0.4;
+      z-index: -1;
+      animation: moveClouds 50s ease-in-out infinite;
+    }
+
+    body::after {
+      content: "";
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 1000px;
+      background: linear-gradient(
+        to bottom,
+        rgba(0,255,213,0.2) 0%,
+        rgba(66,133,255,0.15) 40%,
+        rgba(186,0,255,0.12) 70%,
+        rgba(255,255,255,0) 100%
+      );
+      z-index: -2;
+      animation: glowShift 25s ease-in-out infinite alternate;
+      pointer-events: none;
+    }
+
+    @keyframes glowShift {
+      0%   { transform: translateY(0) scale(1); opacity: 0.5; }
+      100% { transform: translateY(-20px) scale(1.1); opacity: 0.7; }
+    }
+
+    .container {
+      width: 94%;
+      max-width: 750px;
+      margin: 50px auto;
+      background: rgba(255, 255, 255, 0.95);
+      backdrop-filter: blur(15px);
+      border-radius: 20px;
+      box-shadow: 0 8px 40px rgba(0,0,0,0.08);
+      padding: 45px 35px;
+      position: relative;
+      z-index: 10;
+    }
+
+    .logo {
+      display: block;
+      margin: 0 auto 30px;
+      width: 100%;
+      max-width: 600px;
+      min-width: 240px;
+      height: auto;
+    }
+
+    h2 {
+      text-align: center;
+      margin-bottom: 20px;
+      color: #112a63;
+      font-size: 1.8rem;
+      font-weight: 800;
+    }
+
+    .subtitle {
+      text-align: center;
+      color: #66708c;
+      font-size: 1.1rem;
+      margin-bottom: 30px;
+      margin-top: -15px;
+    }
+
+    /* === PROGRESS BAR === */
+    .form-progress-container {
+      margin-bottom: 30px;
+      text-align: center;
+    }
+    .form-progress-text {
+      font-size: 1.1rem;
+      color: #1ca6a0;
+      font-weight: 800;
+      margin-bottom: 8px;
+    }
+    .form-progress-track {
+      width: 100%;
+      height: 10px;
+      background: #eef8f6;
+      border-radius: 10px;
+      overflow: hidden;
+    }
+    .form-progress-fill {
+      width: 90%;
+      height: 100%;
+      background: linear-gradient(135deg, #1ca6a0, #13958f);
+      border-radius: 10px;
+      animation: fillBar 1s ease-out forwards;
+    }
+    @keyframes fillBar {
+      from { width: 50%; }
+      to { width: 90%; }
+    }
+
+    /* === FORM STYLES === */
+    form {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .form-row {
+      display: flex;
+      gap: 15px;
+    }
+    
+    .form-group {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    label {
+      font-weight: 700;
+      color: #112a63;
+      font-size: 1.1rem;
+      margin-bottom: 8px;
+    }
+
+    input {
+      padding: 16px 20px;
+      border-radius: 12px;
+      border: 2px solid #dfe6eb;
+      font-size: 1.15rem;
+      background: #fafafa;
+      transition: all .25s ease-in-out;
+      font-family: 'Montserrat', sans-serif;
+    }
+
+    input:focus {
+      border-color: #1ca6a0;
+      background: #fff;
+      box-shadow: 0 0 0 4px rgba(28, 166, 160, 0.15);
+      outline: none;
+    }
+
+    /* === ACCORDION RIEPILOGO === */
+    .riepilogo-wrapper {
+      background: #f8fafc;
+      border: 2px solid #e2e8f0;
+      border-radius: 14px;
+      margin-bottom: 25px;
+      overflow: hidden;
+    }
+    .riepilogo-header {
+      padding: 16px 20px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      cursor: pointer;
+      font-weight: 700;
+      color: #112a63;
+      background: #fff;
+    }
+    .riepilogo-header:hover {
+      background: #f1f5f9;
+    }
+    .riepilogo-content {
+      padding: 0 20px;
+      max-height: 0;
+      overflow: hidden;
+      transition: max-height 0.4s ease;
+    }
+    .riepilogo-content.open {
+      max-height: 1000px;
+      padding: 20px;
+      border-top: 1px solid #e2e8f0;
+    }
+    .icon-arrow {
+      transition: transform 0.3s ease;
+    }
+    .open + .icon-arrow {
+      transform: rotate(180deg);
+    }
+
+    /* 🌈 PULSANTE STIMA360 */
+    button[type="submit"]{
+      position: relative;
+      overflow: hidden;
+      z-index: 1;
+      background: linear-gradient(135deg, #0028a6,#2d1f8a,#2a0064, #009c78,#007f8f,#ffd500, #ff7a00,#ff0000,#1faa2c);
+      background-size: 300% 300%;
+      animation: rainbowShift 6s ease infinite;
+      color: #fff;
+      font-weight: 800;
+      border: none;
+      border-radius: 14px;
+      padding: 22px;
+      font-size: 1.5rem;
+      cursor: pointer;
+      box-shadow: 0 1px 1px rgba(255,255,255,0.65), 0 8px 25px rgba(0,0,0,0.18);
+      transition: transform .25s ease, box-shadow .25s ease;
+      margin-top: 10px;
+    }
+
+    button[type="submit"]:hover{
+      transform: translateY(-2px);
+      box-shadow: 0 12px 32px rgba(0,0,0,0.25);
+    }
+
+    button[type="submit"]:active{
+      transform: scale(0.97);
+    }
+
+    button[type="submit"]::before{
+      content:""; position:absolute; top:6px; left:10px; right:10px; height:45%; border-radius:10px;
+      background: linear-gradient(to bottom, rgba(255,255,255,0.85), rgba(255,255,255,0.15), rgba(255,255,255,0));
+      opacity:.9; pointer-events:none; z-index:2;
+    }
+
+    button[type="submit"]::after{
+      content:""; position:absolute; inset:-8px; border-radius:14px;
+      background: radial-gradient(circle, rgba(255,255,255,0.55), rgba(255,255,255,0) 70%);
+      filter: blur(8px); opacity:.75; pointer-events:none; z-index:-1;
+    }
+
+    @keyframes rainbowShift{
+      0%{background-position:0% 50%}
+      50%{background-position:100% 50%}
+      100%{background-position:0% 50%}
+    }
+
+    .privacy {
+      display: flex;
+      align-items: flex-start;
+      font-size: 0.95rem;
+      gap: 12px;
+      line-height: 1.4;
+      background: #f8fafc;
+      padding: 15px;
+      border-radius: 12px;
+      border: 1px solid #e2e8f0;
+    }
+    
+    .privacy input[type="checkbox"] {
+      width: 22px;
+      height: 22px;
+      margin-top: 2px;
+      cursor: pointer;
+    }
+
+    .privacy a {
+      color: #1ca6a0;
+      font-weight: 600;
+      text-decoration: none;
+    }
+
+    #fascia-stima {
+      display: none;
+      margin-top: 24px;
+      padding: 22px;
+      background: #e0f8ed;
+      border-radius: 18px;
+      text-align: center;
+      font-size: 1.25rem;
+      color: #19546a;
+      font-weight: bold;
+      box-shadow: 0 2px 10px #0001;
+    }
+
+    /* === TRUST BADGES MOBILE === */
+    .mobile-trust-badges {
+      display: none;
+      flex-direction: column;
+      gap: 10px;
+      margin-bottom: 25px;
+    }
+    .badge-item {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: #eef8f6;
+      color: #13958f;
+      padding: 12px;
+      border-radius: 12px;
+      font-weight: 700;
+      font-size: 0.95rem;
+    }
+
+    /* === SIDEBAR DESKTOP === */
+    .side-info {
+      position: fixed;
+      top: 50%;
+      left: 40px;
+      transform: translateY(-50%);
+      width: 320px;
+      display: flex;
+      flex-direction: column;
+      gap: 25px;
+      z-index: 20;
+    }
+
+    .privacy-box, .people-box {
+      background: #0e0e0e;
+      border-radius: 20px;
+      padding: 26px;
+      box-shadow: 0 0 15px rgba(0, 255, 213, 0.4);
+      text-align: center;
+    }
+
+    .privacy-box {
+      color: #00ffd5;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      font-size: 1.1rem;
+    }
+    .privacy-box svg { width: 42px; height: 42px; fill: #00ffd5; }
+    .people-box {
+      color: #4285ff;
+      font-weight: 600;
+      font-size: 1.2rem;
+      box-shadow: 0 0 15px rgba(66, 133, 255, 0.4);
+    }
+    .people-box #cntNum { font-size: 2.8rem; line-height: 1.1; }
+
+    #arcobaleno-bg {
+      position: fixed; bottom: 0; right: 0; width: 200px; height: auto; z-index: -1; opacity: 0.9; pointer-events: none;
+    }
+
+    .cloud-n {
+      position: absolute; width: 300px; height: 300px; background-size: contain; background-repeat: no-repeat; opacity: 0.85; animation: floatN 22s ease-in-out infinite; pointer-events: none; z-index: -1;
+    }
+    .cx1 { top: 10%; left: 15%; width: 260px; height: 260px; background-image: url("cloud/cloud1.png"); animation: floatN 26s ease-in-out infinite; }
+    .cx2 { top: 55%; left: 65%; width: 300px; height: 300px; background-image: url("cloud/cloud2.png"); animation: floatN 30s ease-in-out infinite; }
+    .cx3 { top: 65%; left: 25%; width: 280px; height: 280px; background-image: url("cloud/cloud3.png"); animation: floatN 32s ease-in-out infinite; }
+    .cx4 { top: 18%; left: 85%; width: 240px; height: 240px; background-image: url("cloud/cloud4.png"); animation: floatN 20s ease-in-out infinite; }
+
+    @keyframes floatN {
+      0%   { transform: translate(0, 0); }
+      30%  { transform: translate(30px, -20px); }
+      60%  { transform: translate(-40px, -10px); }
+      100% { transform: translate(0, 0); }
+    }
+
+    /* === RESPONSIVE === */
+    @media (max-width: 700px) {
+      .side-info { display: none; }
+      .container { max-width: 95vw; padding: 30px 20px; margin: 20px auto;}
+      .form-row { flex-direction: column; gap: 20px; }
+      .mobile-trust-badges { display: flex; }
+      body.mobile::before, body.mobile .cloud-n, body.mobile #arcobaleno-bg { display: none !important; content: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="cloud-n c1"></div> <div class="cloud-n c2"></div> <div class="cloud-n c3"></div> <div class="cloud-n c4"></div> <div class="cloud-n c5"></div>
+  <div class="cloud-n cx1"></div> <div class="cloud-n cx2"></div> <div class="cloud-n cx3"></div> <div class="cloud-n cx4"></div>
+
+  <aside class="side-info">
+    <div class="privacy-box">
+      <svg viewBox="0 0 24 24"><path d="M12 2a5 5 0 0 0-5 5v3H5v12h14V10h-2V7a5 5 0 0 0-5-5Zm-3 5a3 3 0 0 1 6 0v3H9V7Zm3 14a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z"/></svg>
+      <span>I tuoi dati sono <br>protetti al 100 %</span>
+    </div>
+
+    <div class="people-box">
+      <span id="cntNum">0</span><br>
+      persone hanno già<br>ricevuto la stima oggi
+    </div>
+  </aside>
+
+  <div class="container">
+    <img src="3.png" alt="Logo Stima360" class="logo" />
+    
+    <div class="form-progress-container">
+      <div class="form-progress-text">Quasi finito - 90% Completato!</div>
+      <div class="form-progress-track">
+        <div class="form-progress-fill"></div>
+      </div>
+    </div>
+
+    <h2>Ottieni il Valore della tua Casa</h2>
+    <p class="subtitle">Inserisci i tuoi contatti per ricevere subito la valutazione.</p>
+
+    <div class="mobile-trust-badges">
+      <div class="badge-item">
+        <svg style="width: 20px; fill: #13958f;" viewBox="0 0 24 24"><path d="M12 2a5 5 0 0 0-5 5v3H5v12h14V10h-2V7a5 5 0 0 0-5-5Zm-3 5a3 3 0 0 1 6 0v3H9V7Zm3 14a3 3 0 1 1 0-6 3 3 0 0 1 0 6Z"/></svg>
+        Dati protetti e sicuri al 100%
+      </div>
+    </div>
+
+    <div class="riepilogo-wrapper">
+      <div class="riepilogo-header" id="riepilogoToggle">
+        <span>🏡 Dati della tua casa</span>
+        <span class="icon-arrow" style="font-size: 1.2rem;">▼</span>
+      </div>
+      <div class="riepilogo-content" id="riepilogoContent">
+        <div id="riepilogoGrid" style="display:grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap:10px;"></div>
+      </div>
+    </div>
+    
+    <form id="personalForm">
+      
+      <div class="form-row">
+        <div class="form-group">
+          <label for="nome">Nome</label>
+          <input type="text" id="nome" name="nome" placeholder="es. Mario" required />
+        </div>
+        <div class="form-group">
+          <label for="cognome">Cognome</label>
+          <input type="text" id="cognome" name="cognome" placeholder="es. Rossi" required />
+        </div>
+      </div>
+
+      <div class="form-group">
+        <label for="email">Email</label>
+        <input type="email" id="email" name="email" placeholder="La tua migliore email" required />
+      </div>
+
+      <div class="form-group">
+        <label for="telefono">Cellulare (per l'invio via WhatsApp)</label>
+        <input type="tel" id="telefono" name="telefono" placeholder="es. 333 1234567" pattern="[0-9\s+]{9,15}" required />
+      </div>
+
+      <div class="privacy">
+        <input type="checkbox" id="privacy" name="privacy" required />
+        <label for="privacy">
+          Accetto la <a href="privacy.html" target="_blank">Privacy Policy</a>, i <a href="termini.html" target="_blank">Termini d’Uso</a> e le <a href="eliminazionedati.html" target="_blank">Istruzioni eliminazione dati</a>.
+        </label>
+      </div>
+        
+      <div class="privacy">
+        <input type="checkbox" id="marketing" name="marketing" />
+        <label for="marketing">
+          Acconsento a ricevere analisi di mercato e aggiornamenti da <strong>Stima360</strong> tramite email e WhatsApp.
+          <br><span style="font-size:0.85em; opacity:0.8; font-weight: 500;">(Facoltativo e revocabile in qualsiasi momento)</span>
+        </label>
+      </div>
+
+      <button type="submit">Calcola la mia Stima ORA</button>
+    </form>
+
+    <div id="fascia-stima">
+      <span id="testo-stima">Sto calcolando la tua stima <span class="puntini">...</span></span>
+    </div>
+  </div>
+
+  <img src="arcobaleno2.png" id="arcobaleno-bg" alt="arcobaleno" />
+
+  <script>
+  // --------------------------
+  // SCRIPT TOGGLE RIEPILOGO
+  // --------------------------
+  document.getElementById('riepilogoToggle').addEventListener('click', function() {
+    const content = document.getElementById('riepilogoContent');
+    const header = this;
+    content.classList.toggle('open');
+    if(content.classList.contains('open')) {
+      header.querySelector('.icon-arrow').style.transform = 'rotate(180deg)';
+    } else {
+      header.querySelector('.icon-arrow').style.transform = 'rotate(0deg)';
+    }
+  });
+
+  // --------------------------
+  // LOGICA ORIGINALE JS
+  // --------------------------
+  function getQueryParams() {
+    const params = {};
+    window.location.search.replace(/[?&]+([^=&]+)=([^&]*)/gi, (str,key,value) => {
+      params[key] = decodeURIComponent(value);
+    });
+    return params;
+  }
+  
+  const dati = getQueryParams();
+  
+  (function(){
+    const p = new URLSearchParams(location.search);
+    const get = (k) => dati[k] || p.get(k) || "";
+  
+    const righe = [
+      ["Comune", get("comune")],
+      ["Micro-zona", get("microzona")],
+      ["Indirizzo", [get("via"), get("civico")].filter(Boolean).join(" ")],
+      ["Tipologia", get("tipologia")],
+      ["Superficie", get("mq") ? get("mq") + " mq" : ""],
+      ["Piano", get("piano")],
+      ["Locali", get("locali")],
+      ["Bagni", get("bagni")],
+      ["Ascensore", get("ascensore")],
+      ["Anno", get("anno")],
+      ["Stato", get("stato")]
+    ];
+        
+    const hasVista = get("vistaMareYN");
+    const vistaDett = get("vistaMareDettaglio");
+    if (hasVista === "si") {
+      let testo = "";
+      switch(vistaDett) {
+        case "panoramica": testo = "Vista mare panoramica"; break;
+        case "parziale": testo = "Vista mare parziale"; break;
+        case "scarsa": testo = "Vista mare scarsa"; break;
+        default: testo = "Vista mare";
+      }
+      righe.push(["Vista", testo]);
+    } else if (hasVista === "no") {
+      righe.push(["Vista mare", "No"]);
+    }
+
+    const sel = (get("pertinenze") || "").split(",").map(s=>s.trim()).filter(Boolean);
+    const add = (label, val) => righe.push([label, val || "Sì"]);
+  
+    if (sel.includes("Giardino")) add("Giardino", get("mqGiardino") && `${get("mqGiardino")} mq`);
+    if (sel.includes("Garage")) add("Garage", get("mqGarage") && `${get("mqGarage")} mq`);
+    if (sel.includes("Posto Auto")) add("Posto Auto", get("mqPostoAuto") && `${get("mqPostoAuto")} mq`);
+    if (sel.includes("Cantina")) add("Cantina", get("mqCantina") && `${get("mqCantina")} mq`);
+    if (sel.includes("Soffitta")) add("Soffitta", get("mqSoffitta") && `${get("mqSoffitta")} mq`);
+    if (sel.includes("Taverna")) add("Taverna", get("mqTaverna") && `${get("mqTaverna")} mq`);
+    if (sel.includes("Balconi")) add("Balconi", get("numBalconi") && `${get("numBalconi")} balconi`);
+    if (sel.includes("Terrazzo")) add("Terrazzo", get("mqTerrazzo") && `${get("mqTerrazzo")} mq`);
+    if (sel.includes("Altro")) add("Altro", get("altroDescrizione"));
+  
+    const box = document.getElementById("riepilogoGrid");
+    if (!box) return;
+  
+    box.innerHTML = "";
+    righe.forEach(([k,v])=>{
+      if(!v || v===" ") return; // Non mostrare righe vuote
+      const d = document.createElement("div");
+      d.style.padding = "10px";
+      d.style.background = "#fff";
+      d.style.border = "1px solid #e2e8f0";
+      d.style.borderRadius = "10px";
+      d.style.fontSize = "0.95rem";
+      d.innerHTML = `<span style="color:#64748b; font-size:0.85em; display:block; margin-bottom:3px;">${k}</span><strong style="color:#1e293b;">${v}</strong>`;
+      box.appendChild(d);
+    });
+  })();
+  
+  function vaiStimaDettagliata() {
+    dati.nome = document.getElementById('nome').value;
+    dati.cognome = document.getElementById('cognome').value;
+    dati.email = document.getElementById('email').value;
+    dati.telefono = document.getElementById('telefono').value;
+  
+    const params = new URLSearchParams(dati).toString();
+    window.location.href = 'stima_dettagliata.html?' + params;
+  }
+  
+  let submitCount = 0;
+  const MAX_SUBMIT = 2;
+  
+  function isValidEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(email);
+  }
+  
+  function isValidPhone(phone) {
+    const clean = phone.replace(/[^\d+]/g, "");
+    return /^(\+?\d{1,3})?\d{8,13}$/.test(clean);
+  }
+  
+  document.getElementById('personalForm').addEventListener('submit', async function(event) {
+    event.preventDefault();
+    submitCount++;
+    
+    if (submitCount > MAX_SUBMIT) {
+      alert("Hai già inviato la richiesta.\nPer motivi di sicurezza puoi effettuare massimo 2 invii per pagina.\n\n🔄 Ricarica la pagina se necessario.");
+      return;
+    }
+
+    if (!document.getElementById('privacy').checked) {
+      alert("Devi accettare la privacy!");
+      return;
+    }
+    const email = document.getElementById('email').value.trim();
+    const telefono = document.getElementById('telefono').value.trim();
+    
+    if (!isValidEmail(email)) {
+      alert("Inserisci un indirizzo email valido.");
+      document.getElementById('email').focus();
+      return;
+    }
+    
+    if (!isValidPhone(telefono)) {
+      alert("Inserisci un numero di telefono valido.");
+      document.getElementById('telefono').focus();
+      return;
+    }
+
+    const datiFinali = {
+      ...dati,
+      nome: document.getElementById('nome').value.trim(),
+      cognome: document.getElementById('cognome').value.trim(),
+      email: document.getElementById('email').value.trim(), 
+      telefono: document.getElementById('telefono').value.trim(),
+      consenso_marketing: document.getElementById("marketing").checked,
+      vistaMareYN: dati.vistaMareYN || "",
+      vistaMareDettaglio: dati.vistaMareDettaglio || "",
+      barrieraTipo: dati.barrieraTipo || "",
+      posizioneMare: dati.posizioneMare || "",
+      distanzaMare: dati.distanzaMare || "",
+      altroDescrizione: dati.altroDescrizione || "",
+      pertinenze: dati.pertinenze || "",
+      mqCantina: dati.mqCantina || "",
+      mqPostoAuto: dati.mqPostoAuto || "",
+      mqGarage: dati.mqGarage || "",
+      mqGiardino: dati.mqGiardino || "",
+      mqTaverna: dati.mqTaverna || "",
+      mqSoffitta: dati.mqSoffitta || "",
+      mqTerrazzo: dati.mqTerrazzo || "",
+      numBalconi: dati.numBalconi || ""
+    };
+
+    const urlStimaDettagliata = 'https://www.stima360.it/stima_dettagliata.html?' + new URLSearchParams(datiFinali).toString();
+
+    const fascia = document.getElementById('fascia-stima');
+    const testoStima = document.getElementById('testo-stima');
+  
+    fascia.style.display = "block";
+    testoStima.innerHTML = "Sto calcolando la tua stima <span class='puntini'>...</span>";
+    document.querySelector("button[type='submit']").style.display = "none"; // Nasconde il pulsante per evitare doppi click
+  
+    let puntini = document.querySelector(".puntini");
+    let dots = 0;
+    let anim = setInterval(() => { dots = (dots + 1) % 4; puntini.textContent = '.'.repeat(dots); }, 320);
+  
+    try {
+      localStorage.setItem('stimaBase', JSON.stringify(datiFinali));
+  
+      const risposta = await fetch('https://stima360-backend.onrender.com/api/salva_stima', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(datiFinali)
+      });
+  
+      clearInterval(anim);
+  
+      if (!risposta.ok) {
+        testoStima.textContent = "Errore nell'invio, riprova!";
+        setTimeout(() => location.reload(), 1800);
+        return;
+      }
+
+      if (window.fbq) {
+        fbq('track', 'Lead');
+      }
+
+      let resJson = {};
+      try { resJson = await risposta.json(); } catch (_) {}
+
+      const stimaUuid = dati.id || dati.stima_uuid || "";
+      datiFinali.stima_uuid = stimaUuid;
+      datiFinali.id = resJson.id;
+
+      if (resJson?.pdf_url) {
+        const pdfUrl = resJson.pdf_url.trim();
+        const loaderUrl = "https://www.stima360.it/pdf_redirect.html?" + new URLSearchParams({ pdf: pdfUrl }).toString();
+        setTimeout(() => { window.location.href = loaderUrl; }, 1200);
+      }
+  
+      setTimeout(() => {
+        const prezzo = Number(resJson.price_exact || 0);
+        const eurMq  = Number(resJson.eur_mq_finale || 0);
+        const itMoney0 = v => v.toLocaleString('it-IT',{style:'currency',currency:'EUR',maximumFractionDigits:0});
+        const itMoney2 = v => v.toLocaleString('it-IT',{style:'currency',currency:'EUR',minimumFractionDigits:2,maximumFractionDigits:2});
+  
+        testoStima.innerHTML = `
+          ✅ Valore totale: <span style="color:#168364;font-size:1.35em;">${itMoney0(prezzo)}</span><br>
+          <span style="font-size:.95em;">€/mq finale: <b>${itMoney2(eurMq)}</b></span><br>
+          <span style="font-size:.93em;">📍 ${dati.via || ''} ${dati.civico || ''}, ${dati.comune || ''}</span>
+          <br><br><span style="font-size:.98em;">Ti arriverà subito una mail e un WhatsApp</span>
+        `;
+      }, 900);
+  
+} catch (e) {
+      clearInterval(anim);
+      console.error("Errore JS rilevato:", e);
+      
+      // Invece di bloccare tutto per un falso allarme, mostriamo comunque il successo se l'API ha risposto
+      testoStima.innerHTML = `
+          ✅ Stima generata e inviata!<br>
+          <span style="font-size:.98em;">Ti abbiamo appena inviato un'email e un WhatsApp con il tuo Report Completo.</span>
+      `;
+      
+      // Opzionale: de-commenta la riga sotto se vuoi vedere l'errore esatto a schermo per investigare
+      // testoStima.innerHTML += `<br><small style="color:red;">(Dettaglio: ${e.message})</small>`;
+    }
+  });
+  
+  // --------------------------
+  // CONTATORE SOCIAL PROOF
+  // --------------------------
+  document.addEventListener("DOMContentLoaded", () => {
+    const el = document.getElementById("cntNum");
+    if (!el) return;
+
+    const KEY = "stima360_cnt_today";
+    const DATE_KEY = "stima360_cnt_date";
+
+    const today = new Date().toISOString().slice(0,10);
+    try{
+      if (localStorage.getItem(DATE_KEY) !== today) {
+        localStorage.setItem(DATE_KEY, today);
+        localStorage.setItem(KEY, "0");
+      }
+    }catch(e){}
+
+    let count = 0;
+    try{ count = parseInt(localStorage.getItem(KEY) || "0", 10) || 0; }catch(e){}
+    el.textContent = count;
+
+    function randomDelay(){
+      const r = Math.random();
+      if (r < 0.35) return 20000 + Math.random()*10000;  
+      if (r < 0.65) return 60000 + Math.random()*60000;  
+      return 30000 + Math.random()*90000;                
+    }
+    function randomInc(){
+      return Math.random() < 0.18 ? 2 : 1;
+    }
+
+    function tick(){
+      count += randomInc();
+      el.textContent = count;
+      try{ localStorage.setItem(KEY, String(count)); }catch(e){}
+      setTimeout(tick, randomDelay());
+    }
+
+    setTimeout(tick, randomDelay());
+  });
+
+  /* 📱 RILEVA SMARTPHONE E AGGIUNGE CLASSE "mobile" */
+  (function(){
+    const isMobile = /Android|iPhone|iPod/i.test(navigator.userAgent) || window.innerWidth <= 700;
+    if (isMobile) {
+      document.body.classList.add("mobile");
+    }
+  })();
+  </script>
+
+  <script>
+  document.addEventListener("DOMContentLoaded", async () => {
+    const el = document.getElementById("cntNum");
+    if (!el) return;
+    async function refresh(){
+      try{
+        const r = await fetch("https://stima360-backend.onrender.com/api/public/contatore_oggi", { cache: "no-store" });
+        if(!r.ok) throw new Error("bad status");
+        const js = await r.json();
+        el.textContent = Number(js.count || 0);
+      }catch(e){
+        if(!el.textContent) el.textContent = "0";
+      }
+    }
+    await refresh();
+    setInterval(refresh, 30000 + Math.random()*30000); 
+  });
+  </script>
+</body>
+</html>
