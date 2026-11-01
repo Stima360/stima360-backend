@@ -13,12 +13,20 @@
 // Integrazione del numero esistente: «non letti» per operatore (segnati letti
 // all'apertura della conversazione, migrazione 126) e stime collegate (dal
 // contatto o dallo stesso numero), con i collegamenti a contatto, immobile e stima.
+// Riconoscimento contatti: il server collega da solo la conversazione al contatto
+// della rubrica con lo stesso numero (intero, tutti i campi telefonici), se è
+// uno solo; qui si mostra il suo nome, si apre la scheda, si sceglie fra più
+// candidati o si crea il contatto con il telefono già compilato. Le risposte
+// inviate compaiono nella cronologia insieme ai messaggi ricevuti.
 
 import { apiGet, apiPost } from '../core/api-client.js';
 import { navigate } from '../core/router.js';
 import { mountWhatsappReply } from '../components/whatsapp-reply.js';
 import { mountReplySuggestion } from '../components/suggested-reply.js';
 import { fetchAutoState, renderAutoPanel, renderDecision } from '../components/auto-reply.js';
+import { openCreateContactDialog } from './contatti.js';
+
+const REPLIES_API = '/api/message-replies/conversations';
 
 const API = '/api/inbound-messages';
 
@@ -84,7 +92,8 @@ function linkAnchors(m) {
 function stimeSection(stime) {
   const section = el('div', 'messages-stime');
   section.setAttribute('data-messages-stime', '');
-  section.appendChild(el('h4', null, 'Stime collegate'));
+  section.appendChild(el('h4', null, 'Stime suggerite'));
+  section.appendChild(el('p', 'muted', 'Suggerimenti in sola lettura: una stima con lo stesso numero non è collegata alla conversazione e può riguardare un’altra persona.'));
   if (!stime || !stime.length) {
     section.appendChild(el('p', 'muted', 'Nessuna stima dal contatto collegato o con questo numero.'));
     return section;
@@ -95,12 +104,77 @@ function stimeSection(stime) {
     const where = [s.via, s.civico].filter(Boolean).join(' ');
     const label = [where, s.comune, s.tipologia].filter(Boolean).join(' · ') || `Stima n. ${s.id}`;
     li.append(openButton(label, 'stime', s.id),
-      el('span', 'muted', ` — ${dateTimeText(s.data)} · ${s.match === 'contact' ? 'dal contatto collegato' : 'stesso numero: verifica che sia la stessa persona'}`));
+      el('span', 'muted', ` — ${dateTimeText(s.data)} · ${s.match === 'contact' ? 'dal contatto collegato' : 'stesso numero, non collegata: verifica che sia la stessa persona'}`));
     li.setAttribute('data-stima', String(s.id));
     list.appendChild(li);
   }
   section.appendChild(list);
   return section;
+}
+
+/** Una risposta inviata dall'operatore, nella cronologia della conversazione. */
+function replyCard(r) {
+  const card = el('div', 'messages-message messages-message-out');
+  card.setAttribute('data-reply', String(r.id));
+  const head = el('div', 'messages-message-head');
+  const badge = el('span', `badge ${r.status === 'sent' ? 'badge-ok' : ['failed', 'indeterminate', 'sending'].includes(r.status) ? 'badge-warn' : 'badge-gray'}`,
+    r.delivery ? r.delivery.label : r.status_label);
+  head.append(el('strong', null, `${r.operator || 'Operatore'} (risposta)`), el('span', 'muted', `Inviata ${dateTimeText(r.created_at)}`), badge);
+  card.append(head, el('p', 'messages-text', r.text));
+  return card;
+}
+
+/**
+ * Il contatto della conversazione: riconosciuto (nome e scheda), da scegliere
+ * fra più candidati, oppure da creare con il telefono già compilato. Il
+ * collegamento vale per tutta la conversazione (POST .../link del server).
+ */
+function contactPanel(data, sender, onDone) {
+  const panel = el('div', 'messages-contact');
+  panel.setAttribute('data-messages-contact', data.contact ? String(data.contact.id) : 'none');
+  if (data.contact) {
+    const how = data.contact.match === 'manual' ? 'associato manualmente' : 'riconosciuto dalla rubrica';
+    panel.append(el('strong', null, data.contact.name || `Contatto n. ${data.contact.id}`),
+      el('span', 'muted', ` · ${phoneText(sender)} · ${how}`), openButton('Apri scheda contatto', 'contatti', data.contact.id));
+    return panel;
+  }
+  panel.append(el('strong', null, data.sender_profile_name ? `${data.sender_profile_name} (nome del profilo WhatsApp)` : phoneText(sender)),
+    el('span', 'muted', ' · nessun contatto collegato'));
+  if (!data.can_link) return panel;
+  const status = el('p', 'muted');
+  status.setAttribute('role', 'status');
+  const linkTo = async (contactId) => {
+    try {
+      const r = await apiPost(`${API}/conversations/${encodeURIComponent(sender)}/link`, { contact_id: contactId });
+      onDone(r.changed ? 'Conversazione collegata al contatto.' : 'Nessuna modifica.');
+    } catch (error) {
+      status.textContent = errorMessage(error);
+      status.className = 'error-box';
+    }
+  };
+  if (data.contact_candidates && data.contact_candidates.length) {
+    panel.appendChild(el('p', 'muted', 'Più contatti hanno questo numero: scegli quello giusto.'));
+    const select = el('select');
+    select.setAttribute('data-messages-contact-candidates', '');
+    select.appendChild(el('option', null, '— scegli il contatto —')).value = '';
+    for (const c of data.contact_candidates) {
+      const o = el('option', null, `${c.name || `Contatto n. ${c.id}`}${c.on_phone ? '' : ' (secondo telefono)'}`);
+      o.value = String(c.id);
+      select.appendChild(o);
+    }
+    const link = button('Collega conversazione', 'primary', 'data-messages-contact-link');
+    link.addEventListener('click', () => { if (select.value) linkTo(Number(select.value)); });
+    panel.append(select, link);
+  } else {
+    const create = button('Nuovo contatto con questo numero', 'primary', 'data-messages-contact-new');
+    create.addEventListener('click', () => {
+      const dialog = document.querySelector('[data-messages-contact-dialog]');
+      openCreateContactDialog(dialog, async (created) => linkTo(created.id), { phone: `+${sender}`, source: 'whatsapp' });
+    });
+    panel.appendChild(create);
+  }
+  panel.appendChild(status);
+  return panel;
 }
 
 function linkState(m) {
@@ -198,13 +272,32 @@ export async function renderMessaggi(container, params = []) {
   const allBtn = button('Tutte', 'chip active', 'data-messages-filter-all');
   const unlinkedBtn = button('Da associare', 'chip', 'data-messages-filter-unlinked');
   filters.append(allBtn, unlinkedBtn);
+  // Riconciliazione retroattiva (titolare/amministratore): le conversazioni
+  // senza contatto prendono quello della rubrica, se è uno solo con quel numero.
+  const reconcileBtn = button('Riconosci contatti in rubrica', 'ghost', 'data-messages-reconcile');
+  reconcileBtn.hidden = true;
+  reconcileBtn.addEventListener('click', async () => {
+    reconcileBtn.disabled = true;
+    try {
+      const r = await apiPost(`${API}/reconcile`, {});
+      say(`Riconoscimento completato: ${r.linked_conversations} conversazioni collegate (${r.linked_messages} messaggi), ${r.ambiguous_conversations} con più contatti possibili, ${r.unmatched_conversations} senza contatto in rubrica.`, 'ok');
+      await loadList();
+    } catch (error) {
+      say(errorMessage(error), 'error');
+    } finally {
+      reconcileBtn.disabled = false;
+    }
+  });
+  filters.appendChild(reconcileBtn);
+  const dialog = el('dialog', 'modal');
+  dialog.setAttribute('data-messages-contact-dialog', '');
   const layout = el('div', 'messages-layout');
   const list = el('div', 'messages-list');
   list.setAttribute('data-messages-list', '');
   const detail = el('div', 'messages-detail');
   detail.setAttribute('data-messages-detail', '');
   layout.append(list, detail);
-  root.append(notice, filters, layout);
+  root.append(notice, filters, layout, dialog);
   container.replaceChildren(root);
 
   let onlyUnlinked = false;
@@ -226,6 +319,7 @@ export async function renderMessaggi(container, params = []) {
       return;
     }
     list.replaceChildren();
+    reconcileBtn.hidden = !data.can_link;
     if (!data.items.length) {
       list.appendChild(el('p', 'muted', onlyUnlinked ? 'Nessun messaggio da associare.' : 'Nessun messaggio ricevuto.'));
       detail.replaceChildren();
@@ -245,8 +339,9 @@ export async function renderMessaggi(container, params = []) {
         badge.setAttribute('data-messages-unread', String(c.unread));
         item.appendChild(badge);
       }
-      if (c.without_contact || c.without_property) {
-        item.appendChild(el('span', 'badge badge-warn', `Da associare: ${Math.max(c.without_contact, c.without_property)}`));
+      // Solo il contatto conta come «da associare»: l'immobile non si deduce mai dal numero.
+      if (c.without_contact) {
+        item.appendChild(el('span', 'badge badge-warn', `Senza contatto: ${c.without_contact}`));
       }
       item.addEventListener('click', () => { selected = c.sender_phone; loadList(); });
       list.appendChild(item);
@@ -274,7 +369,15 @@ export async function renderMessaggi(container, params = []) {
         if (badge) badge.remove();
       }
     }).catch(() => {});
+    detail.appendChild(contactPanel(data, sender, async (msg) => { say(msg, 'ok'); await loadList(); }));
     detail.appendChild(stimeSection(data.stime));
+    // Le risposte inviate, per la cronologia unica. Un errore qui non nasconde i messaggi ricevuti.
+    let replies = [];
+    try {
+      replies = (await apiGet(`${REPLIES_API}/${encodeURIComponent(sender)}`)).replies || [];
+    } catch (error) {
+      replies = [];
+    }
     // BLOCCO-4D: stato del motore (solo simulazione) e decisioni registrate.
     let auto = null;
     try {
@@ -285,11 +388,17 @@ export async function renderMessaggi(container, params = []) {
     if (auto) detail.appendChild(renderAutoPanel(auto, sender, () => loadConversation(sender)));
     const decisions = new Map(((auto && auto.decisions) || []).map((d) => [d.message_id, d]));
     let composer = null;
-    for (const m of data.messages) {
+    const timeline = [
+      ...data.messages.map((m) => ({ kind: 'in', at: m.provider_timestamp || m.received_at, m })),
+      ...replies.map((r) => ({ kind: 'out', at: r.created_at, r })),
+    ].sort((a, b) => String(b.at || '').localeCompare(String(a.at || '')));
+    for (const entry of timeline) {
+      if (entry.kind === 'out') { detail.appendChild(replyCard(entry.r)); continue; }
+      const m = entry.m;
       const card = el('div', 'messages-message');
       card.setAttribute('data-message', String(m.id));
       const head = el('div', 'messages-message-head');
-      head.append(el('strong', null, m.sender_profile_name || phoneText(m.sender_phone)),
+      head.append(el('strong', null, (m.contact && m.contact.name) || m.sender_profile_name || phoneText(m.sender_phone)),
         el('span', 'muted', `Ricevuto ${dateTimeText(m.received_at)}${m.provider_timestamp ? ` · inviato ${dateTimeText(m.provider_timestamp)}` : ''}`));
       if (!m.is_text) head.appendChild(el('span', 'badge badge-gray', m.message_type_label));
       card.append(head, el('p', m.is_text ? 'messages-text' : 'messages-text muted', messageSummary(m)),
@@ -309,7 +418,7 @@ export async function renderMessaggi(container, params = []) {
       if (m.is_text) mountReplySuggestion(card, { messageId: m.id, getComposer: () => composer });
       detail.appendChild(card);
     }
-    composer = await mountWhatsappReply(detail, { senderPhone: sender });
+    composer = await mountWhatsappReply(detail, { senderPhone: sender, history: 'pending' });
   }
 
   allBtn.addEventListener('click', () => { onlyUnlinked = false; allBtn.classList.add('active'); unlinkedBtn.classList.remove('active'); loadList(); });

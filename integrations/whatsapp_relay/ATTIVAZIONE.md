@@ -364,17 +364,85 @@ Il revert è provato: `git revert --no-edit ef3777d` su una copia di `main` ripo
 
 ### 8.5 Fasi successive (dopo il messaggio reale)
 
-- **Risposta manuale reale, al solo telefono di prova e entro 24 ore dal suo messaggio:**
-  - sul TEST impostare `WHATSAPP_OUTBOUND_MODE=meta`, `WHATSAPP_GRAPH_VERSION` e
-    `WHATSAPP_TOKEN`, il token del numero business;
-  - il CRM invia solo nella finestra di 24 ore, solo a una conversazione ricevuta e con
-    conferma dell'operatore;
-  - finita la prova, rimuovere `WHATSAPP_OUTBOUND_MODE`.
+- **Risposta manuale reale:** vedi § 9. Solo verso il telefono di prova, con l'allowlist
+  dei destinatari applicata dal server.
 - **Risposte automatiche:** restano spente; al massimo si usa la simulazione per
   l'agenzia. L'invio reale (`WHATSAPP_AUTO_REPLY_MODE=send` più agenzia in `send`) si
-  valuta solo dopo il collaudo della risposta manuale. Fuori dalla finestra di 24 ore il
-  motore non invia: i template approvati per quel caso non sono implementati nel CRM.
+  valuta solo dopo il collaudo della risposta manuale e rispetta la stessa allowlist dei
+  destinatari. Fuori dalla finestra di 24 ore il motore non invia: i template approvati
+  per quel caso non sono implementati nel CRM.
 - **Esercizio ordinario:** il relay verso il TEST resta limitato al mittente di prova. Per
   tutti i clienti serve il CRM di produzione come servizio proprio, con il suo database
   (`roadmap/RILASCIO_TEST_123_125.md` § 7). Solo allora `WHATSAPP_RELAY_URL` punterà lì,
-  con `WHATSAPP_RELAY_SENDERS=*`.
+  con `WHATSAPP_RELAY_SENDERS=*` e `WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS=*`.
+
+## 9. Risposta manuale al solo numero di prova e riconoscimento contatti
+
+### 9.1 Che cosa fa il codice
+
+- **Riconoscimento del contatto** (`inbound_messages/contact_match.py`): a ogni messaggio
+  ricevuto il numero intero (formato internazionale: `+39`, `0039`, `39`, spazi,
+  trattini e numeri nazionali sono la stessa cosa) è cercato in `phone` e
+  `secondary_phone` dei contatti vivi della stessa agenzia. Un solo contatto → collegato
+  da solo; più contatti → candidati e scelta dell'operatore per tutta la conversazione;
+  nessuno → «Nuovo contatto con questo numero», telefono già compilato. Un'associazione
+  manuale precedente vince e si eredita. Mai immobili o stime dal numero.
+- **Riconciliazione** delle conversazioni già ricevute: pulsante «Riconosci contatti in
+  rubrica» (titolare/amministratore) o `POST /api/inbound-messages/reconcile`, oppure il
+  Job qui sotto. Non tocca le associazioni manuali né quelle ambigue.
+- **Allowlist dei destinatari** `WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS`: obbligatoria per
+  qualsiasi invio (manuale o automatico). Assente o vuota = nessun invio. Applicata dal
+  server tre volte: nello stato della conversazione, subito prima di chiamare Meta e
+  dentro il trasporto stesso. Chi chiama l'API direttamente riceve 409
+  `RECIPIENT_NOT_ALLOWED` e nulla finisce in coda.
+- Restano: permessi dell'operatore e dell'agenzia, contatto collegato, finestra di 24 ore,
+  conferma esplicita, chiave di idempotenza contro il doppio invio, registrazione nel
+  registro comunicazioni (conversazione e scheda contatto), divieto di contatto.
+
+### 9.2 Variabili del CRM TEST (`srv-d9agc4vaqgkc739jkjhg`)
+
+| Variabile | Valore |
+|---|---|
+| `WHATSAPP_OUTBOUND_MODE` | `meta` |
+| `WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS` | `393925172478` (solo il telefono di prova) |
+| `WHATSAPP_GRAPH_VERSION` | la versione scelta sulla documentazione Meta, es. `v21.0` |
+| `WHATSAPP_TOKEN` | token di sistema del WABA del numero business (permesso `whatsapp_business_messaging`); mai nel repository |
+| `WHATSAPP_INBOUND_ROUTES` | invariata: `<Phone ID>:1` (è anche il numero mittente della risposta) |
+| `WHATSAPP_AUTO_REPLY_MODE`, `COMMUNICATION_AUTO_REPLY_TICK` | **assenti** |
+| `WHATSAPP_SERVICE_URL` | invariata |
+
+```bash
+for kv in "WHATSAPP_OUTBOUND_MODE=meta" "WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS=393925172478" "WHATSAPP_GRAPH_VERSION=v21.0" "WHATSAPP_TOKEN=$WA_TOKEN"; do curl -sS -X PUT "https://api.render.com/v1/services/srv-d9agc4vaqgkc739jkjhg/env-vars/${kv%%=*}" -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d "{\"value\": \"${kv#*=}\"}"; done
+```
+
+Poi un deploy (§ 8.2 punto 2) e il controllo, che deve terminare con 0:
+
+```bash
+curl -sS -X POST "https://api.render.com/v1/services/srv-d9agc4vaqgkc739jkjhg/jobs" -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d "{\"startCommand\": \"python scripts/check_whatsapp_relay_config.py --expected-phone-number-id $PHONE_ID\"}"
+```
+
+Il controllo accetta la risposta manuale solo se l'allowlist contiene **esattamente** il
+mittente di prova (mai `*`, mai il numero business).
+
+### 9.3 Riconciliazione delle conversazioni già ricevute (Job)
+
+```bash
+curl -sS -X POST "https://api.render.com/v1/services/srv-d9agc4vaqgkc739jkjhg/jobs" -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{"startCommand": "python scripts/reconcile_whatsapp_contacts.py --agency 1"}'
+```
+
+Stampa solo conteggi. Ripetibile. Equivale al pulsante nella casella.
+
+### 9.4 Collaudo
+
+1. Il telefono di prova scrive al numero business.
+2. In «Messaggi WhatsApp» la conversazione mostra il nome del contatto della rubrica (se
+   il numero è in rubrica ed è uno solo) con «Apri scheda contatto»; altrimenti i
+   candidati, oppure «Nuovo contatto con questo numero».
+3. Con la risposta manuale attiva e il messaggio del cliente arrivato da meno di 24 ore,
+   compaiono il campo di testo e «Invia»; «Conferma invio» fa partire il messaggio.
+4. La risposta compare nella cronologia della conversazione (con stato «Accettato»,
+   poi «Consegnato»/«Letto» dagli stati Meta) e nella scheda contatto → Comunicazioni.
+5. Qualsiasi altra conversazione mostra «Invia» disabilitato con «Questo numero non è tra
+   i destinatari autorizzati…»; una chiamata diretta all'API risponde 409.
+6. Al termine della prova: `WHATSAPP_OUTBOUND_MODE` rimossa, allowlist lasciata al solo
+   numero di prova.

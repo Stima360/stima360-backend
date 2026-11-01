@@ -1673,6 +1673,10 @@ a.census-unit-main { text-decoration: none; }
 .messages-stime h4 { margin: 0 0 4px; font-size: 14px; }
 .messages-stime ul { margin: 0; padding-left: 18px; display: grid; gap: 4px; }
 .messages-stime li, .messages-links a { overflow-wrap: anywhere; }
+.messages-contact { border: 1px solid var(--border); border-radius: var(--radius); padding: 8px 12px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; font-size: 14px; }
+.messages-contact select { min-width: 0; max-width: 100%; }
+.messages-message-out { background: #f1f7ee; border-color: #cfe3c4; margin-left: 24px; }
+@media (max-width: 767px) { .messages-message-out { margin-left: 8px; } }
 .messages-field { display: grid; gap: 4px; min-width: 0; }
 @media (max-width: 767px) {
   .messages-layout { grid-template-columns: minmax(0, 1fr); }

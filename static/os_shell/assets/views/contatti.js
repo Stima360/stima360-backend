@@ -162,7 +162,7 @@ function contactFallbackName(contact) {
 
 // --- P13: creazione contatto + ruoli CORE ----------------------------------
 
-function openCreateContactDialog(dialogEl, onSuccess) {
+export function openCreateContactDialog(dialogEl, onSuccess, prefill = {}) {
   dialogEl.innerHTML = `
     <form id="contact-create-form">
       <h3 class="section-title">Nuovo contatto</h3>
@@ -227,6 +227,10 @@ function openCreateContactDialog(dialogEl, onSuccess) {
   }
   typeSelect.addEventListener('change', syncTypeFields);
   syncTypeFields();
+  // Precompilazione (es. dalla casella WhatsApp: telefono della conversazione).
+  // Solo valori: nessun HTML, assegnati come `value`.
+  if (prefill.phone) dialogEl.querySelector('#cc-phone').value = String(prefill.phone);
+  if (prefill.source) dialogEl.querySelector('#cc-source').value = String(prefill.source);
 
   dialogEl.querySelector('#contact-create-cancel').addEventListener('click', () => dialogEl.close());
 

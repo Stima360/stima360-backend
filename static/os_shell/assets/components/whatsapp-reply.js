@@ -64,12 +64,14 @@ export function failureText(reply) {
       sender_changed: 'il numero della conversazione è cambiato',
       no_contact: 'la conversazione non ha più un contatto',
       operator_not_authorized: 'il tuo accesso all’agenzia non è più attivo',
+      recipient_not_allowed: 'il numero non è tra i destinatari autorizzati su questo ambiente',
     }[reply.suppressed_reason];
     return `Non inviata e non ritentata: ${why || 'un controllo prima dell’invio l’ha bloccata'}. WhatsApp non è stato chiamato.`;
   }
   const detail = reply.error_detail || '';
   if (detail.includes('131047')) return 'Non inviata: la finestra di 24 ore era chiusa.';
   if (reply.error_code === 'invalid_destination') return 'Non inviata: il numero non può ricevere messaggi WhatsApp.';
+  if (detail === 'recipient_not_allowed') return 'Non inviata: il numero non è tra i destinatari autorizzati su questo ambiente.';
   if (reply.error_code === 'missing_credentials') return 'Non inviata: credenziali WhatsApp non valide.';
   if (reply.error_code === 'provider_unavailable') return 'Non inviata: WhatsApp non era raggiungibile. Puoi riprovare con un nuovo invio.';
   return 'Non inviata: WhatsApp ha rifiutato il messaggio.';
@@ -126,7 +128,12 @@ function replyItem(r, onResume) {
   return item;
 }
 
-export async function mountWhatsappReply(container, { senderPhone }) {
+/**
+ * `history`: 'all' (predefinito) elenca tutte le risposte nel pannello;
+ * 'pending' solo quelle che richiedono attenzione (in attesa, in invio, esito
+ * incerto), quando la conversazione le mostra già nella sua cronologia.
+ */
+export async function mountWhatsappReply(container, { senderPhone, history = 'all' }) {
   const root = el('div', 'wa-reply');
   root.setAttribute('data-wa-reply-panel', '');
   container.appendChild(root);
@@ -184,16 +191,29 @@ export async function mountWhatsappReply(container, { senderPhone }) {
     if (st.has_uncertain_reply) {
       root.appendChild(el('div', 'wa-reply-stop', 'Una risposta precedente ha esito incerto e non è stata ritentata: verifica con il cliente prima di riscrivere.'));
     }
-    if (st.replies.length) {
+    const listed = history === 'pending'
+      ? st.replies.filter((r) => ['queued', 'sending', 'indeterminate'].includes(r.status))
+      : st.replies;
+    if (listed.length) {
       const list = el('ul', 'wa-reply-list');
-      for (const r of st.replies) list.appendChild(replyItem(r, resumeReply));
+      for (const r of listed) list.appendChild(replyItem(r, resumeReply));
       root.appendChild(list);
     }
     composer = null;
     if (!st.can_reply) {
+      // Invio non possibile: il pulsante resta visibile ma disabilitato, con il
+      // motivo deciso dal server (destinatario non autorizzato, finestra chiusa, ...).
       const blocks = el('div', 'wa-reply-blocks');
       blocks.setAttribute('data-wa-reply-blocks', '');
-      for (const b of st.blocks) blocks.appendChild(el('p', 'wa-reply-error', b.message));
+      for (const b of st.blocks) {
+        const line = el('p', 'wa-reply-error', b.message);
+        line.setAttribute('data-wa-reply-block', b.code);
+        blocks.appendChild(line);
+      }
+      const disabled = button('Invia', 'primary', 'data-wa-reply-disabled');
+      disabled.disabled = true;
+      disabled.title = st.blocks.map((b) => b.message).join(' ');
+      blocks.appendChild(disabled);
       root.appendChild(blocks);
       return;
     }
@@ -203,7 +223,7 @@ export async function mountWhatsappReply(container, { senderPhone }) {
     text.maxLength = st.text_max;
     text.value = lastText;
     const counter = el('span', 'muted wa-reply-counter', `${text.value.length}/${st.text_max}`);
-    const prepare = button('Prepara invio', 'primary', 'data-wa-reply-prepare');
+    const prepare = button('Invia', 'primary', 'data-wa-reply-prepare');
     const confirmBox = el('div', 'wa-reply-confirm');
     confirmBox.hidden = true;
     text.addEventListener('input', () => {
