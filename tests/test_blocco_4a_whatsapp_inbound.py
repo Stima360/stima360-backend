@@ -207,8 +207,11 @@ def test_routes_are_mounted_behind_the_operator_session():
     router = (ROOT / "inbound_messages" / "router.py").read_text(encoding="utf-8")
     # SENTINELLA AGGIORNATA dall'integrazione del numero esistente: la seconda POST
     # segna letti i messaggi per l'operatore della sessione (nessun invio).
-    assert "@router.post" in router and router.count("@router.post") == 2 and "/link" in router
+    # SENTINELLA AGGIORNATA dal riconoscimento contatti: associazione di tutta la
+    # conversazione e riconciliazione in rubrica (titolare/amministratore). Nessun invio.
+    assert "@router.post" in router and router.count("@router.post") == 4 and "/link" in router
     assert '@router.post("/conversations/{sender_phone}/read")' in router
+    assert '@router.post("/conversations/{sender_phone}/link")' in router and '@router.post("/reconcile")' in router
 
 
 # ---------------------------------------------------------------------------

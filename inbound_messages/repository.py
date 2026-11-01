@@ -16,22 +16,26 @@ def installed(cur) -> bool:
 # --- scrittura dal webhook -----------------------------------------------------
 
 def contacts_by_phone(cur, agency_id: int, phone: str) -> list[int]:
-    cur.execute(f"SELECT c.id FROM contacts c WHERE c.agency_id = %s AND c.phone_normalized = %s AND {_LIVE_CONTACT} "
-                "ORDER BY c.id LIMIT 3", (agency_id, phone))
-    return [r["id"] for r in cur.fetchall()]
+    """Gli id dei contatti con quel numero (tutti i campi telefonici): vedi contact_match."""
+    from . import contact_match
+
+    return [c["id"] for c in contact_match.candidates(cur, agency_id, phone, limit=3)]
 
 
-def insert_message(cur, m, *, routing_status, agency_id, routing_reason, contact_id, contact_match) -> bool:
-    """True se la riga e' nuova; False se il provider l'aveva gia' consegnata."""
+def insert_message(cur, m, *, routing_status, agency_id, routing_reason, contact_id, contact_match,
+                   linked_by_user_id=None, linked_at=None) -> bool:
+    """True se la riga e' nuova; False se il provider l'aveva gia' consegnata.
+    `linked_by_user_id`/`linked_at`: solo quando il messaggio eredita
+    l'associazione manuale della conversazione (contact_match.resolve)."""
     cur.execute(
         "INSERT INTO whatsapp_inbound_messages (provider_message_id, phone_number_id, display_phone_number, "
         "agency_id, routing_status, routing_reason, sender_phone, sender_profile_name, message_type, text_body, "
-        "metadata, provider_timestamp, contact_id, contact_match) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "metadata, provider_timestamp, contact_id, contact_match, linked_by_user_id, linked_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
         "ON CONFLICT (provider_message_id) DO NOTHING RETURNING id",
         (m.provider_message_id, m.phone_number_id, m.display_phone_number, agency_id, routing_status,
          routing_reason, m.sender_phone, m.sender_profile_name, m.message_type, m.text_body, Json(m.metadata),
-         m.provider_timestamp, contact_id, contact_match))
+         m.provider_timestamp, contact_id, contact_match, linked_by_user_id, linked_at))
     return cur.fetchone() is not None
 
 
@@ -184,9 +188,16 @@ def link_history(cur, agency_id: int, message_id: int):
 
 
 def candidate_contacts(cur, agency_id: int, phone: str):
-    cur.execute(f"SELECT c.id, c.display_name, c.first_name, c.last_name FROM contacts c "
-                f"WHERE c.agency_id = %s AND c.phone_normalized = %s AND {_LIVE_CONTACT} ORDER BY c.id LIMIT 20",
-                (agency_id, phone))
+    from . import contact_match
+
+    return contact_match.candidates(cur, agency_id, phone, limit=20)
+
+
+def conversation_rows_for_link(cur, agency_id: int, sender_phone: str):
+    """Tutti i messaggi instradati della conversazione, bloccati per l'associazione."""
+    cur.execute("SELECT id, contact_id, property_id, message_type, text_body, provider_message_id, provider_timestamp "
+                "FROM whatsapp_inbound_messages WHERE agency_id = %s AND sender_phone = %s ORDER BY id FOR UPDATE",
+                (agency_id, sender_phone))
     return [dict(r) for r in cur.fetchall()]
 
 

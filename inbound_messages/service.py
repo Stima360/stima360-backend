@@ -26,12 +26,10 @@ from core.database import core_cursor
 from operator_auth.context import SystemAgencyContext
 from operator_auth.permissions import sees_all_agency_records
 
-from . import repository, routing
+from . import contact_match, repository, routing
 from .enums import (
     CONTACT_NOT_FOUND_MESSAGE,
     LINK_FORBIDDEN_MESSAGE,
-    MATCH_AMBIGUOUS,
-    MATCH_MATCHED,
     MATCH_NONE,
     MESSAGE_NOT_FOUND_MESSAGE,
     MESSAGE_TYPE_LABELS,
@@ -91,17 +89,19 @@ def ingest(parsed: ParsedPayload, routes: dict[str, set[int]] | None = None) -> 
 
         for m in parsed.messages:
             status, agency_id, reason = route(m.phone_number_id)
-            contact_id, match = None, MATCH_NONE
+            decided = {"contact_id": None, "match": MATCH_NONE, "linked_by_user_id": None, "linked_at": None}
             if status == ROUTED:
-                found = repository.contacts_by_phone(cur, agency_id, m.sender_phone)
-                if len(found) == 1:
-                    contact_id, match = found[0], MATCH_MATCHED
-                elif len(found) > 1:
-                    match = MATCH_AMBIGUOUS
+                # Rubrica dell'agenzia su tutti i campi telefonici; l'associazione
+                # manuale della conversazione, se c'e', vince (contact_match).
+                decided = contact_match.resolve(cur, agency_id, m.sender_phone)
             else:
                 summary["unrouted"] += 1
+            contact_id = decided["contact_id"]
             new = repository.insert_message(cur, m, routing_status=status, agency_id=agency_id,
-                                            routing_reason=reason, contact_id=contact_id, contact_match=match)
+                                            routing_reason=reason, contact_id=contact_id,
+                                            contact_match=decided["match"],
+                                            linked_by_user_id=decided["linked_by_user_id"],
+                                            linked_at=decided["linked_at"])
             summary["messages_new" if new else "messages_duplicate"] += 1
             if new and is_stop_request(m) and status == ROUTED and contact_id is not None:
                 _record_stop(cur, SystemAgencyContext(agency_id=agency_id, origin=INBOUND_ORIGIN),
@@ -215,11 +215,17 @@ def conversation(ctx, sender_phone: str) -> dict:
         stime = repository.related_stime(cur, agency_id, sender_phone, contact_ids) if rows else []
     if not rows:
         raise NotFound("MESSAGE_NOT_FOUND", MESSAGE_NOT_FOUND_MESSAGE)
+    # Il contatto della conversazione: quello dell'ultimo messaggio che ne ha uno.
+    current = next((r for r in rows if r.get("contact_id")), None)
     return {"sender_phone": sender_phone, "messages": [_message(r) for r in rows], "can_link": agent is None,
+            "contact": ({"id": current["contact_id"], "name": _contact_name(current),
+                         "match": current["contact_match"]} if current else None),
+            "sender_profile_name": next((r["sender_profile_name"] for r in rows if r.get("sender_profile_name")), None),
             "stime": [_stima(x) for x in stime],
             "contact_candidates": [{"id": c["id"], "name": _contact_name({"contact_name": c["display_name"],
                                                                            "contact_first_name": c["first_name"],
-                                                                           "contact_last_name": c["last_name"]})}
+                                                                           "contact_last_name": c["last_name"]}),
+                                    "on_phone": bool(c.get("on_phone"))}
                                    for c in candidates]}
 
 
@@ -295,3 +301,47 @@ def link(ctx, message_id: int, contact_id: int | None, property_id: int | None) 
     result = get_message(ctx, message_id)
     result["changed"] = changed
     return result
+
+
+def link_conversation(ctx, sender_phone: str, contact_id: int | None) -> dict:
+    """Collega (o scollega) TUTTI i messaggi della conversazione a un contatto,
+    con lo stesso registro dell'associazione per messaggio. Gli immobili dei
+    singoli messaggi non cambiano. Non crea richieste, attivita' o contatti."""
+    agency_id = ctx.require_agency()
+    if _agent_scope(ctx) is not None:
+        raise Forbidden("LINK_FORBIDDEN", LINK_FORBIDDEN_MESSAGE)
+    with core_cursor(commit=True) as (_, cur):
+        _require_installed(cur)
+        rows = repository.conversation_rows_for_link(cur, agency_id, sender_phone)
+        if not rows:
+            raise NotFound("MESSAGE_NOT_FOUND", MESSAGE_NOT_FOUND_MESSAGE)
+        if contact_id is not None and repository.live_contact(cur, agency_id, contact_id) is None:
+            raise NotFound("CONTACT_NOT_FOUND", CONTACT_NOT_FOUND_MESSAGE)
+        changed = 0
+        for row in rows:
+            if row["contact_id"] == contact_id:
+                continue
+            repository.link(cur, agency_id=agency_id, message_id=row["id"], contact_id=contact_id,
+                            property_id=row["property_id"], previous_contact_id=row["contact_id"],
+                            previous_property_id=row["property_id"], user_id=ctx.user_id)
+            changed += 1
+            if (contact_id is not None
+                    and is_stop_request(SimpleNamespace(message_type=row["message_type"], text_body=row["text_body"]))):
+                _record_stop(cur, ctx, contact_id=contact_id, provider_message_id=row["provider_message_id"],
+                             decided_at=row["provider_timestamp"])
+    result = conversation(ctx, sender_phone)
+    result["changed"] = changed
+    return result
+
+
+def reconcile_contacts(ctx) -> dict:
+    """Riconciliazione retroattiva per l'agenzia della sessione (titolare o
+    amministratore): vedi contact_match.reconcile. Una transazione."""
+    agency_id = ctx.require_agency()
+    if _agent_scope(ctx) is not None:
+        raise Forbidden("LINK_FORBIDDEN", LINK_FORBIDDEN_MESSAGE)
+    with core_cursor(commit=True) as (_, cur):
+        _require_installed(cur)
+        summary = contact_match.reconcile(cur, agency_id)
+    log.info("whatsapp_inbound_reconcile agency=%s %s", agency_id, json.dumps(summary))
+    return summary
