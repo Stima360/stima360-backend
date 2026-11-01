@@ -176,3 +176,44 @@ def schedule(background_tasks, raw_body: bytes) -> bool:
     except Exception as exc:
         log.error("whatsapp_relay schedule_failed error_type=%s", type(exc).__name__)
         return False
+
+
+BUSINESS_NUMBER = "393295674589"
+
+
+def self_check(env=None, out=print) -> int:
+    """`python whatsapp_relay.py --check` sul servizio di produzione: stato
+    dell'inoltro senza stampare segreti ne' numeri. 0 = stato sicuro."""
+    env = os.environ if env is None else env
+    present = [n for n in (URL_ENV, SECRET_ENV, SENDERS_ENV) if (env.get(n) or "").strip()]
+    cfg = config(env)
+    if cfg is None:
+        if present:
+            out("STOP inoltro configurato solo in parte o male: spento (variabili presenti: " + ", ".join(present) + ")")
+            return 1
+        out("OK   inoltro SPENTO: nessuna variabile WHATSAPP_RELAY_*")
+        return 0
+    host = urlparse(cfg.url).hostname or ""
+    problems = []
+    if cfg.senders == ALL and "test" in host:
+        problems.append("tutti i mittenti verso un ambiente di TEST")
+    if cfg.senders != ALL and BUSINESS_NUMBER in cfg.senders:
+        problems.append("il numero business e' tra i mittenti inoltrati")
+    if cfg.senders != ALL and len(cfg.senders) != 1:
+        problems.append("durante il collaudo serve esattamente un mittente")
+    for p in problems:
+        out("STOP " + p)
+    if problems:
+        return 1
+    n = "tutti" if cfg.senders == ALL else str(len(cfg.senders))
+    out(f"OK   inoltro ACCESO verso {host}{urlparse(cfg.url).path} per {n} mittente/i")
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+
+    if sys.argv[1:] == ["--check"]:
+        sys.exit(self_check())
+    print("uso: python whatsapp_relay.py --check")
+    sys.exit(2)

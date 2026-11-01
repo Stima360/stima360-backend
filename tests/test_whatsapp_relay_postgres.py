@@ -267,3 +267,32 @@ def test_e_the_production_forwarder_delivers_into_the_real_crm(rl, monkeypatch):
     assert _rows(rl, "sender_phone = %s", (customer,)) == []
     conv = client.get(f"{API}/conversations/{allowed}").json()
     assert [m["text"] for m in conv["messages"]] == ["Prova end-to-end"]
+
+
+# ---------------------------------------------------------------------------
+# B - numero business esistente: destinatario, mai mittente di prova
+# ---------------------------------------------------------------------------
+
+BUSINESS_DISPLAY = "393295674589"
+
+
+def test_b_business_number_is_the_recipient_and_estimate_statuses_stay_out(rl, monkeypatch):
+    """Il numero business compare come destinatario (`display_phone_number`),
+    l'agenzia viene dal suo Phone ID; il mittente di prova e' un altro
+    telefono. Gli stati di consegna dei template della stima inviati ai
+    clienti dal numero business non entrano nel TEST."""
+    ids = rl["ids"]
+    tester, customer = _sender(), _sender()
+    monkeypatch.setenv(relay.ALLOWED_SENDERS_ENV, tester)
+    change = _change(NUMBER_A, [_message(tester, body="Prova dal mittente autorizzato"),
+                                _message(BUSINESS_DISPLAY, body="eco dal numero business")],
+                     statuses=[{"id": f"wamid.stima.{uuid.uuid4().hex}", "status": "delivered",
+                                "timestamp": "1761800001", "recipient_id": customer}])
+    change["value"]["metadata"]["display_phone_number"] = BUSINESS_DISPLAY
+    before_events = _counts(rl)[1]
+    assert rl["relayed"](_payload(change)).status_code == 200
+    rows = _q(rl, "SELECT agency_id, display_phone_number, phone_number_id FROM whatsapp_inbound_messages "
+                  "WHERE sender_phone = %s", (tester,))
+    assert rows == [(ids["a"], BUSINESS_DISPLAY, NUMBER_A)]
+    assert _rows(rl, "sender_phone = %s", (BUSINESS_DISPLAY,)) == []
+    assert _counts(rl)[1] == before_events
