@@ -15,7 +15,13 @@ Senza `--esegui` fa SOLO il rapporto. Con `--esegui`, nell'ordine:
      agenzia) e accoda la prima email, dovuta subito;
   4. un giro del dispatcher con l'adapter SMTP REALE: ricontrolla il consenso
      prima di ogni invio e applica il limite dei destinatari se attivo;
-  5. il rapporto: consensi validi, iscritti, email accettate dal server di
+  5. un secondo giro del motore: chi ha ricevuto la prima email passa alla
+     seconda (cosi' il rapporto mostra M2 programmata);
+  6. PREDISPONE l'acquisizione per chi NON ha un consenso email dimostrabile:
+     un link personale del consenso (30 giorni), pronto nella scheda del
+     contatto («Mostra QR»), senza inviare niente - lo consegna l'operatore;
+     chi ha gia' un link aperto non ne riceve un altro;
+  7. il rapporto: consensi validi, iscritti, email accettate dal server di
      posta, prossima email programmata, e i contatti ESCLUSI con il motivo.
 
 NON registra consensi al posto di nessuno: un consenso senza prova resta «da
@@ -114,7 +120,32 @@ def esegui(cur, ctx, esclusi: list[int]) -> dict[str, Any]:
             print(f"  pausa contatto {cid} non riuscita: {type(exc).__name__}")
     tick = journey_tick.tick(sistema)
     invio = dispatcher.dispatch_batch(sistema, channel="email", provider=dispatcher.adapter_per("email"), limit=50)
-    return {"riconosciuti": riconosciuti, "tick": tick, "dispatch": invio}
+    journey_tick.tick(sistema)   # chi ha ricevuto la prima email passa alla seconda
+    link_pronti = _prepara_link(cur, ctx, esclusi)
+    return {"riconosciuti": riconosciuti, "tick": tick, "dispatch": invio, "link_pronti": link_pronti}
+
+
+def _prepara_link(cur, ctx, esclusi: list[int]) -> int:
+    """Per chi non ha un consenso email dimostrabile: un link personale del
+    consenso gia' pronto nella scheda. Nessun invio: il link lo consegna una
+    persona. Chi ha gia' un link aperto non ne riceve un altro."""
+    from communication import consent_bulk, consent_page
+    quadro = consent_bulk.overview(ctx)
+    creati = 0
+    for c in quadro["contacts"]:
+        if c["state"] != consent_bulk.STATO_DA_DOCUMENTARE or c["contact_id"] in esclusi or c["paused"]:
+            continue
+        cur.execute("""SELECT 1 FROM consent_links WHERE agency_id = %s AND contact_id = %s
+                        AND superseded_at IS NULL AND disabled_at IS NULL AND expires_at > NOW()""",
+                    (ctx.require_agency(), c["contact_id"]))
+        if cur.fetchone():
+            continue
+        try:
+            consent_page.generate_link(ctx, c["contact_id"])
+            creati += 1
+        except Exception as exc:  # noqa: BLE001 - un contatto non ferma il job
+            print(f"  link per il contatto {c['contact_id']} non creato: {type(exc).__name__}")
+    return creati
 
 
 def main(argv: list[str]) -> int:
@@ -143,6 +174,7 @@ def main(argv: list[str]) -> int:
                   f"accodate {t['queued']} | errori {t['errors']}")
             print(f"giro di invio SMTP: prese {d['claimed']} | accettate dal server {d['sent']} | "
                   f"soppresse {d['suppressed']} | non riuscite {d['failed']} | incerte {d['indeterminate']}")
+            print(f"link del consenso predisposti per chi e' da regolarizzare: {esito['link_pronti']}")
         with conn.cursor() as cur:
             r = rapporto(cur, ctx, args.escludi)
         conn.rollback()

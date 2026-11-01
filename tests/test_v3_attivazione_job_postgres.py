@@ -60,8 +60,11 @@ def test_01_il_job_attiva_gli_idonei_ed_esclude_gli_altri(v3, monkeypatch, capsy
         conn.close()
     assert esito["riconosciuti"] >= 1 and esito["tick"]["enrolled_active"] == 2
     assert esito["dispatch"]["sent"] == 1 and posta == [AUTORIZZATO]
+    assert esito["link_pronti"] == 1, "un link per chi e' da regolarizzare (non per l'escluso)"
+    assert _q(m, "SELECT count(*) FROM consent_links WHERE contact_id = %s", (senza,))[0][0] == 1
     stati = {c["contact_id"]: c for c in r["contatti"]}
     assert stati[idoneo]["enrollment"]["status"] == "active" and stati[dal_sito]["enrollment"]["status"] == "active"
+    assert stati[idoneo]["enrollment"]["next_step_no"] == 2 and stati[idoneo]["enrollment"]["inviate"] == 1, "M2 programmata"
     assert stati[escluso]["enrollment"] is None and "escluso" in stati[escluso]["why"]
     assert stati[revocato]["why"] == "revocato/disiscritto"
     assert "da regolarizzare" in stati[senza]["why"]
