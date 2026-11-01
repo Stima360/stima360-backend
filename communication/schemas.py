@@ -111,8 +111,19 @@ class ConsentGrantRequest(BaseModel):
     evidence_ref: str = Field(min_length=1, max_length=100)
     notice_id: int = Field(gt=0)
     note: str | None = Field(default=None, max_length=2000)
+    #: La DICHIARAZIONE dell'operatore: il consenso e' stato realmente
+    #: ottenuto dall'interessato, nei modi e nella data indicati. Obbligatoria
+    #: e vera: senza, niente si registra.
+    attestation: bool
 
     model_config = {"extra": "forbid"}
+
+    @field_validator("attestation")
+    @classmethod
+    def _dichiarazione(cls, valore: bool) -> bool:
+        if valore is not True:
+            raise ValueError("l'operatore deve dichiarare che il consenso e' stato realmente ottenuto")
+        return valore
 
 
 class ConsentRefusalRequest(BaseModel):

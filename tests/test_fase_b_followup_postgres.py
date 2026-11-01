@@ -329,9 +329,11 @@ def test_b1_niente_consenso_senza_prova_informativa_o_identita(fb):
     with pytest.raises(ValidationError):
         s.register_grant(_ctx(m), cid, channels=["email"], notice_id=informativa, decided_at=quando,
                          evidence_type="paper_form", evidence_ref="anna@example.it")
+    # SENTINELLA AGGIORNATA DA CONSENSI MANUALI: la telefonata ora e' una
+    # modalita' ammessa; una email "in rubrica" resta fuori.
     with pytest.raises(ValidationError):
         s.register_grant(_ctx(m), cid, channels=["email"], notice_id=informativa, decided_at=quando,
-                         evidence_type="phone_call", evidence_ref="PROT-2026/0042")
+                         evidence_type="email_on_file", evidence_ref="PROT-2026/0042")
     # informativa non ancora valida alla data di raccolta
     futura = _informativa(m, da=datetime.now(timezone.utc) + 30 * GIORNO,
                           fino=datetime.now(timezone.utc) + 60 * GIORNO)
@@ -526,7 +528,9 @@ def test_d2_attivare_la_v3_ritira_la_v2_e_iscrive_solo_gli_eleggibili(fb, monkey
     assert iscritti[ok_esplicito]["trigger_sent_at"] == ORA - 2 * GIORNO
     assert iscritti[ok_legacy]["trigger_sent_at"] == ORA
     assert iscritti[ok_esplicito]["email_normalized_snapshot"] == "a@example.it"
-    assert iscritti[ok_esplicito]["next_step_no"] == 2, "il giorno 1 e' gia' passato: si parte dal giorno 3"
+    # SENTINELLA AGGIORNATA DA PARTENZA IMMEDIATA (regola del titolare): la
+    # prima email e' dovuta all'iscrizione, qualunque sia il giorno.
+    assert iscritti[ok_esplicito]["next_step_no"] == 1 and iscritti[ok_esplicito]["next_action_at"] == ORA
     assert iscritti[ok_legacy]["next_step_no"] == 1
     for c in (mai, revocato, doppio, senza_email, archiviato, in_pausa, in_revival, altrove, solo_flag, spunta):
         assert c not in iscritti
@@ -577,7 +581,9 @@ def test_e1_sedici_email_nei_giorni_approvati_poi_completata_senza_ripartire(fb,
         _tick(m, now=adesso)  # avanza al passo successivo nello stesso giorno
     iscr = _iscrizioni(m, contact_id=cid)[0]
     assert [n for n, _ in inviati] == list(range(1, 17))
-    for (n, quando), atteso in zip(inviati, FOLLOWUP_V3_DAYS):
+    # SENTINELLA AGGIORNATA DA PARTENZA IMMEDIATA: la prima all'iscrizione
+    # (giorno 0), le altre ai giorni approvati.
+    for (n, quando), atteso in zip(inviati, (0,) + tuple(FOLLOWUP_V3_DAYS[1:])):
         scarto = (quando - ORA) - atteso * GIORNO
         assert timedelta(0) <= scarto <= 2 * GIORNO, (n, quando, atteso)  # finestra: domenica -> lunedi'
     assert iscr["status"] == "completed" and iscr["run_no"] == 1
@@ -661,8 +667,13 @@ def test_f1b_un_appuntamento_aperto_ma_passato_non_sospende(fb, monkeypatch):
     doppione, l'appuntamento resta com'e'."""
     m = fb
     cid, e = _iscrivi(m, monkeypatch, "richiesta.passata@example.it")
+    # SENTINELLA AGGIORNATA DA PARTENZA IMMEDIATA: la prima email parte
+    # all'iscrizione; la scadenza da conservare e' quella della seconda.
+    _spedisci(m, e["id"], ORA)
+    _tick(m, now=ORA + timedelta(minutes=1))
+    e = _iscrizioni(m, contact_id=cid)[0]
     passo, prevista = e["next_step_no"], e["next_action_at"]
-    assert e["status"] == "active" and prevista > ORA + 3 * timedelta(hours=1)
+    assert e["status"] == "active" and passo == 2 and prevista > ORA + 3 * timedelta(hours=1)
     app = _appuntamento(m, cid, inizio=ORA + timedelta(hours=1), stato="requested")
     _tick(m, now=ORA + timedelta(minutes=30))
     e = _iscrizioni(m, contact_id=cid)[0]
@@ -798,16 +809,20 @@ def test_g1_optout_indirizzo_cambiato_e_contatto_archiviato_fermano(fb, monkeypa
 
 
 def test_g2_un_manuale_di_marketing_fa_slittare_il_passo_di_48_ore(fb, monkeypatch):
+    # SENTINELLA AGGIORNATA DA PARTENZA IMMEDIATA: la prima email nasce
+    # all'iscrizione, quindi l'email manuale sta PRIMA dell'iscrizione; la
+    # regola delle 48 ore vale identica, anche per la prima.
     m = fb
-    cid, e = _iscrivi(m, monkeypatch, "gap@example.it")
+    _v3_attiva(m, monkeypatch)
+    cid = _contatto(m, "gap@example.it", consenso="granted")
     _q(m, "INSERT INTO communication_messages (agency_id, contact_id, channel, direction, communication_type, mode, "
           "reason_code, subject_snapshot, rendered_body, destination_snapshot, status, scheduled_at, sent_at, actor_type, actor_user_id, idempotency_key) "
           "VALUES (1, %s, 'email', 'outbound', 'marketing', 'manual', 'operator_manual', 'O', 'c', 'gap@example.it', 'sent', %s, %s, 'operator', %s, %s)",
-       (cid, ORA + GIORNO - timedelta(hours=6), ORA + GIORNO - timedelta(hours=6), m["ids"]["owner_a"], f"man:{cid}"))
-    conteggi = _tick(m, now=ORA + GIORNO)
-    assert conteggi["deferred"] == 1 and _messaggi(m, e["id"]) == []
+       (cid, ORA - timedelta(hours=6), ORA - timedelta(hours=6), m["ids"]["owner_a"], f"man:{cid}"))
+    conteggi = _tick(m, now=ORA)
     e = _iscrizioni(m, contact_id=cid)[0]
-    assert e["next_action_at"] >= ORA + GIORNO + timedelta(hours=42)
+    assert conteggi["deferred"] == 1 and _messaggi(m, e["id"]) == []
+    assert e["next_action_at"] >= ORA + timedelta(hours=42)
     _tick(m, now=ORA + 3 * GIORNO)
     assert [x["step_no"] for x in _messaggi(m, e["id"])] == [1]
 

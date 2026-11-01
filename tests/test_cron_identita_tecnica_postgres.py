@@ -83,18 +83,20 @@ def test_02_il_giro_iscrive_e_spedisce_solo_all_autorizzato(giro):
     assert primo.status_code == 200, primo.text
     corpo = primo.json()
     assert corpo["journey"]["status"] == "completed" and corpo["journey"]["counts"]["enrolled_active"] == 2
-    assert corpo["dispatch"]["sent"] == 1 and corpo["dispatch"]["failed"] == 0
-    assert giro["posta"] == [AUTORIZZATO]
+    # PARTENZA IMMEDIATA: nel giro parte anche la prima email della sequenza
+    # (manuale + prima email per l'autorizzato); il cliente resta tutto in coda.
+    assert corpo["dispatch"]["sent"] == 2 and corpo["dispatch"]["failed"] == 0
+    assert giro["posta"] == [AUTORIZZATO, AUTORIZZATO]
     fermo = _q(m, "SELECT status, attempt_count FROM communication_messages WHERE destination_snapshot = %s",
                ("cliente.reale@example.it",))
-    assert [tuple(r) for r in fermo] == [("queued", 0)], "il cliente resta in coda, intatto"
+    assert [tuple(r) for r in fermo] == [("queued", 0), ("queued", 0)], "il cliente resta in coda, intatto"
     assert {e["contact_id"] for e in _iscrizioni(m)} == {prova, cliente}
 
     secondo = chiama()
     assert secondo.status_code == 200
     assert secondo.json()["journey"]["counts"]["enrolled_active"] == 0
     assert secondo.json()["dispatch"]["sent"] == 0
-    assert giro["posta"] == [AUTORIZZATO]
+    assert giro["posta"] == [AUTORIZZATO, AUTORIZZATO]
     assert len(_iscrizioni(m)) == 2
 
 

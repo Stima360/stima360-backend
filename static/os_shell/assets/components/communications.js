@@ -302,6 +302,28 @@ function renderRaccolta(consenso) {
   </div>`;
 }
 
+// Partenza immediata del follow-up dopo un consenso email: l'esito, con il
+// motivo esatto se la prima email non e' partita. Solo testo (textContent).
+const STATI_AVVIO = {
+  sent: 'Follow-up avviato: la prima email è stata accettata dal server di posta.',
+  queued: 'Follow-up avviato, prima email in coda',
+  not_sent: 'Prima email non partita',
+  not_started: 'Follow-up non avviato',
+  error: 'Avvio del follow-up non riuscito: riproverà il prossimo giro automatico',
+};
+
+function mostraAvvio(mount, avvio) {
+  if (!avvio) return;
+  const pannello = mount.querySelector('[data-consent-panel]');
+  if (!pannello) return;
+  const riga = document.createElement('p');
+  riga.className = avvio.status === 'sent' ? 'comm-avvio ok' : 'error-box comm-avvio';
+  riga.setAttribute('data-consent-start', avvio.status || '');
+  const testo = STATI_AVVIO[avvio.status] || 'Esito del follow-up';
+  riga.textContent = avvio.reason_label ? `${testo}: ${avvio.reason_label}` : testo;
+  pannello.prepend(riga);
+}
+
 function renderConsenso(consenso, informative) {
   if (!consenso || consenso.available === false) {
     return `<div class="card" data-consent-panel>
@@ -328,22 +350,27 @@ function renderConsenso(consenso, informative) {
     ? `<label>Informativa presentata <select name="notice_id" required>${opzioniInformative}</select></label>`
     : '<p class="muted">Nessuna informativa Marketing corrente: il consenso manuale non si può registrare.</p>';
   const form = consenso.can_record ? `<details class="card comm-consent" data-consent-grant>
-    <summary>Registra consenso marketing di persona</summary>
+    <summary>Registra consenso</summary>
     <form data-consent-grant-form>
-      <p class="muted">Solo un consenso raccolto davvero, con una prova che si può ritrovare.</p>
+      <p class="muted">Solo un consenso raccolto davvero, con una prova che si può ritrovare. Con l'email, se il contatto è idoneo, la prima email del follow-up parte subito.</p>
       ${caselleCanali('grant', coperti)}
       <label>Data e ora della raccolta <input type="datetime-local" name="decided_at" required></label>
-      <label>Modalità
+      <label>Modalità di acquisizione
         <select name="evidence_type">
+          <option value="in_person">Di persona</option>
+          <option value="phone_call">Telefono</option>
+          <option value="email_message">Email</option>
+          <option value="document">Documento</option>
           <option value="paper_form">Modulo cartaceo</option>
           <option value="digital_form">Modulo digitale</option>
           <option value="other_documented">Altra modalità documentata</option>
         </select>
       </label>
-      <label>Riferimento alla prova (protocollo, archivio, documento)
+      <label>Prova / documentazione (telefonata: data, ora e chi ha risposto; email: data e oggetto del messaggio; documento: protocollo o archivio). Non basta il numero o l'indirizzo del cliente.
         <input type="text" name="evidence_ref" minlength="6" maxlength="100" required></label>
       ${sceltaInformativa}
       <label>Note <textarea name="note" rows="2" maxlength="2000"></textarea></label>
+      <label class="checkbox-label"><input type="checkbox" name="attestation" value="1" required> Dichiaro che il consenso è stato realmente ottenuto dall'interessato, nei modi e nella data indicati.</label>
       <div class="actions"><button type="submit" class="btn primary" ${(informative || []).length ? '' : 'disabled'}>Registra consenso</button></div>
       <p class="error-box" data-consent-error hidden></p>
     </form>
@@ -645,6 +672,7 @@ export function mountCommunications(mount, contactId, { readOnly = false } = {})
         evidence_ref: (dati.get('evidence_ref') || '').toString(),
         notice_id: Number(dati.get('notice_id') || 0),
         note: (dati.get('note') || '').toString() || null,
+        attestation: dati.get('attestation') === '1',
       } : {
         channels: canaliScelti,
         decided_at: isoConFuso((dati.get('decided_at') || '').toString()),
@@ -652,8 +680,9 @@ export function mountCommunications(mount, contactId, { readOnly = false } = {})
         note: (dati.get('note') || '').toString(),
       };
       try {
-        await apiPost(`/api/communication/contacts/${contactId}/consent/${grant ? 'grant' : 'refusal'}`, corpo);
+        const esito = await apiPost(`/api/communication/contacts/${contactId}/consent/${grant ? 'grant' : 'refusal'}`, corpo);
         await ridisegna();
+        mostraAvvio(mount, esito && esito.start);
       } catch (guasto) {
         errore.hidden = false;
         errore.textContent = guasto.message || 'Registrazione non riuscita.';

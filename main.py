@@ -996,7 +996,13 @@ def _riconosci_consenso_del_sito(ctx, bridge_result):
     try:
         from consent import site_recognition
         esito = site_recognition.recognize(ctx, int(contact_id))
-        return {"status": "done", "channels": [g["channel"] for g in esito["granted"]]}
+        canali = [g["channel"] for g in esito["granted"]]
+        if "email" in canali:
+            # Regola del titolare: consenso email riconosciuto -> il follow-up
+            # parte subito, se il contatto e' idoneo. Non solleva mai.
+            from communication import avvio_immediato
+            avvio_immediato.avvia(ctx, int(contact_id))
+        return {"status": "done", "channels": canali}
     except Exception as exc:  # noqa: BLE001
         logger.warning("public_stima_site_consent_failed contact_id=%s error_type=%s",
                        contact_id, type(exc).__name__)

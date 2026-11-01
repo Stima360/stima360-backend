@@ -1158,6 +1158,15 @@ def complete_from_pause(cur, ctx, enrollment_id: int) -> dict[str, Any]:
         valori=())
 
 
+def last_sent_step_no(cur, ctx, enrollment_id: int) -> int | None:
+    """Il passo piu' avanzato gia' SPEDITO da questa iscrizione (qualunque run)."""
+    cur.execute(
+        """SELECT MAX(step_no) AS passo FROM communication_messages
+            WHERE agency_id = %s AND enrollment_id = %s AND status = 'sent'""",
+        (ctx.require_agency(), enrollment_id))
+    return cur.fetchone()["passo"]
+
+
 def last_marketing_sent_at(cur, ctx, contact_id: int):
     """Quando e' partita l'ultima email di marketing a questo contatto."""
     cur.execute(

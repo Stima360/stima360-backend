@@ -577,7 +577,8 @@ def confirm_email(raw_token: str | None, *, ip: str | None, user_agent: str | No
                       confirm_user_agent = %s, consent_event_id = %s
                 WHERE id = %s""",
             [quando, hash_ip(ip), _user_agent(user_agent), esito["event"]["id"], invio["id"]])
-    return {"status": "confirmed", "event_id": esito["event"]["id"], "submission_id": invio["id"]}
+    return {"status": "confirmed", "event_id": esito["event"]["id"], "submission_id": invio["id"],
+            "agency_id": invio["agency_id"], "contact_id": contact["id"]}
 
 
 # ---------------------------------------------------------------------------

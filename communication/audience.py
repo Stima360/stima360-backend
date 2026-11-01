@@ -86,11 +86,15 @@ RICHIESTA_VALUTAZIONE = """(EXISTS (SELECT 1 FROM leads l JOIN lead_stime ls ON 
                           AND m.reason_code = 'stima_pdf'))"""
 
 
-def candidates(cur, ctx, *, now: datetime, limit: int) -> list[dict[str, Any]]:
+def candidates(cur, ctx, *, now: datetime, limit: int,
+               contact_id: int | None = None) -> list[dict[str, Any]]:
     """I candidati di oggi, gia' deduplicati per indirizzo, al massimo `limit`.
 
     Ogni voce: `contact_id`, `email_normalized`, `granted_at`. La guardia del
     consenso NON e' ancora stata interrogata: lo fa il tick, nel fence.
+
+    `contact_id`: solo quel contatto (la partenza immediata dopo un consenso),
+    con le stesse identiche esclusioni.
     """
     if limit <= 0:
         return []
@@ -98,7 +102,7 @@ def candidates(cur, ctx, *, now: datetime, limit: int) -> list[dict[str, Any]]:
     cur.execute(
         f"""SELECT c.id AS contact_id, c.email_normalized, {channel_granted_at_sql('c', CANALE)} AS granted_at
               FROM contacts c
-             WHERE c.agency_id = %s
+             WHERE c.agency_id = %s {"AND c.id = %s" if contact_id is not None else ""}
                AND c.status = 'active' AND c.deleted_at IS NULL AND c.archived_at IS NULL
                AND c.email_normalized IS NOT NULL
                AND {channel_prefilter_sql('c', CANALE)}
@@ -119,7 +123,7 @@ def candidates(cur, ctx, *, now: datetime, limit: int) -> list[dict[str, Any]]:
                AND ({PROPRIETARIO_VERIFICATO} OR {RICHIESTA_VALUTAZIONE})
              ORDER BY {channel_granted_at_sql('c', CANALE)} DESC NULLS LAST, c.id
              LIMIT %s""",
-        (agenzia, now, now, now, LETTURA))
+        (agenzia, *([contact_id] if contact_id is not None else []), now, now, now, LETTURA))
     righe = [dict(r) for r in cur.fetchall()]
 
     # dedup dentro l'agenzia: una email, un contatto (la concessione piu' recente vince)
@@ -150,3 +154,64 @@ def momento_iniziale(granted_at: datetime | None, now: datetime) -> datetime:
 
 def tetto_residuo(cur, ctx, journey_id: int, now: datetime) -> int:
     return max(0, TETTO_GIORNALIERO - repo.admitted_today(cur, ctx, journey_id, now))
+
+
+#: I motivi per cui un contatto NON entra adesso nel V3, in italiano per la
+#: scheda. L'ordine e' quello del controllo: si dice il primo che blocca.
+MOTIVI_ESCLUSIONE = {
+    "no_active_sequence": "nessuna sequenza V3 attiva in questa agenzia",
+    "contact_not_active": "il contatto non e' attivo (archiviato, nel Cestino o disattivato)",
+    "no_email": "il contatto non ha un indirizzo email valido",
+    "no_email_consent": "manca un consenso marketing email valido",
+    "already_enrolled": "il contatto e' gia' nella sequenza",
+    "sequence_already_done": "il contatto ha gia' ricevuto la sequenza (nessuna ripartenza)",
+    "automations_paused": "le automazioni del contatto sono in pausa manuale",
+    "unsubscribed": "l'indirizzo si e' disiscritto da STIMA360 dopo il consenso",
+    "recovery_program": "il contatto e' nel programma di recupero",
+    "not_owner_or_valuation": "non risulta proprietario/venditore e non ha chiesto una valutazione",
+    "address_in_other_sequence": "lo stesso indirizzo e' gia' in una sequenza (anche di un'altra agenzia)",
+    "daily_cap_reached": "raggiunto il limite di 20 nuove iscrizioni oggi: entrera' al prossimo giorno",
+    "duplicate_address": "un altro contatto della stessa agenzia con lo stesso indirizzo ha la precedenza",
+}
+
+
+def motivo_esclusione(cur, ctx, contact_id: int, *, now: datetime, journey_id: int) -> str:
+    """Perche' `candidates(contact_id=...)` non lo restituisce: le STESSE
+    condizioni, una alla volta, in sola lettura. Solo per dirlo nella scheda."""
+    agenzia = ctx.require_agency()
+    granted = channel_granted_at_sql("c", CANALE)
+    controlli = (
+        ("contact_not_active", "c.status = 'active' AND c.deleted_at IS NULL AND c.archived_at IS NULL", ()),
+        ("no_email", "c.email_normalized IS NOT NULL", ()),
+        ("no_email_consent", channel_prefilter_sql("c", CANALE), ()),
+        ("already_enrolled", """NOT EXISTS (SELECT 1 FROM communication_enrollments e
+                                 WHERE e.agency_id = c.agency_id AND e.contact_id = c.id
+                                   AND e.status IN ('active', 'paused'))""", ()),
+        ("sequence_already_done", f"""NOT EXISTS (SELECT 1 FROM communication_enrollments e
+                                 WHERE e.agency_id = c.agency_id AND e.contact_id = c.id
+                                   AND e.email_normalized_snapshot IS NOT NULL
+                                   AND (e.status = 'completed'
+                                        OR (e.status = 'stopped'
+                                            AND e.stopped_at >= COALESCE({granted}, e.stopped_at))))""", ()),
+        ("automations_paused", """NOT EXISTS (SELECT 1 FROM communication_automation_controls k
+                                 WHERE k.agency_id = c.agency_id AND k.contact_id = c.id AND k.paused)""", ()),
+        ("unsubscribed", f"NOT {channel_optout_after_grant_sql('c', CANALE)}", ()),
+        ("recovery_program", """NOT EXISTS (SELECT 1 FROM seller_revival_suppressions s
+                                 WHERE s.contact_id = c.id AND s.expires_at > %s)""", (now,)),
+        ("not_owner_or_valuation", f"({PROPRIETARIO_VERIFICATO} OR {RICHIESTA_VALUTAZIONE})", (now, now)),
+    )
+    for codice, condizione, parametri in controlli:
+        cur.execute(f"SELECT 1 FROM contacts c WHERE c.agency_id = %s AND c.id = %s AND {condizione}",
+                    (agenzia, contact_id, *parametri))
+        if cur.fetchone() is None:
+            return codice
+    cur.execute("SELECT email_normalized FROM contacts WHERE agency_id = %s AND id = %s", (agenzia, contact_id))
+    email = cur.fetchone()["email_normalized"]
+    if not email_valida(email):
+        return "no_email"
+    if email in repo.emails_with_open_enrollment_anywhere(cur, [email]) or \
+            email in repo.emails_with_completed_cycle_anywhere(cur, [email]):
+        return "address_in_other_sequence"
+    if tetto_residuo(cur, ctx, journey_id, now) <= 0:
+        return "daily_cap_reached"
+    return "duplicate_address"

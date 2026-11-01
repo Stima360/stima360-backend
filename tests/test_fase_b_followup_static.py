@@ -248,8 +248,13 @@ def test_e2_la_prova_non_e_mai_una_dichiarazione_ne_un_recapito():
                     "ok mario@example.it", "393331234567", "x" * 101, None, 12):
         with pytest.raises(ValidationError):
             s._riferimento_prova(cattiva, contatto)
-    assert s.GRANT_EVIDENCE_TYPES == ("paper_form", "digital_form", "other_documented")
-    assert "phone_call" not in s.REVOCATION_EVIDENCE_TYPES and "email_on_file" not in s.GRANT_EVIDENCE_TYPES
+    # SENTINELLA AGGIORNATA DA CONSENSI MANUALI (decisione del titolare): di
+    # persona, telefono, email, documento, piu' le tre modalita' storiche.
+    # Resta vero che la prova non e' mai il solo recapito del cliente (sopra)
+    # e che una email "in rubrica" non e' una modalita'.
+    assert set(s.GRANT_EVIDENCE_TYPES) == {"in_person", "phone_call", "email_message", "document",
+                                           "paper_form", "digital_form", "other_documented"}
+    assert "email_on_file" not in s.GRANT_EVIDENCE_TYPES
 
 
 def test_e3_la_data_di_raccolta_e_nel_passato_e_con_fuso():

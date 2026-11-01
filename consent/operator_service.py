@@ -58,12 +58,24 @@ from .enums import (
 from .exceptions import ConflictError, NotFoundError, ValidationError
 from .guard import can_send_marketing
 
-#: Le modalita' di raccolta ammesse per un GRANT. Chiuse: una telefonata o
-#: una email in rubrica non sono fra queste, di proposito.
+#: Le modalita' di raccolta ammesse per un GRANT. Decisione del titolare
+#: (consensi manuali): di persona, per telefono, per email o con un documento,
+#: sempre con la dichiarazione dell'operatore e il riferimento della prova
+#: (per una telefonata: data, ora e numero; per una email: data e oggetto).
+#: Le tre modalita' precedenti restano valide per lo storico.
 EVIDENCE_PAPER_FORM = "paper_form"
 EVIDENCE_DIGITAL_FORM = "digital_form"
 EVIDENCE_OTHER_DOCUMENTED = "other_documented"
-GRANT_EVIDENCE_TYPES = (EVIDENCE_PAPER_FORM, EVIDENCE_DIGITAL_FORM, EVIDENCE_OTHER_DOCUMENTED)
+EVIDENCE_IN_PERSON = "in_person"
+EVIDENCE_PHONE_CALL = "phone_call"
+EVIDENCE_EMAIL_MESSAGE = "email_message"
+EVIDENCE_DOCUMENT = "document"
+GRANT_EVIDENCE_TYPES = (EVIDENCE_IN_PERSON, EVIDENCE_PHONE_CALL, EVIDENCE_EMAIL_MESSAGE, EVIDENCE_DOCUMENT,
+                        EVIDENCE_PAPER_FORM, EVIDENCE_DIGITAL_FORM, EVIDENCE_OTHER_DOCUMENTED)
+#: La dichiarazione dell'operatore, scritta nella nota dell'evento (che e'
+#: append-only): lo storico dice CHI ha attestato COSA.
+DICHIARAZIONE_OPERATORE = ("Dichiarazione dell'operatore: consenso realmente ottenuto dall'interessato, "
+                           "nei modi e nella data indicati.")
 #: La prova di una REVOCA espressa al personale, se c'e' (facoltativa).
 REVOCATION_EVIDENCE_TYPES = GRANT_EVIDENCE_TYPES + ("written_request",)
 
@@ -186,7 +198,8 @@ def list_notices(*, at: datetime | None = None) -> list[dict[str, Any]]:
 
 
 def register_grant(ctx, contact_id: int, *, channels, decided_at: datetime, evidence_type: str,
-                   evidence_ref: str, notice_id: int, note: str | None = None) -> dict[str, Any]:
+                   evidence_ref: str, notice_id: int, note: str | None = None,
+                   attestation: bool = False) -> dict[str, Any]:
     """Un consenso marketing raccolto dall'operatore, PER CANALE, con la prova.
 
     109: `channels` e' l'elenco esplicito dei canali autorizzati (almeno uno,
@@ -201,6 +214,8 @@ def register_grant(ctx, contact_id: int, *, channels, decided_at: datetime, evid
     if evidence_type not in GRANT_EVIDENCE_TYPES:
         raise ValidationError(f"evidence_type must be one of {list(GRANT_EVIDENCE_TYPES)}")
     nota = _nota(note)
+    if attestation:
+        nota = DICHIARAZIONE_OPERATORE + (f"\n{nota}" if nota else "")
     with consent_cursor(commit=True) as (_, cur):
         contact = _contatto_registrabile(cur, ctx, contact_id)
         ref = _riferimento_prova(evidence_ref, contact)

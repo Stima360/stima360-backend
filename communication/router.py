@@ -220,10 +220,18 @@ def contact_consent_grant(
     esito = _tradotto_consenso(lambda: consent_operator.register_grant(
         ctx, contact_id, channels=payload.channels, decided_at=payload.decided_at,
         evidence_type=payload.evidence_type, evidence_ref=payload.evidence_ref,
-        notice_id=payload.notice_id, note=payload.note))
+        notice_id=payload.notice_id, note=payload.note, attestation=payload.attestation))
+    # Regola del titolare: con un consenso EMAIL il follow-up parte subito
+    # (iscrizione e prima email), se il contatto e' idoneo; altrimenti il
+    # motivo esatto torna alla scheda. Il consenso resta registrato comunque.
+    avvio = None
+    if "email" in esito["channels"]:
+        from . import avvio_immediato
+        avvio = avvio_immediato.avvia(ctx, contact_id)
     return {"recorded": True, "created": esito["created"], "event_id": esito["event"]["id"],
             "channels": esito["channels"],
-            "event_ids": [e["event"]["id"] for e in esito["events"]], "notice": esito["notice"]}
+            "event_ids": [e["event"]["id"] for e in esito["events"]], "notice": esito["notice"],
+            "start": avvio}
 
 
 @router.post("/contacts/{contact_id}/consent/refusal", status_code=201)

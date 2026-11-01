@@ -472,21 +472,30 @@ def _ricomincia(journey: dict[str, Any]) -> bool:
     return journey["trigger_type"] == "stima_request_registered"
 
 
-def _enroll_contatti(ctx, cur, adesso, conteggi: dict[str, int]) -> None:
+def _enroll_contatti(ctx, cur, adesso, conteggi: dict[str, int], *,
+                     solo_contatto: int | None = None) -> list[dict[str, Any]]:
     """108 (Fase B): le iscrizioni della journey SUL CONTATTO.
 
     La platea la legge `audience.candidates` (prefiltrata e deduplicata per
     indirizzo); qui, contatto per contatto e con il contatto bloccato, la
     guardia del consenso dice l'ultima parola e l'iscrizione nasce `active`
-    sul primo passo del calendario, oppure `stopped` con la ragione. Il
-    tetto giornaliero vale per l'agenzia: storici e futuri insieme.
+    oppure `stopped` con la ragione. Il tetto giornaliero vale per l'agenzia:
+    storici e futuri insieme.
+
+    PARTENZA IMMEDIATA (regola permanente del titolare): l'iscrizione nasce
+    sulla PRIMA email, dovuta adesso, qualunque sia il giorno di calendario;
+    le successive seguono il calendario dal momento iniziale. `solo_contatto`
+    limita il giro a un contatto (la partenza dopo un consenso). Restituisce
+    l'esito per contatto: `contact_id`, `enrollment_id`, `stop_reason`.
     """
+    esiti: list[dict[str, Any]] = []
     for journey in repo.active_journeys(cur, ctx, trigger_type=TRIGGER_CONTACT_ELIGIBLE):
-        passi = [p for p in repo.list_steps(cur, ctx, journey["id"]) if p["active"]]
+        passi = sorted((p for p in repo.list_steps(cur, ctx, journey["id"]) if p["active"]),
+                       key=lambda p: p["step_no"])
         if not passi:
             continue
         residuo = audience.tetto_residuo(cur, ctx, journey["id"], adesso)
-        candidati = audience.candidates(cur, ctx, now=adesso, limit=residuo)
+        candidati = audience.candidates(cur, ctx, now=adesso, limit=residuo, contact_id=solo_contatto)
         if not candidati:
             continue
         negate = _consenso_negato(ctx, [c["contact_id"] for c in candidati], _canali_dei_passi(passi))
@@ -500,20 +509,13 @@ def _enroll_contatti(ctx, cur, adesso, conteggi: dict[str, int]) -> None:
                         ragione = CONSENT_STOP_BY_GUARD_REASON.get(
                             decisione.reason if decisione is not None else "", STOP_CONSENT_NOT_GRANTED)
                     inizio = audience.momento_iniziale(candidato["granted_at"], adesso)
-                    passo, quando = followup_rules.prossimo_passo(
-                        passi, trigger_sent_at=inizio, now=adesso, ultimo_invio=None,
-                        timezone_name=journey["send_timezone"])
-                    if ragione is None and passo is None:
-                        # Un consenso cosi' recente che il calendario e' gia'
-                        # scaduto non esiste; ma se mai, non si iscrive a vuoto.
-                        conteggi["enrolled_skipped"] += 1
-                        continue
-                    _, creata = repo.insert_contact_enrollment(
+                    primo = passi[0]
+                    riga, creata = repo.insert_contact_enrollment(
                         cur, ctx, journey_id=journey["id"], contact_id=candidato["contact_id"],
                         email_normalized=candidato["email_normalized"], admitted_at=inizio,
                         status=(ENR_ACTIVE if ragione is None else "stopped"),
-                        next_step_no=(passo["step_no"] if ragione is None else None),
-                        next_action_at=(quando if ragione is None else None),
+                        next_step_no=(primo["step_no"] if ragione is None else None),
+                        next_action_at=(adesso if ragione is None else None),
                         stop_reason=ragione,
                         idempotency_key=(f"journey:{journey['journey_key']}:v{journey['version']}"
                                          f":contact:{candidato['contact_id']}:admitted:{int(inizio.timestamp())}"))
@@ -523,6 +525,8 @@ def _enroll_contatti(ctx, cur, adesso, conteggi: dict[str, int]) -> None:
                         conteggi["enrolled_active"] += 1
                     else:
                         conteggi["enrolled_stopped"] += 1
+                    esiti.append({"contact_id": candidato["contact_id"], "created": creata,
+                                  "enrollment_id": (riga or {}).get("id"), "stop_reason": ragione})
             except Exception:
                 # L'indice unico di piattaforma (stessa email aperta altrove,
                 # da un tick concorrente) arriva qui: e' esattamente la dedup
@@ -530,6 +534,7 @@ def _enroll_contatti(ctx, cur, adesso, conteggi: dict[str, int]) -> None:
                 conteggi["enrolled_skipped"] += 1
                 logger.info("journey_tick_contact_enroll_skipped contact_id=%s journey_id=%s",
                             candidato["contact_id"], journey["id"], exc_info=True)
+    return esiti
 
 
 def _ragione_di_stop_contatto(cur, ctx, r: dict[str, Any], canali=("email",)) -> str | None:
@@ -588,9 +593,13 @@ def _stop_o_pausa_contatto(ctx, cur, r: dict[str, Any], adesso, conteggi: dict[s
                     repo.update_system_pause(cur, ctx, r["id"], source=fonte, resume_after=fino_a,
                                              pause_ref=riferimento)
                 return
-            # nessun fatto: si riprende dal prossimo passo in calendario
+            # nessun fatto: si riprende dal prossimo passo in calendario, mai da
+            # uno gia' spedito (con la partenza immediata la prima email parte
+            # prima del suo giorno di calendario: riprenderla sarebbe un doppione)
             journey = repo.select_journey(cur, ctx, r["journey_id"])
-            passi = [p for p in repo.list_steps(cur, ctx, r["journey_id"]) if p["active"]]
+            gia_spedito = repo.last_sent_step_no(cur, ctx, r["id"])
+            passi = [p for p in repo.list_steps(cur, ctx, r["journey_id"])
+                     if p["active"] and (gia_spedito is None or p["step_no"] > gia_spedito)]
             passo, quando = followup_rules.prossimo_passo(
                 passi, trigger_sent_at=r["trigger_sent_at"], now=adesso,
                 ultimo_invio=repo.last_marketing_sent_at(cur, ctx, r["contact_id"]),
@@ -753,9 +762,15 @@ def _contesto_di_rendering(ctx, anagrafica: dict[str, Any], *, contact_id: int,
     }
 
 
+#: La chiave dei metadati che segna la PRIMA email nata da un consenso appena
+#: registrato: il claim la ammette anche fuori dalla finestra d'invio (regola
+#: del titolare). Solo `avvia_subito` la scrive, solo sul primo passo.
+PARTENZA_IMMEDIATA = "partenza_immediata"
+
+
 def _accoda_passo(ctx, cur, riga: dict[str, Any], passo: dict[str, Any], *, mode: str,
                   scheduled_at: datetime, anagrafica: dict[str, Any],
-                  stima_url: str | None = None) -> dict[str, Any]:
+                  stima_url: str | None = None, immediata: bool = False) -> dict[str, Any]:
     """Il messaggio del passo, nel ledger. Nessun provider, nessuna rete."""
     contesto = _contesto_di_rendering(ctx, anagrafica, contact_id=riga["contact_id"],
                                       stima_url=stima_url,
@@ -777,13 +792,15 @@ def _accoda_passo(ctx, cur, riga: dict[str, Any], passo: dict[str, Any], *, mode
         idempotency_key=(f"journey:{riga['id']}:step:{passo['step_no']}:run:{riga['run_no']}"),
         enrollment_id=riga["id"], step_no=passo["step_no"], run_no=riga["run_no"],
         # FASE A: i template sono testo semplice; la riga dice come spedirlo.
-        metadata=email_metadata.metadata_testo(
+        metadata={**email_metadata.metadata_testo(
             communication_type=passo["communication_type"],
             unsubscribe_url=contesto.get("unsubscribe_url")),
+            **({PARTENZA_IMMEDIATA: True} if immediata else {})},
         cur=cur)
 
 
-def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
+def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int], *,
+              immediati: frozenset[int] = frozenset()) -> None:
     righe = repo.lock_due_enrollments(cur, ctx, kind=KIND_ENQUEUE, now=adesso, limit=limite)
     attesa = repo.lock_due_enrollments(cur, ctx, kind=KIND_AWAIT_OPERATOR, now=adesso,
                                        limit=limite)
@@ -850,7 +867,9 @@ def _fase_due(ctx, cur, adesso, limite: int, conteggi: dict[str, int]) -> None:
                     # un passo dovuto parte adesso, uno futuro porta la sua ora.
                     scheduled_at=r["next_action_at"] if r["next_action_at"] > adesso else adesso,
                     anagrafica=anagrafiche.get(r["contact_id"], {}),
-                    stima_url=collegamenti.get(r["trigger_message_id"]))
+                    stima_url=collegamenti.get(r["trigger_message_id"]),
+                    immediata=r["id"] in immediati and passo["step_no"] == min(
+                        s["step_no"] for s in passi[r["journey_id"]]))
                 conteggi["queued" if esito["created"] else "queued_idempotent"] += 1
         except Exception:
             conteggi["errors"] += 1
@@ -882,7 +901,13 @@ def tick(ctx, *, now: datetime | None = None, limit: int = LIMITE_PREDEFINITO,
     conteggi = _conteggi()
     ctx.require_agency()
     if cur is None:
-        _riconosci_consensi_del_sito(ctx)
+        for contatto in _riconosci_consensi_del_sito(ctx):
+            # consenso email appena riconosciuto: partenza immediata (prima
+            # email segnata, spedita dal dispatcher di questo stesso giro)
+            try:
+                prepara_partenza(ctx, contatto, now=adesso)
+            except Exception:  # noqa: BLE001 - il giro va fatto comunque
+                logger.exception("journey_tick_immediate_start_failed contact_id=%s", contatto)
     for nome, fase in FASI:
         with cursore(cur) as (_, c):
             _pretendi_schema(c)
@@ -891,7 +916,7 @@ def tick(ctx, *, now: datetime | None = None, limit: int = LIMITE_PREDEFINITO,
     return conteggi
 
 
-def _riconosci_consensi_del_sito(ctx) -> None:
+def _riconosci_consensi_del_sito(ctx) -> list[int]:
     """Prima delle iscrizioni: le spunte del sito di QUESTA agenzia che ora
     hanno prove complete diventano consensi email (riconoscimento C3.4/C3.5).
 
@@ -909,12 +934,49 @@ def _riconosci_consensi_del_sito(ctx) -> None:
             pendenti = site_recognition.pending_contacts(c, agency_id=agenzia_del_giro)
     except Exception:  # noqa: BLE001 - il giro delle sequenze va fatto comunque
         logger.exception("journey_tick_site_consents_unavailable agency_id=%s", agenzia_del_giro)
-        return
+        return []
+    con_email = []
     for agenzia, contatto in pendenti:
         try:
-            site_recognition.recognize(SystemAgencyContext(agency_id=agenzia, origin="public_stima"), contatto)
+            esito = site_recognition.recognize(SystemAgencyContext(agency_id=agenzia, origin="public_stima"),
+                                               contatto)
+            if any(g["channel"] == "email" for g in esito["granted"]):
+                con_email.append(contatto)
         except Exception:  # noqa: BLE001 - un contatto non ferma il giro
             logger.exception("journey_tick_site_consent_failed agency_id=%s contact_id=%s", agenzia, contatto)
+    return con_email
+
+
+def prepara_partenza(ctx, contact_id: int, *, now: datetime | None = None) -> dict[str, Any]:
+    """PARTENZA IMMEDIATA, la parte del motore: iscrive QUESTO contatto al V3
+    (stesse esclusioni del giro: consenso, revoche, disiscrizioni, blocchi,
+    doppioni, tetto di 20 al giorno) e accoda la prima email adesso, segnata
+    `partenza_immediata`. Nessun provider, nessuna rete: spedisce il
+    dispatcher (vedi `communication.avvio_immediato`). Idempotente.
+
+    Esito: `{"enrollment_id"}` se c'e' una prima email da spedire; altrimenti
+    `{"reason"}`: un codice di `audience.MOTIVI_ESCLUSIONE`, una ragione di
+    stop del consenso, o `deferred_48h`.
+    """
+    adesso = now or utcnow()
+    conteggi = _conteggi()
+    with cursore(None) as (_, c):
+        _pretendi_schema(c)
+        journeys = repo.active_journeys(c, ctx, trigger_type=TRIGGER_CONTACT_ELIGIBLE)
+        if not journeys:
+            return {"reason": "no_active_sequence"}
+        esiti = _enroll_contatti(ctx, c, adesso, conteggi, solo_contatto=contact_id)
+        if not esiti:
+            return {"reason": audience.motivo_esclusione(
+                c, ctx, contact_id, now=adesso, journey_id=journeys[0]["id"])}
+    if esiti[0]["stop_reason"]:
+        return {"reason": esiti[0]["stop_reason"]}
+    iscrizione = esiti[0]["enrollment_id"]
+    with cursore(None) as (_, c):
+        _fase_due(ctx, c, adesso, LIMITE_PREDEFINITO, conteggi, immediati=frozenset({iscrizione}))
+    if conteggi["deferred"]:
+        return {"reason": "deferred_48h", "enrollment_id": iscrizione}
+    return {"enrollment_id": iscrizione}
 
 
 # ---------------------------------------------------------------------------

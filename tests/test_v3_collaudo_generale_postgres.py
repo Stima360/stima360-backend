@@ -155,6 +155,8 @@ def test_01_collaudo_completo_180_giorni(reale):
         locale = x["scheduled_at"].astimezone(ROMA)
         assert locale.isoweekday() <= 6 and 9 <= locale.hour < 19, (x["step_no"], locale)
         ritardo = (x["scheduled_at"] - inizio) / GIORNO
+        # PARTENZA IMMEDIATA: la prima all'iscrizione, le altre ai giorni approvati
+        giorno = 0 if x["step_no"] == 1 else giorno
         assert giorno <= ritardo < giorno + 3, (x["step_no"], ritardo)
 
     # ---- il cliente non autorizzato: nessuna email, il marketing resta fermo in coda

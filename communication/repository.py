@@ -467,6 +467,7 @@ def claim_due(cur, ctx, *, limit: int, provider: str, channel: str,
 {MANUAL_REPLY_EXCLUSION}
            AND m.scheduled_at <= NOW()
            AND (NOT COALESCE((to_jsonb(m)->>'tappa6_cycle')::boolean, FALSE)
+                OR COALESCE((m.metadata->>'partenza_immediata')::boolean, FALSE)
                 OR (EXTRACT(ISODOW FROM %s::timestamptz AT TIME ZONE 'Europe/Rome') BETWEEN 1 AND 6
                     AND (%s::timestamptz AT TIME ZONE 'Europe/Rome')::time >= TIME '09:00'
                     AND (%s::timestamptz AT TIME ZONE 'Europe/Rome')::time < TIME '19:00'))

@@ -131,6 +131,13 @@ def consent_confirm_submit(token: str, request: Request) -> HTMLResponse:
     from consent import capture
     ip, ua = _cliente(request)
     esito = capture.confirm_email(token, ip=ip, user_agent=ua)
+    if esito["status"] == "confirmed":
+        # Regola del titolare: il consenso email confermato fa partire subito
+        # il follow-up (se il contatto e' idoneo). Non cambia la risposta.
+        from operator_auth.context import SystemAgencyContext
+        from . import avvio_immediato
+        avvio_immediato.avvia(SystemAgencyContext(agency_id=esito["agency_id"], origin="public_consent"),
+                              esito["contact_id"])
     codici = {"confirmed": 200, "already_confirmed": 200, "limited": 429, "unknown": 404}
     return _html(consent_page.confirm_result_page(esito), codici.get(esito["status"], 409))
 

@@ -84,6 +84,10 @@ FUORI_DAL_NUCLEO = ("dispatcher.py", "schemas.py", "router.py", "dependencies.py
                     # cron (segreto di servizio). Chiama tick e dispatcher come
                     # la continuita' centrale; il nucleo non la importa.
                     "cron_router.py",
+                    # SENTINELLA AGGIORNATA DA CONSENSI MANUALI: la partenza
+                    # immediata del V3 dopo un consenso email (orchestra motore
+                    # e dispatcher); il nucleo non la importa.
+                    "avvio_immediato.py",
                     # FOLLOW-UP FASE B (108): la platea e le regole della
                     # journey sul contatto. Il nucleo non li importa.
                     "audience.py", "followup_rules.py",
