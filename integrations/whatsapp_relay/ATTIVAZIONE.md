@@ -269,3 +269,112 @@ file non è una prova della configurazione attuale.
   verifica.
 - **Template della stima:** l'invio automatico (servizio `/send`), i template approvati, il
   PDF, i link della valutazione e Stima Pro non sono toccati da questa procedura.
+
+## 8. Stato al 01/11/2026 e operazioni rimaste su Render/Meta
+
+| Passo | Stato | Evidenza |
+|---|---|---|
+| Relay nel codice di produzione, **spento** | pubblicato su `main` (`ef3777d`) | prove sul codice reale: `verify_production.py` 15/15; test di `main` 874 superati e 23 saltati, uguali prima e dopo |
+| Deploy di produzione di `ef3777d` | **da verificare** dall'account Render | da questa sessione Render non è raggiungibile |
+| Variabili del CRM TEST | **da impostare** | richiede l'account Render |
+| Accensione del relay in produzione | **non eseguita** | richiede l'account Render e la verifica del deploy spento |
+| Messaggio reale di prova | **non eseguito** | richiede un telefono di prova e il relay acceso |
+
+### 8.1 Prova del codice di produzione (ripetibile)
+
+```bash
+python integrations/whatsapp_relay/verify_production.py <main con il relay> <main precedente>
+```
+
+Le due cartelle sono estratte con `git archive ef3777d` e `git archive 87870c1`. Lo script
+confronta con e senza il relay:
+- risposta a Meta;
+- salvataggio in `whatsapp_incoming`;
+- invio del template della stima.
+
+Prova anche il relay acceso e spento, il CRM giù o in errore e la firma Meta errata.
+
+### 8.2 CRM TEST — servizio `srv-d9agc4vaqgkc739jkjhg`
+
+1. Impostare le variabili dalla dashboard (Environment) o via API. Valori nelle variabili
+   della propria shell, mai nel repository:
+
+   ```bash
+   curl -sS -X PUT "https://api.render.com/v1/services/srv-d9agc4vaqgkc739jkjhg/env-vars/WHATSAPP_RELAY_SECRET" -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d "{\"value\": \"$RELAY_SECRET\"}"
+   ```
+
+   ```bash
+   curl -sS -X PUT "https://api.render.com/v1/services/srv-d9agc4vaqgkc739jkjhg/env-vars/WHATSAPP_INBOUND_ALLOWED_SENDERS" -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d "{\"value\": \"$TEST_SENDER\"}"
+   ```
+
+   ```bash
+   curl -sS -X PUT "https://api.render.com/v1/services/srv-d9agc4vaqgkc739jkjhg/env-vars/WHATSAPP_INBOUND_ROUTES" -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d "{\"value\": \"$PHONE_ID:1\"}"
+   ```
+
+   - `$TEST_SENDER`: il telefono di prova autorizzato (`39…`), diverso da 393295674589.
+   - `$PHONE_ID`: il Phone ID del numero business letto sulla console Meta
+     (WhatsApp → API Setup). Il valore scritto in `roadmap/BLOCCO-4D_ATTIVAZIONE.md` va
+     confrontato con quello della console.
+   - `1`: l'agenzia STIMA360.
+
+   Non toccare `WHATSAPP_SERVICE_URL`. Lasciare assenti `WHATSAPP_OUTBOUND_MODE`,
+   `WHATSAPP_AUTO_REPLY_MODE` e `COMMUNICATION_AUTO_REPLY_TICK`.
+2. Applicare le variabili con un nuovo deploy:
+
+   ```bash
+   curl -sS -X POST "https://api.render.com/v1/services/srv-d9agc4vaqgkc739jkjhg/deploys" -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d '{"clearCache": "do_not_clear"}'
+   ```
+
+3. Controllo, con un One-Off Job che deve terminare con 0:
+
+   ```bash
+   curl -sS -X POST "https://api.render.com/v1/services/srv-d9agc4vaqgkc739jkjhg/jobs" -H "Authorization: Bearer $RENDER_API_KEY" -H "Content-Type: application/json" -d "{\"startCommand\": \"python scripts/check_whatsapp_relay_config.py --expected-phone-number-id $PHONE_ID\"}"
+   ```
+
+### 8.3 Produzione — servizio `stima360-backend`
+
+L'ID del servizio non è nel progetto: è nella dashboard Render, nell'URL del servizio.
+
+1. **Deploy di `ef3777d` riuscito, relay spento:**
+   - lanciare `python whatsapp_relay.py --check` come Job: deve rispondere
+     `OK inoltro SPENTO`;
+   - una stima di prova dal sito deve inviare il template come prima;
+   - una risposta WhatsApp deve comparire in `admin_whatsapp.html`.
+2. **Accensione per il solo mittente di prova:** impostare `WHATSAPP_RELAY_URL`,
+   `WHATSAPP_RELAY_SECRET` (lo stesso del TEST) e `WHATSAPP_RELAY_SENDERS=$TEST_SENDER`,
+   poi un nuovo deploy. `whatsapp_relay.py --check` deve rispondere
+   `OK inoltro ACCESO … per 1 mittente/i`.
+3. **Messaggio reale:**
+   - il telefono di prova scrive a +39 329 567 4589;
+   - nei log di produzione deve comparire `whatsapp_relay delivered`;
+   - nel CRM TEST, in «Messaggi», compaiono la conversazione e il badge «Non letti».
+
+   Controllo negativo: il messaggio di un altro numero resta solo in produzione.
+
+### 8.4 Rollback
+
+| Livello | Azione | Tempo |
+|---|---|---|
+| Spegnere | togliere `WHATSAPP_RELAY_URL` in produzione e fare un deploy | minuti; ricezione invariata |
+| Codice | `git revert ef3777d` su `main` e push (nessun force); oppure, dalla dashboard, «Rollback» al deploy di `87870c1` | minuti |
+| CRM TEST | togliere `WHATSAPP_RELAY_SECRET` | ogni inoltro rifiutato (503) |
+
+Il revert è provato: `git revert --no-edit ef3777d` su una copia di `main` riporta
+`main.py` identico a `87870c1`.
+
+### 8.5 Fasi successive (dopo il messaggio reale)
+
+- **Risposta manuale reale, al solo telefono di prova e entro 24 ore dal suo messaggio:**
+  - sul TEST impostare `WHATSAPP_OUTBOUND_MODE=meta`, `WHATSAPP_GRAPH_VERSION` e
+    `WHATSAPP_TOKEN`, il token del numero business;
+  - il CRM invia solo nella finestra di 24 ore, solo a una conversazione ricevuta e con
+    conferma dell'operatore;
+  - finita la prova, rimuovere `WHATSAPP_OUTBOUND_MODE`.
+- **Risposte automatiche:** restano spente; al massimo si usa la simulazione per
+  l'agenzia. L'invio reale (`WHATSAPP_AUTO_REPLY_MODE=send` più agenzia in `send`) si
+  valuta solo dopo il collaudo della risposta manuale. Fuori dalla finestra di 24 ore il
+  motore non invia: i template approvati per quel caso non sono implementati nel CRM.
+- **Esercizio ordinario:** il relay verso il TEST resta limitato al mittente di prova. Per
+  tutti i clienti serve il CRM di produzione come servizio proprio, con il suo database
+  (`roadmap/RILASCIO_TEST_123_125.md` § 7). Solo allora `WHATSAPP_RELAY_URL` punterà lì,
+  con `WHATSAPP_RELAY_SENDERS=*`.
