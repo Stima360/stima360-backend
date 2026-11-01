@@ -267,3 +267,86 @@ def test_e_the_production_forwarder_delivers_into_the_real_crm(rl, monkeypatch):
     assert _rows(rl, "sender_phone = %s", (customer,)) == []
     conv = client.get(f"{API}/conversations/{allowed}").json()
     assert [m["text"] for m in conv["messages"]] == ["Prova end-to-end"]
+
+
+# ---------------------------------------------------------------------------
+# B - numero business esistente: destinatario, mai mittente di prova
+# ---------------------------------------------------------------------------
+
+BUSINESS_DISPLAY = "393295674589"
+
+
+def test_b_business_number_is_the_recipient_and_estimate_statuses_stay_out(rl, monkeypatch):
+    """Il numero business compare come destinatario (`display_phone_number`),
+    l'agenzia viene dal suo Phone ID; il mittente di prova e' un altro
+    telefono. Gli stati di consegna dei template della stima inviati ai
+    clienti dal numero business non entrano nel TEST."""
+    ids = rl["ids"]
+    tester, customer = _sender(), _sender()
+    monkeypatch.setenv(relay.ALLOWED_SENDERS_ENV, tester)
+    change = _change(NUMBER_A, [_message(tester, body="Prova dal mittente autorizzato"),
+                                _message(BUSINESS_DISPLAY, body="eco dal numero business")],
+                     statuses=[{"id": f"wamid.stima.{uuid.uuid4().hex}", "status": "delivered",
+                                "timestamp": "1761800001", "recipient_id": customer}])
+    change["value"]["metadata"]["display_phone_number"] = BUSINESS_DISPLAY
+    before_events = _counts(rl)[1]
+    assert rl["relayed"](_payload(change)).status_code == 200
+    rows = _q(rl, "SELECT agency_id, display_phone_number, phone_number_id FROM whatsapp_inbound_messages "
+                  "WHERE sender_phone = %s", (tester,))
+    assert rows == [(ids["a"], BUSINESS_DISPLAY, NUMBER_A)]
+    assert _rows(rl, "sender_phone = %s", (BUSINESS_DISPLAY,)) == []
+    assert _counts(rl)[1] == before_events
+
+
+# ---------------------------------------------------------------------------
+# S - nessun invio involontario da un messaggio inoltrato
+# ---------------------------------------------------------------------------
+
+def test_s_a_relayed_message_cannot_trigger_any_whatsapp_send(rl, monkeypatch):
+    """Ambiente come il TEST reale: servizio delle stime configurato e
+    credenziali Meta presenti, ma invio manuale e risposte automatiche
+    spenti per variabile. Un messaggio inoltrato (anche STOP, anche una
+    domanda su un immobile) non chiama il servizio delle stime ne' Meta: non
+    dal webhook, non dal giro delle risposte automatiche, non dalla risposta
+    manuale. Le trappole della fixture `wa` falliscono a qualsiasi chiamata."""
+    import main
+    from auto_replies import service as auto_service
+    from message_replies import transport
+
+    ids = rl["ids"]
+    tester = _sender()
+    monkeypatch.setenv(relay.ALLOWED_SENDERS_ENV, tester)
+    monkeypatch.setenv("WHATSAPP_SERVICE_URL", "http://127.0.0.1:9/send")
+    monkeypatch.setattr(main, "WHATSAPP_SERVICE_URL", "http://127.0.0.1:9/send")
+    for name, value in (("WHATSAPP_TOKEN", "token-sintetico"), ("WHATSAPP_PHONE_ID", "900000000000001"),
+                        ("WHATSAPP_GRAPH_VERSION", "v21.0")):
+        monkeypatch.setenv(name, value)
+    for name in ("WHATSAPP_OUTBOUND_MODE", "WHATSAPP_AUTO_REPLY_MODE", "COMMUNICATION_AUTO_REPLY_TICK"):
+        monkeypatch.delenv(name, raising=False)
+    calls = []
+    monkeypatch.setattr(transport.MetaCloudTransport, "send",
+                        lambda self, *a, **k: calls.append(("meta", a)) or (_ for _ in ()).throw(AssertionError("Meta")))
+    _contact(rl, ids["a"], "Collaudo invii", tester)
+    # l'agenzia in simulazione: il motore resta fermo per l'arresto generale
+    _q(rl, "INSERT INTO whatsapp_auto_reply_settings (agency_id, mode, enabled_at) VALUES (%s, 'simulate', NOW()) "
+           "ON CONFLICT (agency_id) DO UPDATE SET mode = 'simulate', enabled_at = NOW()", (ids["a"],))
+    queued = "SELECT count(*) FROM communication_messages WHERE channel = 'whatsapp'"
+    before = _q(rl, queued)[0][0]
+    payload = _payload(_change(NUMBER_A, [_message(tester, body="STOP"),
+                                          _message(tester, body="Vorrei visitare l'immobile, quanto costa?"),
+                                          _message(tester, body="Ho compilato la stima sul sito")]))
+    assert rl["relayed"](payload).status_code == 200
+    assert len(_rows(rl, "sender_phone = %s", (tester,))) == 3
+
+    round_ = auto_service.run_for_agency(ids["a"])
+    assert round_["sent"] == 0 and round_["queued"] == 0 and round_["status"] != "sending"
+
+    owner = rl["login"]("owner_a")
+    state = owner.get(f"/api/message-replies/conversations/{tester}").json()
+    assert state["can_reply"] is False
+    assert "OUTBOUND_DISABLED" in {b["code"] for b in state.get("blocks") or state.get("blockers") or []}
+    r = owner.post(f"/api/message-replies/conversations/{tester}",
+                   json={"text": "Risposta di prova", "client_request_id": str(uuid.uuid4()), "confirm": True})
+    assert r.status_code >= 400
+    assert _q(rl, queued)[0][0] == before                      # nulla in coda
+    assert calls == [] and rl["sent"] == []                    # nessuna chiamata a Meta o al servizio stime
