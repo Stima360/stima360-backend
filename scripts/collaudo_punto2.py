@@ -2,49 +2,65 @@
 promemoria degli appuntamenti. Pensato per un One-Off Job Render del servizio
 TEST (stesse variabili d'ambiente del servizio: DB_*, SMTP_*, APPOINTMENT_*).
 
-NON SPEDISCE NULLA DA SOLO. Scrive solo appuntamenti e contatti sintetici
-attraverso i service del CRM (gli stessi dell'interfaccia: gli agganci delle
-conferme sono quelli veri); la spedizione la fa il giro del cron esistente
-(`POST /api/internal/communication/cron/run`), che spedisce SOLO verso gli
-indirizzi dell'allowlist. Cosi' questo script non puo' spedire per errore i
-messaggi in coda di altri flussi.
+UN SOLO COMANDO
 
-MODI (un comando per volta, nell'ordine):
+  python scripts/collaudo_punto2.py avvia --expected-host <HOST_DB_TEST_VERIFICATO>
 
-  preflight   sola lettura. Ambiente, database, registro della 127, variabili
-              di collaudo, agenzia/agente/attore, e cosa altro e' in coda per
-              l'agenzia (il cron spedirebbe anche quello).
-  setup       crea i sei scenari sintetici (vedi SCENARI). Rifa' il preflight,
-              rifiuta se qualcosa non va. Si lancia in fascia 08:00-20:00 (Roma):
-              il 2h e' valido solo li'.
-  report      sola lettura. Per ogni scenario: accodata / accettata dal provider
-              / sopressa / annullata, l'esito atteso, e l'elenco delle email che
-              devono essere ARRIVATE (la ricezione la conferma una persona).
-  cleanup     annulla gli appuntamenti sintetici ancora aperti, toglie il
-              divieto di contatto del contatto sintetico, prova a mettere i
-              contatti sintetici nel Cestino. Idempotente.
+`avvia` si puo' lanciare a QUALUNQUE ora (ora, alle 19, alle 20, di notte) e si
+puo' rilanciare: riparte da dove il collaudo e' arrivato.
 
-Tutti i modi si fermano prima di toccare il database se `DB_NAME` non e'
-`stima360_db_test` o `DB_HOST` non e' quello atteso (`--expected-host`).
-Nessun indirizzo email viene stampato per intero.
+  1. controlla l'ambiente (solo TEST, host atteso, 127, configurazione, SMTP
+     effettivo, destinatario UNICO info@stima360.it, agenzia servita dal cron);
+  2. se non c'e' un collaudo aperto, ne crea uno: contatti e appuntamenti
+     SINTETICI scritti attraverso i service dell'Agenda;
+  3. aspetta qualche minuto il cron esistente per le prove immediate;
+  4. stampa il report e distingue PROVE CONCLUSE, PROVE IN ATTESA (con l'ora a
+     cui diventano dovute e il limite oltre il quale sarebbero fallite) e PROVE
+     FALLITE;
+  5. se tutte le prove sono concluse e nessuna e' fallita, annulla da solo gli
+     appuntamenti sintetici (pulizia). Se qualcosa e' fallito, lascia i dati per
+     ispezionarli: poi `cleanup`.
+
+PROVE IMMEDIATE, a qualunque ora: la conferma (una sola, anche dopo doppio
+clic e «Conferma»), lo spostamento, l'annullamento, il divieto di contatto, il
+destinatario fuori elenco. Le conferme non dipendono dalla fascia oraria.
+
+PROVE PROGRAMMATE, per la PROSSIMA FASCIA UTILE (08:00-20:00 di Roma): il
+promemoria 2h (scenario A) e il 24h (scenario B). Se la fascia e' aperta e ne
+restano almeno 30 minuti, la prossima fascia utile e' ADESSO; altrimenti e'
+l'apertura successiva. Gli orari degli appuntamenti di A e B si ricavano
+simulando le regole VERE della policy (`appointment_reminders.policy`) un
+giro di cron ogni 5 minuti: A deve ricevere il 2h e mai il 24h, B il 24h e mai
+il 2h, entrambi al primo giro utile. Nessuna copia delle regole, nessun
+orologio cambiato, nessuna regola di invio modificata.
+
+NON SPEDISCE NULLA DA SOLO. La spedizione la fa il cron esistente
+(`POST /api/internal/communication/cron/run`), e solo verso l'unico indirizzo
+dell'allowlist. Questo strumento non puo' spedire per errore i messaggi in coda
+di altri flussi.
+
+ALTRI MODI (per usarli a pezzi): preflight (sola lettura), setup, report (sola
+lettura), cleanup (idempotente). Tutti si fermano prima di toccare il database
+se `DB_NAME` non e' `stima360_db_test` o `DB_HOST` non e' quello atteso. Nessun
+indirizzo email viene stampato per intero.
 
 SCENARI (ogni scenario ha un contatto sintetico "Collaudo P2 <lettera>")
-  A  appuntamento tra ~1h50 (il target 2h e' gia' passato: dovuto subito): UNA conferma + il promemoria 2h (non il 24h:
-     prenotato meno di 12h prima). Poi «Conferma» e un secondo clic sulla stessa
-     richiesta: ancora UNA sola conferma.
-  B  appuntamento tra ~20h: UNA conferma + il promemoria 24h (non il 2h).
+  A  conferma unica (doppio clic + «Conferma») e promemoria 2h; mai il 24h
+  B  conferma unica e promemoria 24h; mai il 2h
   C  appuntamento tra 3 giorni, subito SPOSTATO di un'ora: la conferma del
-     vecchio orario e' annullata, parte solo il «Nuovo orario».
-  D  appuntamento tra 4 giorni, subito ANNULLATO: nessuna email.
-  E  contatto con DIVIETO DI CONTATTO: la conferma e' accodata e soppressa.
-  F  contatto con email FUORI dall'allowlist: nessuna conferma accodata.
+     vecchio orario e' annullata, parte solo il «Nuovo orario»
+  D  appuntamento tra 4 giorni, subito ANNULLATO: nessuna email
+  E  contatto con DIVIETO DI CONTATTO: conferma accodata e soppressa
+  F  contatto con email FUORI dall'allowlist: nessuna conferma accodata
 """
 from __future__ import annotations
 
 import argparse
 import os
 import sys
+import time
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -55,11 +71,20 @@ sys.path.insert(0, str(ROOT))
 EXPECTED_DB = "stima360_db_test"
 MARKER = "collaudo_punto2"
 ROMA = ZoneInfo("Europe/Rome")
+#: L'UNICO destinatario del collaudo: scritto qui, non passato da riga di comando.
+DESTINATARIO = "info@stima360.it"
 FUORI_ELENCO = "collaudo-fuori-elenco@example.invalid"
 SCENARI = ("A", "B", "C", "D", "E", "F")
-FINESTRA = (8, 20)
+
+#: Fascia utile ancora "aperta" solo se ne restano almeno cosi' tanti minuti: il
+#: cron deve avere il tempo di passare.
+MARGINE_FASCIA = timedelta(minutes=30)
+PASSO = timedelta(minutes=5)
+#: A fine fascia il cron puo' arrivare in ritardo: la prova deve reggere anche cosi'.
+TOLLERANZA_CRON = timedelta(minutes=25)
 
 CONFERMA, PROMEMORIA = "appointment_confirmation", "appointment_reminder"
+CONCLUSA, ATTESA, FALLITA = "conclusa", "in attesa", "fallita"
 
 
 class Gate:
@@ -164,8 +189,124 @@ def smtp_gate(g: Gate) -> None:
         print(f"INFO  server SMTP effettivo: {eff['host']}:{eff['port']} ({eff['host_da']})", flush=True)
 
 
-def config_gate(g: Gate, recipient: str | None) -> None:
-    """Le tre impostazioni del collaudo, e SOLO indirizzi elencati a mano."""
+# ---------------------------------------------------------------------------
+# Pianificazione degli orari: PURA, sulle regole vere della policy
+# ---------------------------------------------------------------------------
+
+def _policy():
+    from appointment_reminders import policy
+    return policy
+
+
+def _su_griglia(dt: datetime) -> datetime:
+    """Il primo multiplo di 5 minuti >= dt (secondi azzerati)."""
+    dt = dt.replace(second=0, microsecond=0)
+    resto = dt.minute % 5
+    return dt + timedelta(minutes=(5 - resto) % 5)
+
+
+def prossima_fascia(now: datetime, margine: timedelta = MARGINE_FASCIA) -> tuple[datetime, bool]:
+    """(istante, immediata): quando comincia la prossima fascia UTILE per
+    inviare, e se e' adesso. Utile = aperta E con almeno `margine` ancora davanti."""
+    policy = _policy()
+    if policy.in_window(now) and policy.in_window(now + margine):
+        return now, True
+    base = now + margine if policy.in_window(now) else now
+    return policy.next_window_instant(base), False
+
+
+def primo_invio(offset: str, *, da: datetime, fino: datetime, start_at: datetime, created_at: datetime) -> datetime | None:
+    """Simula un cron che gira ogni 5 minuti fra `da` e `fino` con le regole
+    VERE della policy (stesso criterio del planner: se non c'e' un motivo di
+    scarto ed e' dovuto, il promemoria parte). Il primo istante in cui parte,
+    o None."""
+    policy = _policy()
+    t = da
+    while t <= fino:
+        d = policy.send_decision(now=t, start_at=start_at, created_at=created_at, offset=offset)
+        if d.reason is None and d.due:
+            return t
+        t += PASSO
+    return None
+
+
+def _eleggibile(offset: str, t: datetime, start_at: datetime, created_at: datetime) -> tuple[bool, bool]:
+    """(parte_se_il_cron_passa_ora, e_ancora_possibile) con le regole VERE della policy."""
+    d = _policy().send_decision(now=t, start_at=start_at, created_at=created_at, offset=offset)
+    return (d.reason is None and d.due), d.reason is None
+
+
+def previsti(start_at: datetime, created_at: datetime) -> dict[str, tuple[datetime, datetime]]:
+    """I promemoria che la policy PREVEDE per questo appuntamento, creato a
+    `created_at`, con un cron che gira ogni 5 minuti: {offset: (primo, ultimo)}.
+    `primo` e' il primo giro in cui parte; `ultimo` l'ultimo istante utile oltre il
+    quale non partirebbe piu' (finestra chiusa, anticipo troppo corto). Dipende
+    solo dai dati dell'appuntamento: si ricalcola uguale a ogni rilancio."""
+    risultato = {}
+    for offset in _policy().OFFSETS:
+        primo = primo_invio(offset, da=created_at, fino=start_at, start_at=start_at, created_at=created_at)
+        if primo is None:
+            continue
+        ultimo, t = primo, primo
+        while t <= start_at:
+            if _eleggibile(offset, t, start_at, created_at)[0]:
+                ultimo = t
+            t += PASSO
+        risultato[offset] = (primo, ultimo)
+    return risultato
+
+
+def orario_valido(lettera: str, now: datetime, w: datetime, start_at: datetime, *, pulito: bool) -> bool:
+    """A deve ricevere il 2h e B il 24h, al primo giro utile (entro 5 minuti dalla
+    fascia) e con margine per un cron in ritardo. `pulito`: l'altro promemoria
+    non deve partire affatto (meno email); se non esiste un orario cosi', si ripiega
+    su quelli in cui la policy prevede anche l'altro, e il report lo prevede."""
+    creato = now + timedelta(minutes=2)            # l'appuntamento nasce un attimo dopo il calcolo
+    voluto, altro = ("2h", "24h") if lettera == "A" else ("24h", "2h")
+    attesi = previsti(start_at, creato)
+    if voluto not in attesi:
+        return False
+    primo, ultimo = attesi[voluto]
+    if not (w <= primo <= w + PASSO) or ultimo < primo + TOLLERANZA_CRON:
+        return False
+    return not (pulito and altro in attesi)
+
+
+def orari_candidati(lettera: str, now: datetime, w: datetime, massimo: int = 400):
+    """Gli orari di inizio validi per A o B, dal piu' vicino: prima quelli in cui
+    parte SOLO il promemoria voluto; se non ce ne sono, quelli in cui la policy
+    ne prevede anche un altro. Un generatore: se l'agenda dell'agente e' occupata
+    si passa al successivo."""
+    if lettera == "A":
+        inizio = _su_griglia(w + timedelta(hours=1, minutes=55))
+    else:
+        inizio = _su_griglia(max(w + timedelta(hours=3, minutes=5), now + timedelta(hours=12, minutes=10)))
+    for pulito in (True, False):
+        s = inizio
+        for _ in range(massimo):
+            if orario_valido(lettera, now, w, s, pulito=pulito):
+                yield s
+            s += PASSO
+
+
+def programma(now: datetime, margine: timedelta = MARGINE_FASCIA) -> dict:
+    """Il piano completo per `now`: la fascia utile e il primo orario valido di A e B."""
+    now = now.replace(second=0, microsecond=0)
+    w, immediata = prossima_fascia(now, margine)
+    a = next(orari_candidati("A", now, w), None)
+    b = next(orari_candidati("B", now, w), None)
+    if a is None or b is None:
+        raise SystemExit("STOP nessun orario valido trovato per i promemoria: nessun dato scritto")
+    return {"fascia": w, "immediata": immediata, "A": a, "B": b}
+
+
+def descrivi(dt: datetime) -> str:
+    return dt.astimezone(ROMA).strftime("%d/%m/%Y %H:%M")
+
+
+
+def config_gate(g: Gate) -> None:
+    """Le tre impostazioni del collaudo, e SOLO l'indirizzo info@stima360.it."""
     from appointment_reminders import policy, settings
     raw = os.getenv(policy.RECIPIENTS_ENV)
     g.need(settings.confirmations_enabled(), "APPOINTMENT_CONFIRMATIONS=1 (conferme accese)")
@@ -174,10 +315,8 @@ def config_gate(g: Gate, recipient: str | None) -> None:
     g.need(raw is not None and raw.strip() != policy.WILDCARD,
            "APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS e' un elenco esplicito (non assente, non '*')")
     elenco = _destinatari()
-    g.need(len(elenco) >= 1, f"l'elenco ha {len(elenco)} indirizzo/i: " + ", ".join(mascherata(e) for e in elenco))
-    if recipient is not None:
-        g.need(recipient.strip().lower() in elenco, "il destinatario del collaudo e' nell'elenco")
-        g.need(len(elenco) == 1, "l'elenco contiene SOLO il destinatario del collaudo")
+    g.need(DESTINATARIO in elenco, f"il destinatario del collaudo ({mascherata(DESTINATARIO)}) e' nell'elenco")
+    g.need(elenco == [DESTINATARIO], f"l'elenco contiene SOLO il destinatario del collaudo ({len(elenco)} indirizzo/i)")
     smtp_gate(g)
 
 
@@ -206,18 +345,54 @@ def db_gate(g: Gate, cur, agency_id: int, actor: int, agent: int) -> dict:
     return {"role": att["role"] if att else None}
 
 
+def risolvi_ids(args) -> None:
+    """Completa agenzia, attore e agente quando NON sono ambigui (le ricava dal
+    servizio: agenzia servita dal cron, owner attivo, agente attivo); se lo sono,
+    si ferma ed elenca i candidati (solo id e ruolo, mai nomi o email)."""
+    if args.agency_id and args.actor_user_id and args.agent_user_id:
+        return
+    from communication import cron_router
+    conn = _connect(True)
+    try:
+        cur = conn.cursor()
+        if not args.agency_id:
+            servite = sorted(cron_router.agenzie_consentite())
+            if len(servite) != 1:
+                print(f"STOP agenzia non univoca: servite dal cron {servite or 'nessuna'}; indicare --agency-id", flush=True)
+                raise SystemExit(1)
+            args.agency_id = servite[0]
+        cur.execute("SELECT operator_user_id AS id, role FROM agency_memberships WHERE agency_id = %s AND status = 'active' "
+                    "ORDER BY operator_user_id", (args.agency_id,))
+        membri = cur.fetchall()
+        if not args.actor_user_id:
+            owners = [m["id"] for m in membri if m["role"] == "agency_owner"]
+            if len(owners) != 1:
+                print("STOP attore non univoco: " + ", ".join(f"{m['id']}={m['role']}" for m in membri) + "; indicare --actor-user-id", flush=True)
+                raise SystemExit(1)
+            args.actor_user_id = owners[0]
+        if not args.agent_user_id:
+            agenti = [m["id"] for m in membri if m["role"] == "agent"]
+            args.agent_user_id = agenti[0] if len(agenti) == 1 else args.actor_user_id
+        conn.rollback()
+    finally:
+        conn.close()
+    print(f"INFO  agenzia {args.agency_id}, attore {args.actor_user_id}, agente {args.agent_user_id} (ricavati dal servizio)", flush=True)
+
+
 def altro_in_coda(cur, agency_id: int) -> None:
     """Cio' che il cron spedirebbe in questo giro oltre al collaudo."""
-    cur.execute("SELECT reason_code, count(*) AS n FROM communication_messages WHERE agency_id = %s AND status = 'queued' "
-                "AND COALESCE(metadata->>'collaudo', '') <> %s GROUP BY 1 ORDER BY 1", (agency_id, MARKER))
+    cur.execute("SELECT m.reason_code, count(*) AS n FROM communication_messages m "
+                "LEFT JOIN contacts c ON c.id = m.contact_id AND c.agency_id = m.agency_id "
+                "WHERE m.agency_id = %s AND m.status = 'queued' AND COALESCE(c.source, '') NOT LIKE %s "
+                "GROUP BY 1 ORDER BY 1", (agency_id, f"{MARKER}:%"))
     righe = cur.fetchall()
     cur.execute("SELECT count(*) AS n FROM appointments WHERE agency_id = %s AND status IN ('scheduled','confirmed') "
                 "AND start_at > NOW() AND start_at < NOW() + INTERVAL '48 hours'", (agency_id,))
     app = cur.fetchone()["n"]
-    print("INFO  messaggi gia' in coda per l'agenzia (il cron li spedira' comunque): "
+    print("INFO  messaggi gia' in coda per l'agenzia, NON del collaudo (il cron li spedira' comunque): "
           + (", ".join(f"{r['reason_code']}={r['n']}" for r in righe) or "nessuno"), flush=True)
     print(f"INFO  appuntamenti reali nelle prossime 48h dell'agenzia: {app} "
-          "(con l'elenco esplicito ricevono notifiche solo se il loro contatto e' nell'elenco)", flush=True)
+          "(ricevono notifiche solo se il loro contatto e' nell'elenco: qui e' solo il destinatario del collaudo)", flush=True)
 
 
 def operatore(agency_id: int, user_id: int, role: str):
@@ -226,18 +401,11 @@ def operatore(agency_id: int, user_id: int, role: str):
                            session_id=None, auth_channel="session")
 
 
-def _arrotonda(dt: datetime) -> datetime:
-    return dt.replace(second=0, microsecond=0) + timedelta(minutes=(5 - dt.minute % 5) % 5)  # per B
-
-
-# ---------------------------------------------------------------------------
-# preflight
-# ---------------------------------------------------------------------------
-
-def cmd_preflight(args, *, recipient: str | None = None) -> Gate:
+def cmd_preflight(args) -> Gate:
     g = Gate()
     environment_gate(g, args.expected_host)
-    config_gate(g, recipient)
+    risolvi_ids(args)
+    config_gate(g)
     conn = _connect(True)
     try:
         cur = conn.cursor()
@@ -247,6 +415,7 @@ def cmd_preflight(args, *, recipient: str | None = None) -> Gate:
     finally:
         conn.close()
     return g
+
 
 
 # ---------------------------------------------------------------------------
@@ -263,107 +432,124 @@ def _crea_contatto(ctx, run_id: str, lettera: str, email: str) -> int:
     return int(c["id"])
 
 
-def _crea_appuntamento(ctx, agent: int, contact_id: int, start: datetime, durata=30, tipo="seller_meeting",
-                       property_id=None, request_id=None):
-    from appointments import errors, service
+def _crea(ctx, agent: int, contact_id: int, start: datetime, *, request_id=None, tipo="seller_meeting", property_id=None):
+    from appointments import service
     from appointments.schemas import AppointmentCreate
+    return service.create_appointment_idempotent(ctx, AppointmentCreate(
+        appointment_type=tipo, status="scheduled", start_at=start, end_at=start + timedelta(minutes=30),
+        assigned_user_id=agent, contact_id=contact_id, property_id=property_id,
+        client_request_id=request_id or str(uuid.uuid4())))
+
+
+def _crea_su_orari_validi(ctx, agent: int, contact_id: int, candidati, **kw):
+    """Crea sul primo orario valido libero dell'agenda: l'ORARIO NON SI SPOSTA a
+    caso (si scorre solo fra quelli gia' verificati sulle regole della policy)."""
+    from appointments import errors
     ultimo = None
-    for tentativo in range(6):                                  # un conflitto di agenda: si scorre di 30 minuti
-        inizio = start + timedelta(minutes=30 * tentativo)
+    for tentativo, s in enumerate(candidati):
+        if tentativo >= 10:
+            break
         try:
-            riga, replica = service.create_appointment_idempotent(ctx, AppointmentCreate(
-                appointment_type=tipo, status="scheduled", start_at=inizio, end_at=inizio + timedelta(minutes=durata),
-                assigned_user_id=agent, contact_id=contact_id, property_id=property_id,
-                client_request_id=request_id or str(uuid.uuid4())))
-            return riga, replica
+            riga, replica = _crea(ctx, agent, contact_id, s, **kw)
+            return riga, replica, s
         except errors.AppointmentConflict as exc:
             ultimo = exc
-    raise SystemExit(f"STOP agenda occupata per l'agente: nessuno slot libero provato ({type(ultimo).__name__})")
+    raise SystemExit("STOP agenda occupata per l'agente su tutti gli orari validi provati"
+                     + (f" ({type(ultimo).__name__})" if ultimo else ""))
 
 
 def cmd_setup(args) -> None:
-    recipient = args.recipient.strip().lower()
-    g = cmd_preflight(args, recipient=recipient)
-    adesso = datetime.now(timezone.utc)
-    ora_roma = adesso.astimezone(ROMA)
-    g.need(FINESTRA[0] <= ora_roma.hour < FINESTRA[1] - 3,
-           f"ora di Roma {ora_roma:%H:%M}: il collaudo si lancia fra le {FINESTRA[0]:02d}:00 e le {FINESTRA[1] - 3:02d}:00 "
-           "(il 2h e il 24h partono solo nella fascia 08:00-20:00)")
-    g.stop_if_failed("controlli non superati: nessun dato sintetico creato")
-
     from appointments import service
     from appointments.schemas import CancelBody, ConfirmBody, RescheduleBody
     from consent import do_not_contact
+    g = cmd_preflight(args)
+    g.stop_if_failed("controlli non superati: nessun dato sintetico creato")
+    adesso = datetime.now(timezone.utc)
+    piano = programma(adesso)
     conn = _connect(True)
     try:
         cur = conn.cursor()
         cur.execute("SELECT role FROM agency_memberships WHERE agency_id = %s AND operator_user_id = %s",
                     (args.agency_id, args.actor_user_id))
         ruolo = cur.fetchone()["role"]
+        conn.rollback()
     finally:
         conn.close()
     ctx = operatore(args.agency_id, args.actor_user_id, ruolo)
     run_id = args.run_id or adesso.strftime("%Y%m%d%H%M%S")
-    print(f"== setup, run {run_id} (ora di Roma {ora_roma:%d/%m/%Y %H:%M})", flush=True)
+    print(f"== setup, run {run_id}, ora di Roma {descrivi(adesso)}", flush=True)
+    print(f"INFO  prossima fascia utile per i promemoria: {descrivi(piano['fascia'])} "
+          f"({'ADESSO: prove immediate' if piano['immediata'] else 'prove programmate: in attesa dell apertura'})", flush=True)
 
-    contatti = {lettera: _crea_contatto(ctx, run_id, lettera, FUORI_ELENCO if lettera == "F" else recipient)
+    contatti = {lettera: _crea_contatto(ctx, run_id, lettera, FUORI_ELENCO if lettera == "F" else DESTINATARIO)
                 for lettera in SCENARI}
     print(f"OK   {len(contatti)} contatti sintetici creati (sorgente {MARKER}:{run_id}:<lettera>)", flush=True)
 
     tipo_a = "buyer_visit" if args.property_id else "seller_meeting"
-    # A - tra ~1h50: il target del 2h (inizio-2h) e' gia' passato, quindi il 2h e'
-    # dovuto subito, con 1h50 di anticipo (>= 1h). Conferma + 2h; doppio clic e
-    # «Conferma» non ne aggiungono.
-    inizio_a = (adesso + timedelta(hours=1, minutes=50)).astimezone(ROMA).replace(second=0, microsecond=0)
+    # A - 2h al primo giro utile; doppio clic e «Conferma» non aggiungono conferme
     rid_a = str(uuid.uuid4())
-    riga_a, _ = _crea_appuntamento(ctx, args.agent_user_id, contatti["A"], inizio_a, tipo=tipo_a,
-                                   property_id=args.property_id, request_id=rid_a)
-    _, replica = _crea_appuntamento(ctx, args.agent_user_id, contatti["A"], inizio_a, tipo=tipo_a,
-                                    property_id=args.property_id, request_id=rid_a)
-    print(f"OK   A creato; secondo clic con la stessa richiesta riconosciuto come replica: {replica}", flush=True)
+    riga_a, _, inizio_a = _crea_su_orari_validi(ctx, args.agent_user_id, contatti["A"],
+                                                orari_candidati("A", adesso.replace(second=0, microsecond=0), piano["fascia"]),
+                                                request_id=rid_a, tipo=tipo_a, property_id=args.property_id)
+    _, replica = _crea(ctx, args.agent_user_id, contatti["A"], inizio_a, request_id=rid_a, tipo=tipo_a, property_id=args.property_id)
+    print(f"OK   A creato per {descrivi(inizio_a)}; secondo clic con la stessa richiesta riconosciuto come replica: {replica}", flush=True)
     service.confirm_appointment(ctx, riga_a["id"], ConfirmBody(version=riga_a["version"]))
-    # B - tra ~20h: conferma + 24h
-    inizio_b = _arrotonda((adesso + timedelta(hours=20)).astimezone(ROMA))
-    _crea_appuntamento(ctx, args.agent_user_id, contatti["B"], inizio_b)
-    # C - tra 3 giorni, subito spostato di un'ora
-    inizio_c = (adesso + timedelta(days=3)).astimezone(ROMA).replace(hour=10, minute=0, second=0, microsecond=0)
-    riga_c, _ = _crea_appuntamento(ctx, args.agent_user_id, contatti["C"], inizio_c)
+    # B - 24h al primo giro utile
+    _, _, inizio_b = _crea_su_orari_validi(ctx, args.agent_user_id, contatti["B"],
+                                           orari_candidati("B", adesso.replace(second=0, microsecond=0), piano["fascia"]))
+    print(f"OK   B creato per {descrivi(inizio_b)}", flush=True)
+    for lettera, inizio in (("A", inizio_a), ("B", inizio_b)):
+        prev = previsti(inizio, adesso + timedelta(minutes=2))
+        print(f"INFO  {lettera}: la policy prevede " + (", ".join(f"{o} dalle {descrivi(t[0])} (limite {descrivi(t[1])})"
+                                                          for o, t in prev.items()) or "nessun promemoria"), flush=True)
+
+    def giorno(n):
+        return (adesso + timedelta(days=n)).astimezone(ROMA).replace(hour=10, minute=0, second=0, microsecond=0)
+
+    # C - spostato subito di un'ora
+    riga_c, _ = _crea(ctx, args.agent_user_id, contatti["C"], giorno(3))
     nuovo_c = riga_c["start_at"] + timedelta(hours=1)
     service.reschedule_appointment(ctx, riga_c["id"], RescheduleBody(
         version=riga_c["version"], start_at=nuovo_c, end_at=nuovo_c + timedelta(minutes=30)))
-    # D - tra 4 giorni, subito annullato
-    inizio_d = (adesso + timedelta(days=4)).astimezone(ROMA).replace(hour=10, minute=0, second=0, microsecond=0)
-    riga_d, _ = _crea_appuntamento(ctx, args.agent_user_id, contatti["D"], inizio_d)
+    # D - annullato subito
+    riga_d, _ = _crea(ctx, args.agent_user_id, contatti["D"], giorno(4))
     service.cancel_appointment(ctx, riga_d["id"], CancelBody(version=riga_d["version"], reason="collaudo sintetico"))
     # E - divieto di contatto
     do_not_contact.set_ban(ctx, contatti["E"], source="agency_decision", reason="collaudo sintetico del Punto 2")
-    inizio_e = (adesso + timedelta(days=5)).astimezone(ROMA).replace(hour=10, minute=0, second=0, microsecond=0)
-    _crea_appuntamento(ctx, args.agent_user_id, contatti["E"], inizio_e)
+    _crea(ctx, args.agent_user_id, contatti["E"], giorno(5))
     # F - email fuori dall'allowlist
-    inizio_f = (adesso + timedelta(days=6)).astimezone(ROMA).replace(hour=10, minute=0, second=0, microsecond=0)
-    _crea_appuntamento(ctx, args.agent_user_id, contatti["F"], inizio_f)
+    _crea(ctx, args.agent_user_id, contatti["F"], giorno(6))
     print("OK   scenari A-F scritti attraverso i service dell'Agenda", flush=True)
-    print("\nPROSSIMO PASSO: lasciare girare il cron (o lanciare un giro) e poi eseguire `report`.\n"
-          f"  report   --expected-host <HOST> --agency-id {args.agency_id} --actor-user-id {args.actor_user_id} "
-          f"--agent-user-id {args.agent_user_id}\n"
-          f"Il promemoria 24h di B e il 2h di A sono dovuti ADESSO: il giro del cron li accoda e li spedisce.", flush=True)
+
 
 
 # ---------------------------------------------------------------------------
-# report
+# lettura e valutazione: prove concluse / in attesa / fallite
 # ---------------------------------------------------------------------------
 
-def _scenari(cur, agency_id: int, run_id: str | None):
-    pattern = f"{MARKER}:{run_id}:%" if run_id else f"{MARKER}:%"
-    cur.execute("SELECT id, last_name, source FROM contacts WHERE agency_id = %s AND source LIKE %s ORDER BY id DESC",
-                (agency_id, pattern))
-    mappa: dict[str, dict] = {}
+@dataclass
+class Prova:
+    id: str
+    titolo: str
+    stato: str
+    nota: str = ""
+    breve: bool = False          # il cron la chiude in pochi minuti: vale la pena aspettarla
+    scadenza: datetime | None = None
+
+
+def _run_corrente(cur, agency_id: int, run_id: str | None):
+    """(run, {lettera: contact_id}) dell'ultimo collaudo (o di `run_id`)."""
+    cur.execute("SELECT id, source FROM contacts WHERE agency_id = %s AND source LIKE %s ORDER BY id DESC",
+                (agency_id, f"{MARKER}:%"))
+    per_run: dict[str, dict[str, int]] = {}
     for r in cur.fetchall():
-        lettera = r["source"].rsplit(":", 1)[-1]
-        run = r["source"].split(":")[1]
-        if lettera in SCENARI and lettera not in mappa:
-            mappa[lettera] = {"contact_id": r["id"], "run": run}
-    return mappa
+        _, run, lettera = r["source"].split(":", 2)
+        if lettera in SCENARI and (run_id is None or run == run_id):
+            per_run.setdefault(run, {}).setdefault(lettera, r["id"])
+    if not per_run:
+        return None, {}
+    run = max(per_run, key=lambda k: max(per_run[k].values()))
+    return run, per_run[run]
 
 
 def _righe_ledger(cur, agency_id: int, contact_id: int):
@@ -376,141 +562,240 @@ def _righe_ledger(cur, agency_id: int, contact_id: int):
     return cur.fetchall()
 
 
-def attesi(lettera: str, righe) -> tuple[bool, list[str]]:
-    """(superato, note) per lo scenario, sul ledger letto adesso. Se il cron non
-    e' ancora passato (conferme ancora in coda, promemoria non ancora accodati)
-    l'esito non e' un fallimento ma e' IN ATTESA: `superato` resta vero e la
-    nota lo dice."""
+def _appuntamenti(cur, agency_id: int, contact_id: int):
+    cur.execute("SELECT id, version, status, start_at, created_at FROM appointments WHERE agency_id = %s AND contact_id = %s ORDER BY id",
+                (agency_id, contact_id))
+    return cur.fetchall()
+
+
+def leggi(cur, agency_id: int, run_id: str | None):
+    run, contatti = _run_corrente(cur, agency_id, run_id)
+    dati = {lettera: {"contact_id": cid, "righe": _righe_ledger(cur, agency_id, cid),
+                      "appuntamenti": _appuntamenti(cur, agency_id, cid)} for lettera, cid in contatti.items()}
+    return run, dati
+
+
+def _aperto(appuntamenti):
+    return [a for a in appuntamenti if a["status"] in ("requested", "scheduled", "confirmed")]
+
+
+def run_aperto(dati: dict) -> bool:
+    return any(_aperto(sc["appuntamenti"]) for sc in dati.values())
+
+
+def _stato_messaggio(r) -> str:
+    return CONCLUSA if r["status"] == "sent" else ATTESA if r["status"] == "queued" else FALLITA
+
+
+def _prova_conferma(sigla: str, titolo: str, righe, *, variante=None, vecchia=False) -> Prova:
     conf = [r for r in righe if r["reason_code"] == CONFERMA]
-    prom = [r for r in righe if r["reason_code"] == PROMEMORIA]
-    note: list[str] = []
-    ok = True
-    cron_atteso = any(r["status"] == "queued" for r in conf)       # conferma non ancora spedita
+    if vecchia:
+        giuste = [r for r in conf if r["appointment_status"] == "rescheduled"]
+    elif variante:
+        giuste = [r for r in conf if r["variant"] == variante and r["appointment_status"] != "rescheduled"]
+    else:
+        giuste = conf
+    if len(giuste) != 1:
+        return Prova(sigla, titolo, FALLITA, f"attesa UNA conferma, trovate {len(giuste)}")
+    r = giuste[0]
+    return Prova(sigla, titolo, _stato_messaggio(r), f"conferma #{r['id']}: " + ("accettata dal provider" if r["status"] == "sent" else r["status"]),
+                 breve=r["status"] == "queued")
 
-    def chiedi(cond: bool, testo: str):
-        nonlocal ok
-        ok = ok and cond
-        note.append(("ok   " if cond else "FAIL ") + testo)
 
-    if lettera == "A":
-        vive = [r for r in conf if r["status"] != "cancelled"]
-        chiedi(len(conf) == 1, f"UNA sola conferma in totale (trovate {len(conf)}), anche dopo doppio clic e «Conferma»")
-        if not prom and cron_atteso:
-            note.append("IN ATTESA: il promemoria 2h verra' accodato dal prossimo giro del cron")
+def _prove_promemoria(lettera: str, scopo: str, dati: dict, ora: datetime) -> list[Prova]:
+    """Una prova per OGNI promemoria che la policy prevede per l'appuntamento
+    (simulato dai suoi dati: orario di inizio e di creazione), piu' il controllo
+    che non ne sia partito nessuno di non previsto. CONCLUSA = accettata dal
+    provider; IN ATTESA = non ancora accodata/inviata ma ancora possibile, con il
+    limite oltre il quale fallirebbe; FALLITA = finestra chiusa senza invio, o
+    scartata/fallita/non prevista."""
+    policy = _policy()
+    righe = [r for r in dati.get(lettera, {}).get("righe", []) if r["reason_code"] == PROMEMORIA]
+    aperti = _aperto(dati.get(lettera, {}).get("appuntamenti", []))
+    if not aperti:
+        return [Prova(f"{lettera}-{scopo}", f"{lettera}  promemoria {scopo}", FALLITA,
+                      "appuntamento non aperto (annullato dalla pulizia?): prova non conclusa")]
+    a = aperti[0]
+    attesi = previsti(a["start_at"], a["created_at"])
+    prove: list[Prova] = []
+    for offset in policy.OFFSETS:
+        if offset not in attesi:
+            continue
+        primo, ultimo = attesi[offset]
+        titolo = f"{lettera}  promemoria {offset}" + (" (lo scopo della prova)" if offset == scopo else " (previsto dalla policy)")
+        sigla = f"{lettera}-{offset}"
+        mess = [r for r in righe if r["offset"] == offset]
+        if mess:
+            r = mess[0]
+            prove.append(Prova(sigla, titolo, _stato_messaggio(r),
+                               f"promemoria {offset} #{r['id']}: " + ("accettato dal provider" if r["status"] == "sent" else r["status"]),
+                               breve=r["status"] == "queued"))
+        elif ora > ultimo:
+            prove.append(Prova(sigla, titolo, FALLITA,
+                               f"nessun promemoria {offset} entro {descrivi(ultimo)}: il cron non e' passato in tempo"))
         else:
-            chiedi(sorted(r["offset"] for r in prom) == ["2h"], f"un solo promemoria, il 2h (trovati {[r['offset'] for r in prom]})")
-        chiedi(all(r["status"] in ("sent", "queued") for r in vive + prom), "nessun messaggio soppresso o fallito")
-    elif lettera == "B":
-        chiedi(len(conf) == 1, f"UNA sola conferma (trovate {len(conf)})")
-        if not prom and cron_atteso:
-            note.append("IN ATTESA: il promemoria 24h verra' accodato dal prossimo giro del cron")
-        else:
-            chiedi(sorted(r["offset"] for r in prom) == ["24h"], f"un solo promemoria, il 24h (trovati {[r['offset'] for r in prom]})")
-        chiedi(all(r["status"] in ("sent", "queued") for r in conf + prom), "nessun messaggio soppresso o fallito")
-    elif lettera == "C":
-        vecchie = [r for r in conf if r["appointment_status"] == "rescheduled"]
-        nuove = [r for r in conf if r["appointment_status"] != "rescheduled"]
-        chiedi(len(vecchie) == 1 and vecchie[0]["status"] == "cancelled",
-               "la conferma del vecchio orario e' ANNULLATA (non e' mai partita)")
-        chiedi(len(nuove) == 1 and nuove[0]["variant"] == "rescheduled" and nuove[0]["status"] in ("sent", "queued"),
-               "una sola conferma «Nuovo orario» per l'orario nuovo")
-        chiedi(not any(r["status"] == "sent" for r in vecchie), "nessuna email con il vecchio orario e' uscita")
-    elif lettera == "D":
-        chiedi(len(conf) == 1 and conf[0]["status"] == "cancelled", "la conferma e' ANNULLATA")
-        chiedi(not any(r["status"] == "sent" for r in righe), "nessuna email e' uscita")
-    elif lettera == "E":
-        chiedi(len(conf) == 1 and conf[0]["status"] in ("suppressed", "queued"),
-               "la conferma e' accodata e poi SOPPRESSA (divieto di contatto)")
-        chiedi(all(r["suppressed_reason"] == "do_not_contact" for r in righe if r["status"] == "suppressed"),
-               "motivo della soppressione: do_not_contact")
-        chiedi(not any(r["status"] == "sent" for r in righe), "nessuna email e' uscita")
-    elif lettera == "F":
-        chiedi(len(righe) == 0, f"nessun messaggio accodato per l'indirizzo fuori elenco (trovati {len(righe)})")
-    return ok, note
+            dal = max(primo, ora)
+            prove.append(Prova(sigla, titolo, ATTESA,
+                               f"dovuto dal giro del cron delle {descrivi(dal)}, limite {descrivi(ultimo)}",
+                               breve=policy.in_window(ora) and primo <= ora + timedelta(minutes=15), scadenza=ultimo))
+    for r in righe:
+        if r["offset"] not in attesi:
+            prove.append(Prova(f"{lettera}-{r['offset']}", f"{lettera}  promemoria {r['offset']} NON previsto dalla policy", FALLITA,
+                               f"promemoria {r['offset']} #{r['id']} accodato ma la policy non lo prevede per questo appuntamento"))
+    return prove
 
 
-def cmd_report(args) -> None:
+def valuta(dati: dict, ora: datetime) -> list[Prova]:
+    """Le prove, ognuna CONCLUSA, IN ATTESA o FALLITA, sul ledger letto adesso.
+    In attesa non e' un fallimento: e' una prova che il cron (o la fascia
+    oraria) non ha ancora potuto chiudere, con il limite oltre il quale fallirebbe."""
+    policy = _policy()
+    prove: list[Prova] = []
+
+    def righe(l):
+        return dati.get(l, {}).get("righe", [])
+
+    def start_aperto(l):
+        a = _aperto(dati.get(l, {}).get("appuntamenti", []))
+        return a[0]["start_at"] if a else None
+
+    # --- A: conferma unica + i promemoria che la policy prevede (il 2h, e' lo scopo)
+    prove.append(_prova_conferma("A1", "A  una sola conferma, anche dopo doppio clic e «Conferma»", righe("A")))
+    prove += _prove_promemoria("A", "2h", dati, ora)
+    # --- B: conferma unica + i promemoria che la policy prevede (il 24h, e' lo scopo)
+    prove.append(_prova_conferma("B1", "B  una sola conferma", righe("B")))
+    prove += _prove_promemoria("B", "24h", dati, ora)
+
+    # --- C: spostamento
+    titolo_c1 = "C  spostamento: la conferma del VECCHIO orario e' annullata e non e' mai partita"
+    vecchie = [r for r in righe("C") if r["reason_code"] == CONFERMA and r["appointment_status"] == "rescheduled"]
+    if len(vecchie) != 1:
+        prove.append(Prova("C1", titolo_c1, FALLITA, f"attesa UNA conferma del vecchio orario, trovate {len(vecchie)}"))
+    else:
+        r = vecchie[0]
+        prove.append(Prova("C1", titolo_c1, CONCLUSA if r["status"] == "cancelled" else FALLITA,
+                           f"conferma del vecchio orario #{r['id']}: {r['status']}"
+                           + ("" if r["status"] == "cancelled" else " (doveva essere annullata, mai inviata)")))
+    prove.append(_prova_conferma("C2", "C  spostamento: parte UN SOLO «Nuovo orario»", righe("C"), variante="rescheduled"))
+
+    # --- D: annullamento
+    conf = [r for r in righe("D") if r["reason_code"] == CONFERMA]
+    if len(conf) == 1 and conf[0]["status"] == "cancelled" and not any(r["status"] == "sent" for r in righe("D")):
+        prove.append(Prova("D1", "D  annullamento: la conferma e' annullata, nessuna email", CONCLUSA, f"conferma #{conf[0]['id']}: cancelled"))
+    else:
+        prove.append(Prova("D1", "D  annullamento: la conferma e' annullata, nessuna email", FALLITA,
+                           f"stati trovati: {[r['status'] for r in righe('D')]}"))
+
+    # --- E: divieto di contatto
+    conf = [r for r in righe("E") if r["reason_code"] == CONFERMA]
+    if len(conf) != 1:
+        prove.append(Prova("E1", "E  divieto di contatto: conferma soppressa", FALLITA, f"attesa UNA conferma, trovate {len(conf)}"))
+    elif conf[0]["status"] == "suppressed":
+        ok = conf[0]["suppressed_reason"] == "do_not_contact"
+        prove.append(Prova("E1", "E  divieto di contatto: conferma soppressa", CONCLUSA if ok else FALLITA,
+                           f"conferma #{conf[0]['id']}: soppressa ({conf[0]['suppressed_reason']})"))
+    elif conf[0]["status"] == "queued":
+        prove.append(Prova("E1", "E  divieto di contatto: conferma soppressa", ATTESA, "ancora in coda: il cron non e' passato", breve=True))
+    else:
+        prove.append(Prova("E1", "E  divieto di contatto: conferma soppressa", FALLITA, f"stato {conf[0]['status']} (nessuna email doveva uscire)"))
+
+    # --- F: fuori elenco
+    prove.append(Prova("F1", "F  email fuori elenco: nessuna conferma accodata",
+                       CONCLUSA if not righe("F") else FALLITA,
+                       "nessun messaggio" if not righe("F") else f"trovati {len(righe('F'))} messaggi"))
+    return prove
+
+
+def stampa_prove(prove: list[Prova], ora: datetime) -> tuple[int, int, int]:
+    gruppi = {CONCLUSA: [], ATTESA: [], FALLITA: []}
+    for p in prove:
+        gruppi[p.stato].append(p)
+    titoli = {CONCLUSA: "PROVE CONCLUSE", ATTESA: "PROVE IN ATTESA (non ancora concluse, non fallite)", FALLITA: "PROVE FALLITE"}
+    for stato in (CONCLUSA, ATTESA, FALLITA):
+        print(f"\n== {titoli[stato]}: {len(gruppi[stato])}", flush=True)
+        for p in gruppi[stato]:
+            print(f"   [{p.id}] {p.titolo}\n        {p.nota}", flush=True)
+    return len(gruppi[CONCLUSA]), len(gruppi[ATTESA]), len(gruppi[FALLITA])
+
+
+def stampa_distinzione(dati: dict) -> list[str]:
+    print("\n== distinzione degli stati dei messaggi", flush=True)
+    print("   accodata               = riga nel registro comunicazioni", flush=True)
+    print("   accettata dal provider = `sent` nel registro: il server SMTP ha accettato il messaggio", flush=True)
+    print("   ricevuta               = NON verificabile da qui: la conferma una persona guardando la casella", flush=True)
+    attese = []
+    for lettera in SCENARI:
+        for r in dati.get(lettera, {}).get("righe", []):
+            if r["status"] == "sent":
+                attese.append(f"{lettera}: «{r['subject_snapshot']}»")
+    print(f"\n== email accettate dal provider, da cercare nella casella di {mascherata(DESTINATARIO)} ({len(attese)}):", flush=True)
+    for riga in attese:
+        print("   - " + riga, flush=True)
+    print("   Controllare: giorno e ora italiani, riferimenti dell'agenzia, lettura da telefono senza scorrimento orizzontale.", flush=True)
+    return attese
+
+
+def report(cur, args, ora: datetime):
+    run, dati = leggi(cur, args.agency_id, args.run_id)
+    if not dati:
+        print("STOP nessun collaudo trovato (eseguire prima `avvia`)", flush=True)
+        raise SystemExit(1)
+    print(f"\n######## REPORT del run {run}, ora di Roma {descrivi(ora)}", flush=True)
+    prove = valuta(dati, ora)
+    conclusi, attesa, fallite = stampa_prove(prove, ora)
+    stampa_distinzione(dati)
+    return dati, prove, (conclusi, attesa, fallite)
+
+
+
+# ---------------------------------------------------------------------------
+# comandi
+# ---------------------------------------------------------------------------
+
+def cmd_report(args) -> int:
     g = Gate()
     environment_gate(g, args.expected_host)
+    risolvi_ids(args)
     conn = _connect(True)
-    esito_globale = True
-    attese_in_casella: list[str] = []
-    in_attesa = False
     try:
         cur = conn.cursor()
-        mappa = _scenari(cur, args.agency_id, args.run_id)
-        if not mappa:
-            print("STOP nessuno scenario sintetico trovato (eseguire prima `setup`)", flush=True)
-            raise SystemExit(1)
-        for lettera in SCENARI:
-            sc = mappa.get(lettera)
-            print(f"\n== scenario {lettera} (run {sc['run'] if sc else '-'})", flush=True)
-            if sc is None:
-                print("FAIL contatto sintetico non trovato", flush=True)
-                esito_globale = False
-                continue
-            righe = _righe_ledger(cur, args.agency_id, sc["contact_id"])
-            for r in righe:
-                accettata = "accettata dal provider" if r["status"] == "sent" else r["status"]
-                extra = f" ({r['suppressed_reason']})" if r["suppressed_reason"] else ""
-                print(f"     #{r['id']} {r['reason_code']}{'/' + r['offset'] if r['offset'] else ''}"
-                      f"{'/' + r['variant'] if r['variant'] else ''}: {accettata}{extra}, tentativi {r['attempt_count']}",
-                      flush=True)
-                if r["status"] == "sent":
-                    attese_in_casella.append(f"{lettera}: «{r['subject_snapshot']}»")
-            ok, note = attesi(lettera, righe)
-            for n in note:
-                print("     " + n, flush=True)
-            in_coda = [r for r in righe if r["status"] == "queued"]
-            in_attesa = in_attesa or bool(in_coda) or any("IN ATTESA" in n for n in note)
-            if in_coda:
-                print(f"     PENDENTE: {len(in_coda)} messaggio/i ancora in coda (il cron non e' ancora passato)", flush=True)
-            esito_globale = esito_globale and ok
+        _, _, (conclusi, attesa, fallite) = report(cur, args, datetime.now(timezone.utc))
         conn.rollback()
     finally:
         conn.close()
-    print("\n== distinzione degli stati", flush=True)
-    print("   accodata               = riga nel registro comunicazioni (questo report la vede)", flush=True)
-    print("   accettata dal provider = `sent` nel registro: il server SMTP ha accettato il messaggio", flush=True)
-    print("   ricevuta               = NON verificabile da qui: la conferma una persona guardando la casella", flush=True)
-    print(f"\n== email che devono essere ARRIVATE nella casella autorizzata ({len(attese_in_casella)}):", flush=True)
-    for riga in attese_in_casella:
-        print("   - " + riga, flush=True)
-    print("   Per ciascuna controllare: giorno e ora italiani, indirizzo (se visita), riferimenti dell'agenzia,", flush=True)
-    print("   lettura da telefono senza scorrimento orizzontale. Nessuna email per D, E, F e per il vecchio orario di C.", flush=True)
-    if esito_globale and in_attesa:
-        print("\nESITO: IN ATTESA DEL CRON (nessun FAIL, ma ci sono messaggi ancora in coda): rilanciare il report dopo il giro", flush=True)
+    esito(conclusi, attesa, fallite)
+    return 0 if fallite == 0 else 1
+
+
+def esito(conclusi: int, attesa: int, fallite: int) -> None:
+    print(f"\nESITO: {conclusi} concluse, {attesa} in attesa, {fallite} fallite", flush=True)
+    if fallite:
+        print("ALMENO UNA PROVA E' FALLITA: i dati sintetici restano per l'ispezione; poi `cleanup`.", flush=True)
+    elif attesa:
+        print("COLLAUDO NON ANCORA CONCLUSO: ci sono prove in attesa. Rilanciare lo STESSO comando `avvia` "
+              "dopo l'ora indicata: riparte da qui, non crea dati nuovi.", flush=True)
     else:
-        print("\nESITO: " + ("TUTTI GLI SCENARI COERENTI COL LEDGER (la ricezione resta da confermare a mano)" if esito_globale
-                             else "ALMENO UNO SCENARIO NON COERENTE: vedere i FAIL sopra"), flush=True)
-    raise SystemExit(0 if esito_globale else 1)
+        print("TUTTE LE PROVE SONO CONCLUSE (la ricezione nella casella resta da confermare a mano).", flush=True)
 
 
-# ---------------------------------------------------------------------------
-# cleanup
-# ---------------------------------------------------------------------------
-
-def cmd_cleanup(args) -> None:
+def cmd_cleanup(args) -> int:
     g = Gate()
     environment_gate(g, args.expected_host)
+    risolvi_ids(args)
     from appointments import service
     from appointments.schemas import CancelBody
     from consent import do_not_contact
     conn = _connect(True)
     try:
         cur = conn.cursor()
-        mappa = _scenari(cur, args.agency_id, args.run_id)
+        run, dati = leggi(cur, args.agency_id, args.run_id)
         cur.execute("SELECT role FROM agency_memberships WHERE agency_id = %s AND operator_user_id = %s",
                     (args.agency_id, args.actor_user_id))
         att = cur.fetchone()
         g.need(att is not None, "l'attore appartiene all'agenzia")
         g.stop_if_failed("attore non valido: nessuna scrittura")
         ctx = operatore(args.agency_id, args.actor_user_id, att["role"])
-        aperti = []
-        for sc in mappa.values():
-            cur.execute("SELECT id, version, status FROM appointments WHERE agency_id = %s AND contact_id = %s "
-                        "AND status IN ('requested','scheduled','confirmed') ORDER BY id", (args.agency_id, sc["contact_id"]))
-            aperti += cur.fetchall()
+        aperti = [a for sc in dati.values() for a in _aperto(sc["appuntamenti"])]
         conn.rollback()
     finally:
         conn.close()
@@ -519,25 +804,24 @@ def cmd_cleanup(args) -> None:
         service.cancel_appointment(ctx, a["id"], CancelBody(version=a["version"], reason="collaudo sintetico: pulizia"))
         annullati += 1
     print(f"OK   appuntamenti sintetici annullati ora: {annullati}", flush=True)
-    for lettera, sc in mappa.items():
-        if lettera == "E":
-            try:
-                do_not_contact.lift_ban(ctx, sc["contact_id"], note="fine del collaudo sintetico")
-                print("OK   divieto di contatto del contatto E tolto", flush=True)
-            except Exception as exc:  # noqa: BLE001 - gia' tolto: va bene
-                print(f"INFO divieto di contatto E non da togliere ({type(exc).__name__})", flush=True)
+    if "E" in dati:
+        try:
+            do_not_contact.lift_ban(ctx, dati["E"]["contact_id"], note="fine del collaudo sintetico")
+            print("OK   divieto di contatto del contatto E tolto", flush=True)
+        except Exception as exc:  # noqa: BLE001 - gia' tolto: va bene
+            print(f"INFO divieto di contatto E non da togliere ({type(exc).__name__})", flush=True)
     from core import contact_lifecycle
     cestinati = 0
-    for lettera, sc in mappa.items():
+    for lettera, sc in dati.items():
         try:
             contact_lifecycle.trash_contact(ctx, sc["contact_id"], "test_record", "contatto sintetico del collaudo Punto 2")
             cestinati += 1
         except Exception as exc:  # noqa: BLE001 - un contatto con storico puo' non essere cestinabile
             if getattr(exc, "code", None) == contact_lifecycle.ALREADY_DELETED:
-                cestinati += 1                                  # gia' nel Cestino: stato raggiunto
+                cestinati += 1
                 continue
             print(f"INFO contatto {lettera} non cestinato ({type(exc).__name__}): resta, marcato come sintetico", flush=True)
-    print(f"OK   contatti sintetici nel Cestino: {cestinati} su {len(mappa)}", flush=True)
+    print(f"OK   contatti sintetici nel Cestino: {cestinati} su {len(dati)}", flush=True)
     conn = _connect(True)
     try:
         cur = conn.cursor()
@@ -550,34 +834,85 @@ def cmd_cleanup(args) -> None:
     g.need(residui == 0, f"nessun messaggio sintetico ancora in coda (trovati {residui})")
     print("\nRICORDA di ripristinare la configurazione temporanea del servizio TEST:\n"
           "  APPOINTMENT_CONFIRMATIONS, APPOINTMENT_REMINDER_OFFSETS, APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS", flush=True)
-    raise SystemExit(0 if not g.problems else 1)
+    return 0 if not g.problems else 1
+
+
+def cmd_avvia(args) -> int:
+    """Il comando unico: controlla, crea (se serve), aspetta il cron per le prove
+    immediate, riferisce, e pulisce solo se tutto e' concluso senza fallimenti."""
+    environment_gate(Gate(), args.expected_host)
+    risolvi_ids(args)
+    conn = _connect(True)
+    try:
+        cur = conn.cursor()
+        _, dati = leggi(cur, args.agency_id, args.run_id)
+        conn.rollback()
+    finally:
+        conn.close()
+    if dati and run_aperto(dati):
+        print("== collaudo gia' aperto: lo riprendo senza creare dati nuovi", flush=True)
+        g = Gate()
+        config_gate(g)             # la configurazione deve valere ancora, per i promemoria in attesa
+        g.stop_if_failed("configurazione non piu' valida: nessuna scrittura")
+    else:
+        cmd_setup(args)
+    limite = time.monotonic() + max(0, args.attesa_minuti) * 60
+    while True:
+        conn = _connect(True)
+        try:
+            cur = conn.cursor()
+            ora = datetime.now(timezone.utc)
+            run, dati = leggi(cur, args.agency_id, args.run_id)
+            prove = valuta(dati, ora)
+            conn.rollback()
+        finally:
+            conn.close()
+        da_attendere = [p for p in prove if p.stato == ATTESA and p.breve]
+        if not da_attendere or time.monotonic() >= limite or any(p.stato == FALLITA for p in prove):
+            break
+        print(f"   ... in attesa del cron per: {', '.join(p.id for p in da_attendere)} "
+              f"(ancora {int((limite - time.monotonic()) // 60)} min)", flush=True)
+        time.sleep(30)
+    conn = _connect(True)
+    try:
+        cur = conn.cursor()
+        _, _, (conclusi, attesa, fallite) = report(cur, args, datetime.now(timezone.utc))
+        conn.rollback()
+    finally:
+        conn.close()
+    esito(conclusi, attesa, fallite)
+    if fallite:
+        return 1
+    if not attesa:
+        print("\n== tutte le prove concluse: pulizia automatica dei dati sintetici", flush=True)
+        return cmd_cleanup(args)
+    return 0
 
 
 def main() -> int:
     p = argparse.ArgumentParser(description="Collaudo sintetico del Punto 2 (conferme e promemoria) su TEST")
-    p.add_argument("mode", choices=("preflight", "setup", "report", "cleanup"))
+    p.add_argument("mode", choices=("avvia", "preflight", "setup", "report", "cleanup"))
     p.add_argument("--expected-host", required=True)
-    p.add_argument("--agency-id", type=int, required=True)
-    p.add_argument("--actor-user-id", type=int, required=True, help="owner/admin dell'agenzia che compare nello storico")
-    p.add_argument("--agent-user-id", type=int, required=True, help="agente a cui assegnare gli appuntamenti sintetici")
-    p.add_argument("--recipient", help="setup: la SOLA email autorizzata che riceve le email del collaudo")
-    p.add_argument("--property-id", type=int, help="setup: immobile con incarico per fare di A una visita con indirizzo")
+    p.add_argument("--agency-id", type=int, help="se manca: l'unica agenzia servita dal cron")
+    p.add_argument("--actor-user-id", type=int, help="se manca: l'unico owner attivo dell'agenzia")
+    p.add_argument("--agent-user-id", type=int, help="se manca: l'unico agente attivo, altrimenti l'attore")
+    p.add_argument("--property-id", type=int, help="immobile con incarico per fare di A una visita con indirizzo")
+    p.add_argument("--attesa-minuti", type=int, default=20, help="avvia: quanto aspettare il cron per le prove immediate")
     p.add_argument("--run-id")
     args = p.parse_args()
-    if args.mode == "setup":
-        if not args.recipient:
-            p.error("setup richiede --recipient")
-        cmd_setup(args)
-    elif args.mode == "preflight":
+    if args.mode == "avvia":
+        return cmd_avvia(args)
+    if args.mode == "preflight":
         g = cmd_preflight(args)
         print("ESITO: " + ("PREFLIGHT SUPERATO (sola lettura, nulla scritto)" if not g.problems else
                            f"PREFLIGHT NON SUPERATO ({len(g.problems)} problemi)"), flush=True)
         return 0 if not g.problems else 1
-    elif args.mode == "report":
-        cmd_report(args)
-    else:
-        cmd_cleanup(args)
-    return 0
+    if args.mode == "setup":
+        cmd_setup(args)
+        return 0
+    if args.mode == "report":
+        return cmd_report(args)
+    return cmd_cleanup(args)
 
 
 if __name__ == "__main__":

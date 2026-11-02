@@ -163,55 +163,62 @@ la prova. Il codice del servizio deve essere il commit piu' recente di `core-0.1
 senza elenco di destinatari sono chiuse solo da quel commit in poi): confrontare il commit del
 deploy su Render con `git log -1 origin/core-0.1-test`.
 
-## 6. Collaudo reale su TEST (2F) con dati sintetici
+## 6. Collaudo reale su TEST (2F) con dati sintetici: un solo comando
 
-Strumento: `scripts/collaudo_punto2.py`, da lanciare come One-Off Job del servizio TEST (stesse
-variabili del servizio). **Non spedisce nulla da solo**: scrive solo contatti e appuntamenti sintetici
-attraverso i service dell'Agenda; la spedizione la fa il giro del cron esistente, solo verso l'elenco
-esplicito di destinatari. Ogni modo si ferma prima di connettersi se `DB_NAME` non e'
-`stima360_db_test` o `DB_HOST` non e' l'host atteso; non stampa mai un indirizzo email per intero.
-
-Prerequisiti: deploy fatto, 127 verificata (§ 5), variabili del § 4 impostate con **un solo**
-destinatario, agenzia di prova fra `COMMUNICATION_CRON_AGENCY_IDS`, cron attivo. Servono l'id
-agenzia, un owner/admin (`--actor-user-id`) e un agente attivo (`--agent-user-id`).
+Strumento: `scripts/collaudo_punto2.py`, One-Off Job del servizio TEST (stesse variabili del servizio).
+**Non spedisce nulla da solo**: scrive solo contatti e appuntamenti sintetici attraverso i service
+dell'Agenda; la spedizione la fa il cron esistente, **solo verso `info@stima360.it`** (l'unico
+destinatario, scritto nello script e non passato da riga di comando; l'elenco
+`APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS` deve contenere solo quello). Non cambia l'orologio, il
+cron o le regole di invio. Si ferma prima di connettersi se `DB_NAME` non e' `stima360_db_test` o
+`DB_HOST` non e' l'host atteso; non stampa mai un indirizzo per intero.
 
 ```bash
-python scripts/collaudo_punto2.py preflight --expected-host <HOST_DB_TEST_VERIFICATO> --agency-id <ID> --actor-user-id <OWNER> --agent-user-id <AGENTE>
+python scripts/collaudo_punto2.py avvia --expected-host <HOST_DB_TEST_VERIFICATO>
 ```
 
-```bash
-python scripts/collaudo_punto2.py setup --expected-host <HOST_DB_TEST_VERIFICATO> --agency-id <ID> --actor-user-id <OWNER> --agent-user-id <AGENTE> --recipient <EMAIL_DI_PROVA>
-```
+Si lancia **a qualunque ora** (ora, alle 19, alle 20, di notte) e si puo' **rilanciare**: riparte da dove
+e' arrivato, senza creare dati nuovi. Agenzia, attore (owner) e agente si ricavano dal servizio se non
+sono ambigui (altrimenti si ferma ed elenca solo id e ruolo; si possono dare con `--agency-id`,
+`--actor-user-id`, `--agent-user-id`). Cosa fa, in ordine:
 
-Il `preflight` e' di sola lettura e dice anche **cosa altro e' in coda** per l'agenzia (il cron lo
-spedirebbe comunque): se non e' vuoto, fermarsi e decidere. Il `setup` va lanciato fra le 08:00 e le
-17:00 di Roma. Poi attendere il giro del cron (o lanciarne uno) e:
+1. controlla ambiente (solo TEST, 127 registrata, configurazione, SMTP effettivo, destinatario unico,
+   agenzia servita dal cron) e dice cosa altro e' in coda per l'agenzia;
+2. se non c'e' un collaudo aperto, crea i sei scenari sintetici;
+3. aspetta fino a 20 minuti (`--attesa-minuti`) il cron per le prove che il cron chiude subito;
+4. stampa il report con **PROVE CONCLUSE**, **PROVE IN ATTESA** (con l'ora da cui sono dovute e il
+   **limite** oltre il quale sarebbero fallite) e **PROVE FALLITE**;
+5. se tutte sono concluse e nessuna e' fallita, annulla da solo gli appuntamenti sintetici. Se qualcosa
+   e' fallito lascia i dati per l'ispezione (poi `cleanup`).
 
-```bash
-python scripts/collaudo_punto2.py report --expected-host <HOST_DB_TEST_VERIFICATO> --agency-id <ID> --actor-user-id <OWNER> --agent-user-id <AGENTE>
-```
+Codice d'uscita: 0 senza fallimenti (anche con prove in attesa, che il report dice a chiare lettere), 1 con
+almeno una prova fallita.
 
-| Scenario | Atteso |
+**Prove immediate, a qualunque ora**, perche' le conferme non dipendono dalla fascia oraria: conferma
+unica (anche dopo doppio clic e «Conferma»), spostamento, annullamento, divieto di contatto, destinatario
+fuori elenco. **Prove programmate** per la **prossima fascia utile** (08:00–20:00 di Roma): il promemoria
+2h (scenario A) e il 24h (scenario B). La fascia e' «adesso» se e' aperta con almeno 30 minuti davanti;
+altrimenti e' l'apertura successiva (alle 20:00 o dopo: domattina alle 08:00). Gli orari di A e B non
+sono scelti a mano: si simula, con le funzioni **vere** della policy, un giro di cron ogni 5 minuti dalla
+creazione dell'appuntamento, e il report valuta **esattamente i promemoria che la policy prevede** per
+quell'appuntamento, ognuno con il suo limite. Cosi' un promemoria che manca oltre il limite e' un
+fallimento, uno che e' solo in anticipo e' «in attesa», uno non previsto e' un fallimento.
+
+| Scenario | Prove |
 |---|---|
-| A: appuntamento fra ~1h50, poi «Conferma» e un secondo clic | **una** conferma + promemoria **2h** (non il 24h) |
-| B: appuntamento fra ~20h | **una** conferma + promemoria **24h** (non il 2h) |
-| C: appuntamento fra 3 giorni, subito spostato di un'ora | conferma del vecchio orario **annullata**; parte solo «Nuovo orario» |
-| D: appuntamento fra 4 giorni, subito annullato | conferma **annullata**, nessuna email |
-| E: contatto con divieto di contatto | conferma accodata e **soppressa** (`do_not_contact`) |
+| A: conferma + promemoria **2h**, doppio clic e «Conferma» | una sola conferma; 2h inviato |
+| B: conferma + promemoria **24h** | una sola conferma; 24h inviato |
+| C: appuntamento fra 3 giorni, subito spostato di un'ora | conferma del vecchio orario **annullata e mai partita**; un solo «Nuovo orario» |
+| D: appuntamento fra 4 giorni, subito annullato | conferma annullata, nessuna email |
+| E: contatto con divieto di contatto | conferma soppressa (`do_not_contact`) |
 | F: email fuori elenco | nessuna conferma accodata |
 
-Totale atteso nella casella autorizzata: **5 email** (A: 2, B: 2, C: 1). Il `report` le elenca per oggetto.
-Con `--property-id <immobile con incarico>` lo scenario A diventa una visita con **indirizzo** nel testo.
+Nella casella autorizzata arrivano di norma **5 email** (A: conferma e 2h, B: conferma e 24h, C: «Nuovo
+orario»); il report le elenca per oggetto. Se lanciato tra le 19:35 e le 19:59 la policy prevede per A
+anche un 24h la sera stessa, e il report lo prevede di conseguenza. Con `--property-id <immobile con
+incarico>` lo scenario A diventa una visita con **indirizzo** nel testo.
 
-```bash
-python scripts/collaudo_punto2.py cleanup --expected-host <HOST_DB_TEST_VERIFICATO> --agency-id <ID> --actor-user-id <OWNER> --agent-user-id <AGENTE>
-```
-
-Il `cleanup` annulla gli appuntamenti sintetici ancora aperti, toglie il divieto di contatto, prova a
-mettere i contatti sintetici nel Cestino (quelli con storico possono restare, marcati `collaudo_punto2`)
-ed e' ripetibile. Poi rimuovere le variabili temporanee (§ 4).
-
-**Tre stati distinti**, mai confusi nei report:
+**Tre stati distinti**, mai confusi:
 
 - **accodata**: riga `queued` nel registro comunicazioni;
 - **accettata dal provider**: `sent` nel registro; vuol dire che il server SMTP ha accettato il
@@ -221,7 +228,12 @@ ed e' ripetibile. Poi rimuovere le variabili temporanee (§ 4).
 
 Controlli sulla casella, a mano: data e ora **italiane**, indirizzo (con `--property-id`), riferimenti
 dell'agenzia su righe separate (nome, telefono, email), lettura da telefono **senza scorrimento
-orizzontale**. Il rendering a 360 e 320 px e' stato verificato in locale (vedi § 7).
+orizzontale**.
+
+Per usarlo a pezzi: `preflight` e `report` sono di sola lettura; `setup` crea; `cleanup` annulla gli
+appuntamenti sintetici, toglie il divieto di contatto e prova a cestinare i contatti (quelli con storico
+possono restare, marcati `collaudo_punto2`) ed e' ripetibile. Alla fine rimuovere le variabili
+temporanee (§ 4).
 
 ## 7. Test eseguiti (locale, PostgreSQL 16 reale)
 
