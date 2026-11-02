@@ -58,6 +58,15 @@ NAMESPACE = "a3013b-test"
 def agenda_completa(db):  # noqa: F811
     with db["conn"].cursor() as cur:
         for versione in CATENA_AGENDA:
+            # RIPARAZIONE FIXTURE (PUNTO 2): il `db` di A30-2 applica gia' la 076
+            # (il service di disponibilita' legge le sue tabelle); riapplicarla
+            # qui faceva saltare, in ERROR, ogni suite costruita su questa
+            # fixture (A30-13B, A31-*, A32-*, CRM-OPS-3/4). La catena non cambia:
+            # una migration gia' presente nel database non si riesegue.
+            if versione == "076_a30_11_working_hours":
+                cur.execute("SELECT to_regclass('public.agent_working_hours') IS NOT NULL")
+                if cur.fetchone()[0]:
+                    continue
             cur.execute((MIGRAZIONI / f"{versione}.sql").read_text(encoding="utf-8"))
     db["conn"].commit()
     return db
