@@ -166,7 +166,6 @@ def tick(ctx_operatore, *, limit: int = repository.MAX_CANDIDATES,
     conteggi = _conteggi_vuoti()
     # ROADMAP PUNTO 2: un giro per ogni offset attivo (24h e, se configurato, 2h).
     offsets = settings.offsets()
-    destinatari_ammessi = settings.allowed_recipients()
     conteggi["offsets"] = list(offsets)
     for candidato in candidati:
         conteggi["scanned"] += 1
@@ -175,7 +174,7 @@ def tick(ctx_operatore, *, limit: int = repository.MAX_CANDIDATES,
             try:
                 decisione = policy.is_reminder_eligible(
                     now=adesso, appointment=appuntamento, contact=candidato["contact"], offset=offset,
-                    allowed_recipients=destinatari_ammessi)
+                    allowed_recipients=settings.allowed_recipients_for(offset))
                 if decisione.reason is not None:
                     conteggi["ineligible"] += 1
                     conteggi["skipped_by_reason"][decisione.reason] += 1

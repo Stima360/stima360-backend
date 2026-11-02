@@ -152,7 +152,8 @@ def decide(message: dict[str, Any], letto: dict[str, Any] | None,
             and appuntamento["contact_id"] != message.get("contact_id"):  # I
         return REASON_CONTACT_CHANGED
     motivo = policy.ineligibility_reason(appuntamento, contatto,         # E F G H J
-                                         allowed_recipients=settings.allowed_recipients())
+                                         allowed_recipients=settings.allowed_recipients_for(
+                                             None if conferma else meta["offset"]))
     if motivo is not None:
         return motivo
     if contatto["email"] != message.get("destination_snapshot"):        # K

@@ -34,6 +34,14 @@ def R(*a):
     return datetime(*a, tzinfo=ROMA)
 
 
+@pytest.fixture(autouse=True)
+def _destinatari_di_prova(monkeypatch):
+    """Conferme e 2h sono fail-closed: ogni test che accoda dichiara, come sul
+    TEST, l'elenco ESPLICITO dei destinatari di prova."""
+    monkeypatch.setenv("APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS",
+                       "mario@example.it, nuova@example.it, prova@example.test")
+
+
 INIZIO = R(2031, 6, 13, 10, 0)
 INDIRIZZO = {"address": "Via Roma", "civic_number": "12", "city": "Giulianova"}
 
@@ -200,7 +208,8 @@ def test_T2_la_conferma_ha_giorno_ora_indirizzo_e_riferimenti():
     assert oggetto == "Conferma: visita all'immobile venerdì 13 giugno 2031 alle 10:00"
     for atteso in ("Conferma appuntamento", "Buongiorno Mario,", "è fissato",
                    "venerdì 13 giugno 2031", "10:00", "Via Roma 12, Giulianova",
-                   "Riferimenti", "Agenzia Mare, 085 123456, info@agenziamare.it",
+                   # una riga per riferimento; telefono con spazi non separabili
+                   "Riferimenti", "Agenzia Mare<br>085\u00a0123456<br>info@agenziamare.it",
                    "contatta l'agenzia"):
         assert atteso in corpo, atteso
     assert (template.CONFIRMATION_TEMPLATE_KEY, template.CONFIRMATION_TEMPLATE_VERSION) == \
@@ -277,7 +286,6 @@ def letto(**diversi):
 
 
 def test_K2_decide_e_pura_e_ordinata(monkeypatch):
-    monkeypatch.delenv(policy.RECIPIENTS_ENV, raising=False)
     adesso = R(2031, 6, 12, 10, 0)
     assert confirmation.decide(None, now=adesso) == "appointment_missing"
     assert confirmation.decide(letto(), now=adesso) is None
@@ -310,7 +318,6 @@ def test_K3_spenta_per_impostazione_nessun_cursore_toccato(monkeypatch):
 
 def _accesa(monkeypatch, *, supportato=True, riga=None, enqueue=None):
     monkeypatch.setenv(settings.CONFIRMATIONS_ENV, "1")
-    monkeypatch.delenv(policy.RECIPIENTS_ENV, raising=False)
     chiamate = {"enqueue": [], "cancel": []}
     monkeypatch.setattr(confirmation.communication_service, "reason_code_supported",
                         lambda reason_code, *, cur=None: supportato)
@@ -357,7 +364,7 @@ def test_K5_accoda_con_i_campi_esatti_e_il_profilo_dell_agenzia(monkeypatch):
     assert kw["metadata"]["variant"] == "scheduled" and kw["property_id"] is None
     assert kw["subject_snapshot"].startswith("Conferma: appuntamento venerdì 13 giugno 2031")
     # i riferimenti vengono dal profilo (nome visualizzato, telefono, email)
-    assert "Mare Immobiliare, 085 1, info@mare.it" in kw["rendered_body"]
+    assert "Mare Immobiliare<br>085\u00a01<br>info@mare.it" in kw["rendered_body"]
     assert "Agenzia Mare" not in kw["rendered_body"]
     assert cur.sql[-1] == "RELEASE SAVEPOINT appointment_confirmation"
     # e la stessa occorrenza gia' in coda e' idempotente, non un duplicato
@@ -512,3 +519,122 @@ def test_D5_il_motivo_nuovo_e_nella_lista_chiusa_e_nelle_etichette():
     from communication import contact_view, enums
     assert enums.REASON_APPOINTMENT_CONFIRMATION == "appointment_confirmation" in enums.REASON_CODES
     assert contact_view.ETICHETTE_MOTIVO["appointment_confirmation"] == "Conferma appuntamento"
+
+
+# ---------------------------------------------------------------------------
+# A - destinatari: l'elenco e' ESPLICITO, mai dedotto, fail-closed per il nuovo
+# ---------------------------------------------------------------------------
+
+def test_A1_conferme_e_2h_senza_elenco_nessun_destinatario(monkeypatch):
+    monkeypatch.delenv(policy.RECIPIENTS_ENV, raising=False)
+    assert settings.allowed_recipients() is None                      # il 24h di prima: invariato
+    assert settings.allowed_recipients_new() == frozenset()           # il nuovo: nessuno
+    assert settings.allowed_recipients_for("24h") is None
+    assert settings.allowed_recipients_for("2h") == frozenset()
+    assert settings.allowed_recipients_for(None) == frozenset()       # la conferma
+    adesso = R(2031, 6, 12, 10, 0)
+    assert confirmation.decide(letto(), now=adesso) == "recipient_not_allowed"
+    # variabile presente ma vuota: nessuno, anche per il 24h
+    monkeypatch.setenv(policy.RECIPIENTS_ENV, "")
+    assert settings.allowed_recipients() == frozenset()
+    assert settings.allowed_recipients_new() == frozenset()
+
+
+def test_A2_asterisco_apre_a_tutti_solo_se_scritto_a_mano(monkeypatch):
+    monkeypatch.setenv(policy.RECIPIENTS_ENV, " * ")
+    assert settings.allowed_recipients() is None
+    assert settings.allowed_recipients_new() is None
+    assert confirmation.decide(letto(c_email="qualunque@example.it"), now=R(2031, 6, 12, 10, 0)) is None
+    # un indirizzo che contiene l'asterisco NON e' il jolly
+    assert policy.allowed_recipients("*@example.it") == frozenset({"*@example.it"})
+    assert policy.recipient_allowed("altro@example.it", policy.allowed_recipients("*@example.it")) is False
+
+
+def test_A3_l_elenco_non_si_deduce_dai_clienti(monkeypatch):
+    """L'unica sorgente e' la variabile: un contatto con un indirizzo qualunque,
+    anche quello dell'agente o dell'agenzia, non e' un destinatario ammesso."""
+    monkeypatch.setenv(policy.RECIPIENTS_ENV, "prova@example.test")
+    adesso = R(2031, 6, 12, 10, 0)
+    assert confirmation.decide(letto(), now=adesso) == "recipient_not_allowed"     # mario@example.it
+    assert confirmation.decide(letto(c_email="prova@example.test"), now=adesso) is None
+    codice = (ROOT / "appointment_reminders" / "settings.py").read_text(encoding="utf-8")
+    assert "os.getenv(policy.RECIPIENTS_ENV)" in codice
+    for vietato in ("SELECT", "contacts", "cursor", "email_normalized"):
+        assert vietato not in codice, vietato
+
+
+def test_A4_il_2h_senza_elenco_non_parte_e_il_24h_si_comporta_come_prima(monkeypatch):
+    monkeypatch.delenv(policy.RECIPIENTS_ENV, raising=False)
+    adesso = R(2031, 6, 13, 8, 0)
+    app, cont = appuntamento(), contatto()
+    d24 = policy.is_reminder_eligible(now=R(2031, 6, 12, 10, 0), appointment=app, contact=cont,
+                                      offset="24h", allowed_recipients=settings.allowed_recipients_for("24h"))
+    d2 = policy.is_reminder_eligible(now=adesso, appointment=app, contact=cont, offset="2h",
+                                     allowed_recipients=settings.allowed_recipients_for("2h"))
+    assert (d24.due, d24.reason) == (True, None)
+    assert d2.reason == "recipient_not_allowed"
+
+
+def test_A5_la_revalida_applica_la_stessa_regola(mondo, monkeypatch):  # noqa: F811
+    """Un messaggio gia' in coda non parte se l'elenco e' stato tolto nel frattempo."""
+    monkeypatch.delenv(policy.RECIPIENTS_ENV, raising=False)
+    giro(mondo, conferma_in_coda())
+    assert mondo.inviati == [] and soppresso(mondo, "recipient_not_allowed")
+    # il 2h in coda: stessa regola; il 24h in coda: parte come prima
+    mondo.eventi.clear()
+    monkeypatch.setattr(revalidation, "_adesso", lambda: R(2031, 6, 13, 8, 0))
+    chiave2 = policy.occurrence_key(101, INIZIO, "2h")
+    meta2 = {**messaggio()["metadata"], "offset": "2h", "occurrence_key": chiave2}
+    assert revalidation.decide(messaggio(2, template_key="appointment_reminder_2h",
+                                         idempotency_key=chiave2, metadata=meta2),
+                               riga_db(), agency_id=7, now=R(2031, 6, 13, 8, 0)) == "recipient_not_allowed"
+    assert revalidation.decide(messaggio(), riga_db(), agency_id=7, now=R(2031, 6, 12, 10, 5)) is None
+
+
+# ---------------------------------------------------------------------------
+# B - divieto di contatto e doppio clic sul dispatcher VERO
+# ---------------------------------------------------------------------------
+
+def test_B1_divieto_di_contatto_sopprime_conferma_e_promemoria_senza_provider(mondo, monkeypatch):  # noqa: F811
+    from communication import dispatcher
+    from consent import do_not_contact
+    monkeypatch.setattr(dispatcher, "_divieto_di_contatto", lambda ctx, message: True)
+    meta2 = {**messaggio()["metadata"], "offset": "2h",
+             "occurrence_key": policy.occurrence_key(101, INIZIO, "2h")}
+    giro(mondo, conferma_in_coda(1),
+         messaggio(2, template_key="appointment_reminder_2h",
+                   idempotency_key=meta2["occurrence_key"], metadata=meta2))
+    assert mondo.inviati == []
+    assert ("suppressed", 1, do_not_contact.REASON) in mondo.eventi
+    assert ("suppressed", 2, do_not_contact.REASON) in mondo.eventi
+    # il divieto viene PRIMA della revalida: l'appuntamento non e' nemmeno riletto
+    assert ("revalida", 101) not in mondo.eventi
+
+
+def test_B2_doppio_clic_la_stessa_conferma_accodata_due_volte_e_una_sola(monkeypatch):
+    """Il ledger risponde `created=False` alla seconda richiesta con la stessa
+    chiave: l'esito e' `queued_idempotent`, nessun secondo messaggio."""
+    esiti = iter([{"created": True, "message": {"id": 1}}, {"created": False, "message": {"id": 1}}])
+    chiamate = _accesa(monkeypatch, riga=letto(), enqueue=lambda ctx, **kw: next(esiti))
+    adesso = R(2031, 6, 12, 10, 0)
+    assert confirmation.on_scheduled(Cursore(), 7, 101, now=adesso) == "queued"
+    assert confirmation.on_scheduled(Cursore(), 7, 101, now=adesso) == "queued_idempotent"
+    chiavi = {kw["idempotency_key"] for _ctx, kw in chiamate["enqueue"]}
+    assert len(chiamate["enqueue"]) == 2 and len(chiavi) == 1
+
+
+def test_T6_pensata_per_il_telefono_a_capo_dove_serve_e_senza_scorrimento():
+    """320-360 px: l'email lunga e la via lunga vanno a capo, la tabella non e'
+    piu' larga della pagina, il telefono non si spezza dentro il numero."""
+    _, corpo = conferma(agency_phone="+39 0861 123456",
+                        agency_email="info.visite.immobiliare.adriatica@esempio-agenzia.example")
+    assert "width:100%" in corpo and "overflow-wrap:anywhere" in corpo
+    assert "+39\u00a00861\u00a0123456" in corpo and "+39 0861" not in corpo
+    assert corpo.count("<br>") == 2                      # nome / telefono / email
+    # nessuna larghezza fissa oltre il tetto di 560 px del contenitore
+    import re as _re
+    assert not _re.search(r"[^-]width:\s*[1-9]\d{3,}px", corpo)
+    # e il promemoria condivide lo stesso stile di tabella
+    _, promemoria = template.render_email(appointment_type="seller_meeting", start_at=INIZIO,
+                                          agency_name="Agenzia Mare")
+    assert "width:100%" in promemoria and "overflow-wrap:anywhere" in promemoria

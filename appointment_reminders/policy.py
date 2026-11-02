@@ -69,6 +69,8 @@ OFFSET_DELTAS = {OFFSET_2H: timedelta(hours=2)}
 #: elencati; variabile assente = nessun limite (comportamento di sempre);
 #: presente ma vuota = nessuno (chiuso per difetto).
 RECIPIENTS_ENV = "APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS"
+#: Il solo valore che apre a tutti i destinatari: dichiarato, mai dedotto.
+WILDCARD = "*"
 
 ALLOWED_TYPES = frozenset({
     "buyer_visit", "inspection", "seller_meeting", "valuation_presentation",
@@ -137,9 +139,19 @@ def enabled_offsets(raw: str | None) -> tuple[str, ...]:
 def allowed_recipients(raw: str | None) -> frozenset[str] | None:
     """Gli indirizzi ammessi (minuscoli) dal valore della variabile, o None se
     il limite non e' attivo (variabile assente)."""
-    if raw is None:
+    if raw is None or raw.strip() == WILDCARD:
         return None
     return frozenset(v.strip().lower() for v in re.split(r"[,;\s]+", raw) if "@" in v)
+
+
+def allowed_recipients_strict(raw: str | None) -> frozenset[str] | None:
+    """Come `allowed_recipients`, ma FAIL-CLOSED: variabile assente = NESSUN
+    destinatario. Vale per cio' che il Punto 2 ha introdotto (conferme e
+    promemoria a 2 ore): si aprono a tutti i clienti solo con `*` esplicito,
+    mai per assenza di configurazione. Il 24h di prima resta com'era."""
+    if raw is None:
+        return frozenset()
+    return allowed_recipients(raw)
 
 
 def recipient_allowed(email: Any, destinatari_ammessi: frozenset[str] | None) -> bool:

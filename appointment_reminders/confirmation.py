@@ -9,11 +9,13 @@ confermata, spostamento, annullamento), con il suo cursore. Due regole:
    (migrazione 127 assente, template, qualsiasi cosa) viene annullato fino al
    savepoint, registrato nel log senza dati personali, e l'appuntamento si
    salva lo stesso. La conferma e' un effetto, non un prerequisito.
-2. SPENTI PER IMPOSTAZIONE. `APPOINTMENT_CONFIRMATIONS=1` accende le conferme;
-   senza, nessun messaggio viene accodato (nessun invio reale a tutti i clienti
-   per un deploy). La stessa allowlist dei promemoria
-   (`APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS`, policy) limita i destinatari
-   durante il collaudo.
+2. SPENTE PER IMPOSTAZIONE, E CHIUSE AI DESTINATARI. `APPOINTMENT_CONFIRMATIONS=1`
+   accende SOLO le conferme: e' un interruttore distinto da quello dei promemoria
+   (il 24h gia' esistente va col cron, il 2h con `APPOINTMENT_REMINDER_OFFSETS`;
+   vedi `settings`). Anche accese, le conferme partono solo verso gli indirizzi
+   elencati ESPLICITAMENTE in `APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS`:
+   variabile assente = nessun destinatario, `*` = tutti (scelta a mano). Mai
+   dedotti dagli indirizzi dei clienti.
 
 COSA SI SCRIVE
 
@@ -114,7 +116,7 @@ def decide(letto: dict[str, Any] | None, *, now: datetime) -> str | None:
         return OUTCOME_MISSING
     appuntamento, contatto = letto["appointment"], letto["contact"]
     motivo = policy.ineligibility_reason(appuntamento, contatto,
-                                         allowed_recipients=settings.allowed_recipients())
+                                         allowed_recipients=settings.allowed_recipients_for(None))
     if motivo is not None:
         return motivo
     if appuntamento["start_at"] <= now:

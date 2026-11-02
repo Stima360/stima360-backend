@@ -52,6 +52,13 @@ def template_key(offset: str = policy.OFFSET_24H) -> str:
     except KeyError:
         raise ValueError(f"unknown reminder offset {offset!r}") from None
 
+#: Stile della tabella dei dati: su un telefono uno stretto 320-360 px non deve
+#: scorrere in orizzontale, quindi indirizzo email e vie lunghe vanno a capo
+#: dove serve (`overflow-wrap:anywhere`), la tabella non e' piu' larga della pagina.
+_TABELLA = "border-collapse:collapse;margin:0 0 18px 0;width:100%;max-width:100%;"
+_CELLA_ETICHETTA = "padding:4px 12px 4px 0;color:#555;vertical-align:top;white-space:nowrap;"
+_CELLA_VALORE = "padding:4px 0;vertical-align:top;word-break:break-word;overflow-wrap:anywhere;"
+
 #: Etichette per il CLIENTE (non quelle interne dell'Agenda).
 CUSTOMER_LABELS = {
     "buyer_visit": "visita all'immobile",
@@ -143,8 +150,8 @@ def render_email(*, appointment_type: str, start_at: datetime, agency_name: str,
         righe.append(("Indirizzo", indirizzo))
     righe.append(("Agenzia", agenzia))
     tabella = "".join(
-        f'<tr><td style="padding:4px 12px 4px 0;color:#555;">{_e(k)}</td>'
-        f'<td style="padding:4px 0;"><strong>{_e(v)}</strong></td></tr>'
+        f'<tr><td style="{_CELLA_ETICHETTA}">{_e(k)}</td>'
+        f'<td style="{_CELLA_VALORE}"><strong>{_e(v)}</strong></td></tr>'
         for k, v in righe)
 
     corpo = (
@@ -153,7 +160,7 @@ def render_email(*, appointment_type: str, start_at: datetime, agency_name: str,
         '<h2 style="font-size:18px;margin:0 0 16px 0;">Promemoria appuntamento</h2>'
         f'<p style="margin:0 0 14px 0;">{saluto}</p>'
         f'<p style="margin:0 0 14px 0;">{REMINDER_INTRO[offset]}</p>'
-        f'<table style="border-collapse:collapse;margin:0 0 18px 0;">{tabella}</table>'
+        f'<table style="{_TABELLA}">{tabella}</table>'
         '<p style="margin:0 0 14px 0;">Se hai bisogno di spostarlo o annullarlo, '
         "contatta l'agenzia.</p>"
         f'<p style="margin:0;">{_e(agenzia)}</p>'
@@ -183,15 +190,19 @@ def render_confirmation_email(*, kind: str, appointment_type: str, start_at: dat
     indirizzo = ""
     if appointment_type == "buyer_visit" and property_address is not None:
         indirizzo = format_address(property_address)
-    riferimenti = ", ".join(p for p in (agenzia, _testo(agency_phone), _testo(agency_email)) if p)
+    # Una riga per riferimento (nome, telefono, email): su un telefono il numero
+    # non si spezza (spazi non separabili) e l'email sta sulla propria riga.
+    telefono = _testo(agency_phone).replace(" ", "\u00a0")
+    riferimenti = tuple(p for p in (agenzia, telefono, _testo(agency_email)) if p)
     saluto = f"Buongiorno {_e(nome)}," if nome else "Buongiorno,"
     righe = [("Appuntamento", etichetta), ("Data", format_date(start_at)), ("Ora", format_time(start_at))]
     if indirizzo:
         righe.append(("Indirizzo", indirizzo))
     righe.append(("Riferimenti", riferimenti))
     tabella = "".join(
-        f'<tr><td style="padding:4px 12px 4px 0;color:#555;">{_e(k)}</td>'
-        f'<td style="padding:4px 0;"><strong>{_e(v)}</strong></td></tr>'
+        f'<tr><td style="{_CELLA_ETICHETTA}">{_e(k)}</td>'
+        f'<td style="{_CELLA_VALORE}"><strong>'
+        f'{"<br>".join(_e(x) for x in v) if isinstance(v, tuple) else _e(v)}</strong></td></tr>'
         for k, v in righe)
     corpo = (
         '<div style="font-family:Arial,Helvetica,sans-serif;color:#222;line-height:1.5;'
@@ -199,7 +210,7 @@ def render_confirmation_email(*, kind: str, appointment_type: str, start_at: dat
         f'<h2 style="font-size:18px;margin:0 0 16px 0;">{_e(titolo)}</h2>'
         f'<p style="margin:0 0 14px 0;">{saluto}</p>'
         f'<p style="margin:0 0 14px 0;">{_e(frase)}</p>'
-        f'<table style="border-collapse:collapse;margin:0 0 18px 0;">{tabella}</table>'
+        f'<table style="{_TABELLA}">{tabella}</table>'
         '<p style="margin:0 0 14px 0;">Se hai bisogno di spostarlo o annullarlo, '
         "contatta l'agenzia.</p>"
         f'<p style="margin:0;">{_e(agenzia)}</p>'

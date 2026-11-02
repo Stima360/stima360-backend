@@ -57,10 +57,11 @@ def schema_p2(schema_a32):  # noqa: F811
 
 @pytest.fixture
 def y(x, schema_p2, monkeypatch):  # noqa: F811
-    """Conferme ACCESE (come sul TEST durante il collaudo), nessuna allowlist,
-    offset predefinito. Il profilo dell'agenzia A porta i riferimenti."""
+    """Conferme ACCESE (come sul TEST durante il collaudo), con l'elenco ESPLICITO
+    dei destinatari di prova (conferme e 2h sono fail-closed), offset predefinito.
+    Il profilo dell'agenzia A porta i riferimenti."""
     monkeypatch.setenv("APPOINTMENT_CONFIRMATIONS", "1")
-    monkeypatch.delenv("APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS", raising=False)
+    monkeypatch.setenv("APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS", "mario@example.it")
     monkeypatch.delenv("APPOINTMENT_REMINDER_OFFSETS", raising=False)
     x["sql"]("UPDATE agencies SET settings = %s::jsonb WHERE id = %s",
              ('{"report_profile": {"display_name": "Mare Immobiliare", "phone": "085 123456", '
@@ -107,7 +108,7 @@ def test_01_fissato_dall_agente_una_conferma_in_coda_con_i_campi_esatti(y):
                              "occurrence_key": chiave_conferma(riga["id"], DOMANI_10)}
     assert m["subject_snapshot"] == "Conferma: appuntamento venerdì 13 giugno 2031 alle 10:00"
     for atteso in ("Buongiorno Mario,", "venerdì 13 giugno 2031", "10:00",
-                   "Mare Immobiliare, 085 123456, info@mare.example"):
+                   "Mare Immobiliare<br>085\u00a0123456<br>info@mare.example"):
         assert atteso in m["rendered_body"], atteso
     # l'appuntamento c'e', e la riga ha la sua storia come sempre
     ev = y["sql"]("SELECT event_type FROM appointment_events WHERE appointment_id = %s",
@@ -450,3 +451,36 @@ def test_21_la_127_down_e_re_up_e_il_down_rifiuta_con_conferme_nel_ledger(y):
     assert "appointment_confirmation messages exist" in str(errore.value)
     with conn.cursor() as cur:
         assert "appointment_confirmation" in _definizione(cur)
+
+
+# ---------------------------------------------------------------------------
+# destinatari ESPLICITI: assenti = nessuno (conferme e 2h), il 24h come prima
+# ---------------------------------------------------------------------------
+
+def test_22_senza_elenco_nessuna_conferma_con_asterisco_si_apre(y, monkeypatch):
+    monkeypatch.delenv("APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS", raising=False)
+    crea(y)
+    assert messaggi(y) == []                           # acceso, ma nessun destinatario ammesso
+    monkeypatch.setenv("APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS", "*")
+    crea(y, start_at=DOMANI_10 + timedelta(hours=2), end_at=DOMANI_10 + timedelta(hours=2, minutes=30))
+    assert len(conferme(y)) == 1
+
+
+def test_23_senza_elenco_il_24h_di_sempre_parte_il_2h_no(y, monkeypatch):
+    monkeypatch.delenv("APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS", raising=False)
+    monkeypatch.setenv("APPOINTMENT_REMINDER_OFFSETS", "24h,2h")
+    nuovo(y)
+    c = giro(y)
+    assert c["queued"] == 1 and c["skipped_by_reason"]["recipient_not_allowed"] == 1
+    [m] = messaggi(y)
+    assert m["template_key"] == "appointment_reminder_24h"
+
+
+def test_24_un_contatto_con_altra_email_non_riceve_nulla(y):
+    """L'elenco non si deduce: un contatto con un indirizzo non elencato, anche
+    se l'appuntamento e' valido e fissato, non genera ne' conferma ne' promemoria."""
+    y["sql"]("UPDATE contacts SET email = 'cliente.vero@example.it' WHERE id = %s", (y["mario"],))
+    crea(y)
+    assert messaggi(y) == []
+    assert giro(y)["skipped_by_reason"]["recipient_not_allowed"] == 1
+    assert messaggi(y) == []
