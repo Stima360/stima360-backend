@@ -327,8 +327,12 @@ def test_a3_an_anonymous_visitor_has_no_network_entry(staged):
     # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA: "zona" (la mappa) subito prima di "edifici".
     # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: "stime" e "stime-dettagliate" dopo
     # "contatti", "messaggi" (BLOCCO-4A) prima di "cestino"; "rete" resta assente.
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "stime", "stime-dettagliate", "zona", "edifici", "immobili", "venditori", "acquisizioni",
-                                "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni", "messaggi", "cestino"]
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1 (decisione del titolare): barra
+    # essenziale in quest'ordine; "edifici" e' sottovoce di "immobili"; "stime-dettagliate",
+    # "abbinamenti", "attivita", "automazioni" e "cestino" non sono piu' voci ma restano rotte
+    # valide dentro Stime, Richieste, Oggi e Impostazioni. "impostazioni" chiude la barra.
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "edifici", "zona", "venditori", "acquisizioni",
+                                "incarichi", "acquirenti", "stime", "messaggi", "impostazioni"]
 
 
 def test_a4_the_entry_disappears_when_the_session_changes(staged):

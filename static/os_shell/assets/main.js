@@ -6,6 +6,7 @@ import { mountUserMenu } from './components/user-menu.js';
 
 import {
   canUsePlatformSurface,
+  canUseTenantSurface,
   exitAgency,
   getSession,
   isPlatformOnly,
@@ -17,7 +18,6 @@ import {
 } from './core/auth.js';
 import { registerRoute, initRouter, navigate, renderCurrentRoute, clearRoute } from './core/router.js';
 import { mountEnvBadge } from './core/env-badge.js';
-import { renderOggi } from './views/oggi.js';
 import { renderContatti } from './views/contatti.js';
 import { renderStime } from './views/stime.js';
 import { renderContattoDettaglio } from './views/contatto-dettaglio.js';
@@ -30,7 +30,6 @@ import { renderEdificioDettaglio } from './views/edificio-dettaglio.js';
 import { renderEdifici } from './views/edifici.js';
 // STIMA360 TERRITORIO T2: la mappa stradale, dentro Edifici (#/edifici/mappa).
 import { renderTerritorio } from './views/territorio.js';
-import { renderAcquirenti } from './views/acquirenti.js';
 import { renderAcquirenteDettaglio } from './views/acquirente-dettaglio.js';
 import { renderAbbinamenti } from './views/abbinamenti.js';
 import { renderAbbinamentoDettaglio } from './views/abbinamento-dettaglio.js';
@@ -55,42 +54,47 @@ import { renderVoce } from './views/voce.js';
 import { renderAgenziaDati } from './views/agenzia-dati.js';
 // BLOCCO-4A: «Messaggi WhatsApp» (ricezione e consultazione, nessun invio).
 import { renderMessaggi } from './views/messaggi.js';
+// SEMPLIFICAZIONE-NAV-1: i contenitori Oggi|Attività, Richieste|Abbinamenti, Impostazioni.
+import { renderOggiSezione, renderRichieste, renderImpostazioni } from './views/sezioni.js';
 import { voiceStatus } from './voice/voice-api.js';
 
 const SECTIONS = [
+  // SEMPLIFICAZIONE-NAV-1: la barra laterale essenziale, nell'ordine deciso dal
+  // titolare. Le voci tolte da qui (stime-dettagliate, abbinamenti, attivita,
+  // automazioni, cestino) restano rotte valide e vivono dentro un contenitore
+  // (views/sezioni.js) o come filtro della pagina (Stime). `parent` = sottovoce,
+  // disegnata rientrata sotto la voce madre.
   { name: 'oggi', label: 'Oggi' },
   { name: 'agenda', label: 'Agenda' },
   { name: 'contatti', label: 'Contatti' },
-  { name: 'stime', label: 'Stime' },
-  { name: 'stime-dettagliate', label: 'Stime dettagliate' },
-  // EDIFICI-1: subito sopra Immobili (Edificio -> Immobili/Unita', come il
-  // modello), senza separare Immobili da Venditori (flusso di VENDITORI-1).
+  { name: 'immobili', label: 'Immobili' },
+  { name: 'edifici', label: 'Edifici', parent: 'immobili' },
   // STIMA360 TERRITORIO - ZONA: la mappa del territorio come voce principale. Apre la
   // STESSA mappa di Edifici (#/edifici/mappa, T2-T5bis): nessuna seconda mappa.
   // `target` = dove porta il bottone; la rotta `zona` esiste solo per chi scrive #/zona a mano.
   { name: 'zona', label: 'Zona', target: ['edifici', 'mappa'] },
-  { name: 'edifici', label: 'Edifici' },
-  { name: 'immobili', label: 'Immobili' },
-  // VENDITORI-1: il flusso reale Immobili -> Venditori -> Acquisizioni -> Incarichi.
+  // VENDITORI-1: il flusso reale Venditori -> Acquisizioni -> Incarichi, tre voci autonome.
   { name: 'venditori', label: 'Venditori' },
   { name: 'acquisizioni', label: 'Acquisizioni' },
   { name: 'incarichi', label: 'Incarichi' },
-  { name: 'acquirenti', label: 'Acquirenti' },
-  { name: 'abbinamenti', label: 'Abbinamenti' },
-  { name: 'attivita', label: 'Attività' },
-  { name: 'automazioni', label: 'Automazioni' },
-  // BLOCCO-4A: messaggi WhatsApp ricevuti (consultazione e associazione).
-  { name: 'messaggi', label: 'Messaggi WhatsApp' },
-  // DELETE-ARCH Fase 2B3: in fondo. CESTINO-GENERALE-1: il Cestino UNICO di
-  // tutto il CRM, voce normale e ben visibile (app.css), anche per il Super Admin.
-  { name: 'cestino', label: 'Cestino' },
+  // Le richieste acquirenti, con gli Abbinamenti come scheda interna.
+  { name: 'acquirenti', label: 'Richieste' },
+  // Un solo archivio di stime: «Dettagliate» e' un filtro della pagina.
+  { name: 'stime', label: 'Stime' },
+  // BLOCCO-4A/4B: la chat WhatsApp.
+  { name: 'messaggi', label: 'WhatsApp' },
+  // In fondo, discreta: profilo e logo, automazioni, Cestino. E' la sola voce
+  // che resta anche a un amministratore di piattaforma senza tenant (per il
+  // Cestino globale), come prima lo era il Cestino.
+  { name: 'impostazioni', label: 'Impostazioni' },
 ];
 
-// CESTINO-GENERALE-1: la sola voce di agenzia che resta anche a un
-// amministratore di piattaforma SENZA agenzia: il Cestino ha la vista globale
-// del Super Admin generale designato (GET /api/platform/trash; a chi non e'
-// il designato il backend risponde 403 e la pagina mostra solo l'avviso).
-const SEZIONI_ANCHE_PLATFORM = new Set(['cestino']);
+// CESTINO-GENERALE-1 / SEMPLIFICAZIONE-NAV-1: le sole voci di agenzia che restano
+// anche a un amministratore di piattaforma SENZA agenzia: «Impostazioni» (che
+// contiene il Cestino) e la rotta #/cestino, perche' il Cestino ha la vista
+// globale del Super Admin generale designato (GET /api/platform/trash; a chi
+// non e' il designato il backend risponde 403 e la pagina mostra solo l'avviso).
+const SEZIONI_ANCHE_PLATFORM = new Set(['impostazioni', 'cestino']);
 
 // P27-7 - la sezione RETE, che NON sta in SECTIONS.
 //
@@ -121,6 +125,16 @@ const SEZIONE_VOCE = { name: 'voce', label: 'Voce' };
 // utente. Qui solo per il titolo della pagina.
 const SEZIONE_AGENZIA = { name: 'agenzia', label: 'Dati agenzia e logo' };
 
+// SEMPLIFICAZIONE-NAV-1: rotta vecchia -> voce della barra che oggi la contiene.
+// Solo per evidenziazione e titolo: le rotte restano registrate e raggiungibili.
+const ROTTE_CONTENUTE = {
+  'stime-dettagliate': 'stime',
+  abbinamenti: 'acquirenti',
+  attivita: 'oggi',
+  automazioni: 'impostazioni',
+  cestino: 'impostazioni',
+};
+
 // P28 - dove finisce un tenant rimandato indietro dalla Rete.
 //
 // La prima voce di SECTIONS e non un letterale: se un giorno la sidebar
@@ -141,7 +155,8 @@ const actingBar = document.getElementById('acting-bar');
 const actingText = document.getElementById('acting-text');
 const actingExitBtn = document.getElementById('acting-exit-btn');
 
-registerRoute('oggi', renderOggi);
+// SEMPLIFICAZIONE-NAV-1: `#/oggi[/attivita]`, la pagina Oggi con la scheda Attività.
+registerRoute('oggi', (container, params = []) => renderOggiSezione(container, params));
 // "contatti" copre sia la lista (#/contatti) sia il dettaglio (#/contatti/{id}):
 // il router passa i segmenti successivi al nome sezione come `params`.
 registerRoute('contatti', (container, params = []) => {
@@ -173,8 +188,10 @@ registerRoute('edifici', (container, params = []) => {
 // "acquirenti" copre sia la lista richieste BUY (#/acquirenti) sia la scheda
 // (#/acquirenti/{buy_request_id}), stesso pattern dispatcher gia' usato per
 // "contatti" e "immobili".
+// SEMPLIFICAZIONE-NAV-1: `#/acquirenti/abbinamenti` e' la scheda Abbinamenti del contenitore.
 registerRoute('acquirenti', (container, params = []) => {
-  return params[0] ? renderAcquirenteDettaglio(container, params) : renderAcquirenti(container);
+  if (params[0] === 'abbinamenti') return renderRichieste(container, params);
+  return params[0] ? renderAcquirenteDettaglio(container, params) : renderRichieste(container, params);
 });
 // "abbinamenti" copre sia la graduatoria (#/abbinamenti) sia la scheda
 // Match (#/abbinamenti/{match_id}), stesso pattern dispatcher gia' usato
@@ -198,6 +215,17 @@ registerRoute('automazioni', (container, params = []) => {
 // rimossa qui. "impostazioni" non compare piu' in SECTIONS (vedi sopra),
 // quindi non ha ne' un bottone in sidebar ne' un registerRoute: e'
 // interamente assente dall'app, non solo nascosta via CSS.
+
+// SEMPLIFICAZIONE-NAV-1: `#/impostazioni[/agenzia|automazioni|cestino]`. Le
+// rotte #/agenzia, #/automazioni e #/cestino restano valide (collegamenti esistenti).
+registerRoute('impostazioni', (container, params = []) => {
+  // La superficie si decide QUI, dalla sessione del server (P28): la vista riceve solo il risultato.
+  const sessione = getSession();
+  return renderImpostazioni(container, params, {
+    tenant: canUseTenantSurface(sessione), platformAdmin: canUsePlatformSurface(sessione),
+    platformOnly: isPlatformOnly(sessione), meId: sessione ? sessione.user_id : null,
+  });
+});
 
 // "rete" copre l'elenco (#/rete), la scheda agenzia (#/rete/agenzie/{id}) e la
 // scheda territorio (#/rete/territori/{id}): stesso pattern dispatcher gia'
@@ -272,7 +300,9 @@ initRouter(contentEl, {
   },
   onNavigate(name, params = []) {
     // ZONA: la mappa (#/edifici/mappa e le sue pagine) evidenzia «Zona», non «Edifici»
-    const nome = name === 'edifici' && params[0] === 'mappa' ? 'zona' : name;
+    // SEMPLIFICAZIONE-NAV-1: le vecchie rotte restano valide ma evidenziano la
+    // voce che oggi le contiene (titolo compreso).
+    const nome = name === 'edifici' && params[0] === 'mappa' ? 'zona' : (ROTTE_CONTENUTE[name] || name);
     const active = [...SECTIONS, SEZIONE_RETE, SEZIONE_VOCE, SEZIONE_AGENZIA].find((s) => s.name === nome);
     pageTitle.textContent = active ? active.label : 'Pagina non trovata';
     for (const btn of navEl.querySelectorAll('[data-route]')) {
@@ -304,6 +334,7 @@ const NAV_ICON_PATHS = {
   // BLOCCO-4A: un fumetto di conversazione.
   messaggi: ['M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z', 'M8 11h8', 'M8 14h5'],
   cestino: ['M4 7h16', 'M9 7V4h6v3', 'M6 7l1 14h10l1-14', 'M10 11v6', 'M14 11v6'],
+  impostazioni: ['M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6', 'M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z'],
   rete: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20', 'M2 12h20', 'M12 2c5 5 5 15 0 20', 'M12 2c-5 5-5 15 0 20'],
   voce: ['M12 3a3 3 0 0 0-3 3v6a3 3 0 0 0 6 0V6a3 3 0 0 0-3-3', 'M5 11a7 7 0 0 0 14 0', 'M12 18v3', 'M9 21h6'],
 };
@@ -311,8 +342,9 @@ const NAV_ICON_PATHS = {
 function creaVoceNav(section) {
   const btn = document.createElement('button');
   btn.type = 'button';
-  btn.className = 'nav-item';
+  btn.className = section.parent ? 'nav-item nav-sub' : 'nav-item';
   btn.dataset.route = section.name;
+  if (section.parent) btn.dataset.parent = section.parent;
   const icon = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
   icon.setAttribute('viewBox', '0 0 24 24');
   icon.setAttribute('aria-hidden', 'true');

@@ -159,8 +159,10 @@ def test_01_voce_edifici_e_lista_a_card_con_i_contatori(staged):  # noqa: F811
                range: C().querySelector('#buildings-range').textContent });
     """
     out = _run(staged, scenario, _rotte(), "#/edifici")
-    assert out["voci"].index("edifici") == out["voci"].index("immobili") - 1        # accanto a Immobili
-    assert out["voci"].index("venditori") == out["voci"].index("immobili") + 1      # flusso VENDITORI-1 intatto
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: «Edifici» e' la sottovoce di «Immobili»
+    # (subito sotto, rientrata); poi Zona, poi il flusso Venditori -> Acquisizioni -> Incarichi.
+    assert out["voci"].index("edifici") == out["voci"].index("immobili") + 1        # sotto Immobili
+    assert out["voci"].index("venditori") == out["voci"].index("zona") + 1          # flusso VENDITORI-1 intatto
     assert out["titolo"] == "Edifici"
     assert out["letture"] == ["/api/property/buildings?sort=address&limit=25&offset=0"]        # una sola richiesta
     assert [c["href"] for c in out["card"]] == ["#/edifici/7", "#/edifici/8", "#/edifici/9"]

@@ -248,6 +248,8 @@ export async function mountWhatsappReply(container, { senderPhone, history = 'al
     prepare.title = 'Invia (ti verrà chiesta una conferma)';
     const confirmBox = el('div', 'wa-reply-confirm');
     confirmBox.hidden = true;
+    // Il campo cresce da solo con il testo (fino a 160 px): la maniglia non serve.
+    if (compact) text.style.resize = 'none';
     const grow = () => { if (compact) { text.style.height = 'auto'; text.style.height = `${Math.min(text.scrollHeight, 160)}px`; } };
     text.addEventListener('input', () => {
       counter.textContent = `${text.value.length}/${st.text_max}`;

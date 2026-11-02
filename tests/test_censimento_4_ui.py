@@ -192,7 +192,9 @@ def test_b03_main_js_nessuna_voce_di_menu_nuova_e_la_palazzina_dentro_immobili()
     # (sezione navigabile, richiesta di EDIFICI-1); il censimento resta senza
     # voce di menu e il vecchio indirizzo della palazzina dentro Immobili resta valido.
     assert "censimento" not in sezioni.lower()
-    assert sezioni.count("{ name: 'edifici', label: 'Edifici' },") == 1
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: nuova barra (Immobili > Edifici, poi Zona,
+    # Venditori, Acquisizioni, Incarichi, Richieste, Stime, WhatsApp, Impostazioni in fondo).
+    assert sezioni.count("{ name: 'edifici', label: 'Edifici', parent: 'immobili' },") == 1
     assert "if (params[0] === 'edifici') return renderEdificioDettaglio(container, params.slice(1));" in main
     assert main.count("registerRoute('immobili'") == 1
 

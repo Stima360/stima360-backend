@@ -196,13 +196,19 @@ def test_no_dead_links_anywhere_in_os_shell():
 # solo l'assenza del vecchio placeholder "Sezione in preparazione").
 
 
-def test_impostazioni_not_present_in_sections_or_routes():
+def test_impostazioni_is_a_real_container_not_a_placeholder():
+    """SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1 (decisione del titolare):
+    «Impostazioni» torna, ma NON come segnaposto: e' un contenitore reale
+    (views/sezioni.js) delle viste esistenti Dati agenzia, Automazioni e Cestino,
+    con una rotta esplicita. Il vecchio placeholder resta vietato."""
     main_js = _read(MAIN_JS)
-    names = set(re.findall(r"name:\s*'([a-z]+)'", main_js))
-    assert "impostazioni" not in names, "'impostazioni' non deve piu' comparire in SECTIONS (sidebar)"
-    explicit = set(re.findall(r"registerRoute\('([a-z]+)'", main_js))
-    assert "impostazioni" not in explicit, "'impostazioni' non deve avere alcuna registerRoute"
-    assert "renderImpostazioni" not in main_js, "import/uso di renderImpostazioni non deve piu' comparire in main.js"
+    names = re.findall(r"name:\s*'([a-z]+)'", main_js)
+    assert names.count("impostazioni") == 1
+    assert "registerRoute('impostazioni'" in main_js and "renderImpostazioni" in main_js
+    assert "makePlaceholderView" not in main_js and "Sezione in preparazione" not in main_js
+    sezioni = (MAIN_JS.parent / "views" / "sezioni.js").read_text(encoding="utf-8")
+    for vista in ("renderAgenziaDati", "renderAutomazioni", "renderCestino"):
+        assert vista in sezioni
 
 
 def test_placeholder_view_import_removed_if_now_unused():

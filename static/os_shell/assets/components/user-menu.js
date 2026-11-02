@@ -116,6 +116,12 @@ export function mountUserMenu() {
   agenziaLink.hidden = true;
   agenziaLink.addEventListener('click', () => apri(false));
   azioni.appendChild(agenziaLink);
+  // SEMPLIFICAZIONE-NAV-1: «Impostazioni» (#/impostazioni: agenzia, automazioni, Cestino).
+  const impostazioniLink = el('a', 'btn ghost user-menu-link', 'Impostazioni');
+  impostazioniLink.href = '#/impostazioni';
+  impostazioniLink.setAttribute('data-user-menu-settings', '');
+  impostazioniLink.addEventListener('click', () => apri(false));
+  azioni.appendChild(impostazioniLink);
   if (logoutBtn) azioni.appendChild(logoutBtn);
 
   host.replaceChildren(trigger, panel);

@@ -497,7 +497,7 @@ def test_f5_the_tenant_navigation_is_absent_in_platform_mode(staged):
     out = run(staged, REPORT, script(ok(SUPERADMIN), ok(PLATFORM_ME), ok(AGENZIE)),
               hash="#/contatti")
     # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: il Cestino e' la sola voce di agenzia che resta in modalita' piattaforma (vista globale del Super Admin designato; agli altri il backend risponde 403)
-    assert out["navRoutes"] == ["cestino", "rete"], out["navRoutes"]
+    assert out["navRoutes"] == ["impostazioni", "rete"], out["navRoutes"]
 
 
 def test_f6_rete_stays_reachable_in_platform_mode(staged):
@@ -521,7 +521,7 @@ def test_f7_exiting_from_contatti_lands_on_rete(staged):
     assert out["barraNascosta"] is True
     assert "#222" not in out["content"]
     # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: il Cestino e' la sola voce di agenzia che resta in modalita' piattaforma (vista globale del Super Admin designato; agli altri il backend risponde 403)
-    assert out["navRoutes"] == ["cestino", "rete"], out["navRoutes"]
+    assert out["navRoutes"] == ["impostazioni", "rete"], out["navRoutes"]
 
 
 def test_f8_no_tenant_request_is_made_after_the_exit(staged):
@@ -691,7 +691,7 @@ def test_g3_and_the_tenant_navigation_is_absent_for_it_too(staged):
               script(ok(SUPERADMIN_CON_MEMBERSHIP), ok(PLATFORM_ME), ok(AGENZIE)),
               hash="#/contatti")
     # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: il Cestino e' la sola voce di agenzia che resta in modalita' piattaforma (vista globale del Super Admin designato; agli altri il backend risponde 403)
-    assert out["navRoutes"] == ["cestino", "rete"], out["navRoutes"]
+    assert out["navRoutes"] == ["impostazioni", "rete"], out["navRoutes"]
 
 
 def test_g4_entering_an_agency_reopens_the_crm_for_the_same_person(staged):

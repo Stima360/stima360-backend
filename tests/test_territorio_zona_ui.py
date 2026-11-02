@@ -41,11 +41,13 @@ def test_a01_zona_in_sections_con_icona_rotta_e_stessa_mappa():
     main = MAIN.read_text(encoding="utf-8")
     sezioni = main[main.index("const SECTIONS = ["):main.index("];", main.index("const SECTIONS = ["))]
     nomi = re.findall(r"name:\s*'([a-z]+)'", sezioni)
-    assert nomi.index("zona") + 1 == nomi.index("edifici")
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: nuova barra (Immobili > Edifici, poi Zona,
+    # Venditori, Acquisizioni, Incarichi, Richieste, Stime, WhatsApp, Impostazioni in fondo).
+    assert nomi.index("edifici") + 1 == nomi.index("zona") and nomi.index("immobili") + 1 == nomi.index("edifici")
     assert "{ name: 'zona', label: 'Zona', target: ['edifici', 'mappa'] }" in sezioni
     assert main.count("registerRoute('zona'") == 1
     assert re.search(r"^\s+zona: \[", main, re.M)                               # icona propria
-    assert "SEZIONI_ANCHE_PLATFORM = new Set(['cestino'])" in main               # non per il Super Admin senza agenzia
+    assert "SEZIONI_ANCHE_PLATFORM = new Set(['impostazioni', 'cestino'])" in main   # non per il Super Admin senza agenzia
     # nessuna seconda mappa: nessun import nuovo di viste, la rotta zona non disegna nulla
     assert main.count("renderTerritorio") == 2                                   # import + dispatch di 'edifici', come prima
     assert "window.location.replace('#/edifici/mappa')" in main
@@ -106,7 +108,7 @@ def test_b01_la_voce_zona_apre_la_mappa_ed_e_attiva(staged):  # noqa: F811
     out = _run(staged, scenario)
     assert out["prima"]["c_e"] is True and out["prima"]["etichetta"] == "Zona" and out["prima"]["icona"] is True
     ordine = out["prima"]["ordine"]
-    assert ordine.index("zona") + 1 == ordine.index("edifici") and ordine[:3] == ["oggi", "agenda", "contatti"]
+    assert ordine.index("edifici") + 1 == ordine.index("zona") and ordine[:3] == ["oggi", "agenda", "contatti"]
     assert out["mappa"] == {"hash": "#/edifici/mappa", "attiva": ["zona"], "titolo": "Zona", "mappe": 1, "pagina": True}
     assert out["selezionato"] == {"attiva": ["zona"], "titolo": "Zona"}
     assert out["posiziona"] == {"attiva": ["zona"], "titolo": "Zona"}
@@ -124,7 +126,7 @@ def test_b02_edifici_e_il_pulsante_mappa_come_prima_e_le_altre_sezioni_invariate
       await vai('#/edifici/9');
       const scheda = { attiva: attiva(), titolo: titolo() };
       const altre = {};
-      for (const r of ['oggi', 'agenda', 'contatti', 'immobili', 'cestino']) {
+      for (const r of ['oggi', 'agenda', 'contatti', 'immobili', 'impostazioni']) {
         await clicca(r);
         altre[r] = [window.location.hash, attiva().join(','), titolo()];
       }
@@ -140,7 +142,8 @@ def test_b02_edifici_e_il_pulsante_mappa_come_prima_e_le_altre_sezioni_invariate
     assert out["scheda"] == {"attiva": ["edifici"], "titolo": "Edifici"}
     assert out["altre"] == {"oggi": ["#/oggi", "oggi", "Oggi"], "agenda": ["#/agenda", "agenda", "Agenda"],
                             "contatti": ["#/contatti", "contatti", "Contatti"], "immobili": ["#/immobili", "immobili", "Immobili"],
-                            "cestino": ["#/cestino", "cestino", "Cestino"]}
+                            # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: il Cestino sta dentro «Impostazioni», ultima voce.
+                            "impostazioni": ["#/impostazioni", "impostazioni", "Impostazioni"]}
     assert out["aMano"]["hash"] == "#/edifici/mappa" and out["aMano"]["attiva"] == ["zona"] and out["aMano"]["titolo"] == "Zona"
 
 

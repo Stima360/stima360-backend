@@ -399,7 +399,9 @@ def test_c05_pagina_venditori_una_get_card_interazione_e_richiamo(staged):  # no
       report({ nav, listaPrima, card, azioniBruno, avvia, chiama, vuota });
     """
     out = _run(staged, scenario, _rotte(), "#/venditori")
-    assert out["nav"].index("venditori") == out["nav"].index("immobili") + 1
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: nuova barra (Immobili > Edifici, poi Zona,
+    # Venditori, Acquisizioni, Incarichi, Richieste, Stime, WhatsApp, Impostazioni in fondo).
+    assert out["nav"].index("venditori") == out["nav"].index("zona") + 1
     assert out["listaPrima"] == 1                                # UNA GET per tutta la lista
     mario, bruno = out["card"]
     for atteso in ("Mario Rossi", "Contattato", "Caldo 72", "Via Roma 1, Giulianova", "333 111",   # SEMPLIFICAZIONE-CRM-1: senza codice

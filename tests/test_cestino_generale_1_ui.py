@@ -157,7 +157,7 @@ def test_s02_rete_porta_al_cestino_senza_duplicare():
     cestino = _codice(CESTINO)
     assert cestino.count("renderEliminazioni(") == 1
     main = _codice(ASSETS / "main.js")
-    assert "const SEZIONI_ANCHE_PLATFORM = new Set(['cestino']);" in main
+    assert "const SEZIONI_ANCHE_PLATFORM = new Set(['impostazioni', 'cestino']);" in main
     assert "if (SEZIONI_ANCHE_PLATFORM.has(name)) return null;" in main
 
 
@@ -293,7 +293,7 @@ def test_d03_vista_globale_super_admin(staged):  # noqa: F811
       report({ nav, tabs, opzioni, carta, urls: getUrls(), hash: window.location.hash });
     """
     out = _run(staged, scenario, _rotte("platform", extra=globale))
-    assert out["nav"] == ["cestino", "rete"], out["nav"]
+    assert out["nav"] == ["impostazioni", "rete"], out["nav"]
     assert out["hash"].startswith("#/cestino")
     assert out["tabs"] == ["tutti", "richieste-edifici"]                  # le schede di categoria richiedono un'agenzia
     assert out["opzioni"] == ["Tutte le agenzie", "STIMA360", "Agenzia Alba"]

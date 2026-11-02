@@ -105,9 +105,13 @@ def test_02_agenda_e_una_voce_normale_di_sections_una_sola_volta():
     # prima di "edifici". L'elenco resta esatto.
     # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO: "stime" e "stime-dettagliate" dopo
     # "contatti", "messaggi" (BLOCCO-4A) prima di "cestino". Il nome puo' avere un trattino.
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1 (decisione del titolare): barra
+    # essenziale in quest'ordine; "edifici" e' sottovoce di "immobili"; "stime-dettagliate",
+    # "abbinamenti", "attivita", "automazioni" e "cestino" non sono piu' voci ma restano rotte
+    # valide dentro Stime, Richieste, Oggi e Impostazioni. "impostazioni" chiude la barra.
     assert re.findall(r"name:\s*'([a-z-]+)'", sezioni) == [
-        "oggi", "agenda", "contatti", "stime", "stime-dettagliate", "zona", "edifici", "immobili", "venditori",
-        "acquisizioni", "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni", "messaggi", "cestino"]
+        "oggi", "agenda", "contatti", "immobili", "edifici", "zona", "venditori",
+        "acquisizioni", "incarichi", "acquirenti", "stime", "messaggi", "impostazioni"]
     assert sezioni.count("{ name: 'agenda', label: 'Agenda' },") == 1
     # la costante del workaround non esiste piu', in nessuna forma
     assert "SEZIONE_AGENDA" not in main
@@ -926,8 +930,12 @@ def test_s1_un_tenant_vede_agenda_una_volta_subito_dopo_oggi(shell_staged):
     # SENTINELLA AGGIORNATA DA EDIFICI-1: "edifici" subito prima di "immobili".
     # SENTINELLA AGGIORNATA DA STIMA360 TERRITORIO ZONA: "zona" (la mappa) subito prima di "edifici".
     # SENTINELLA AGGIORNATA DAL BLOCCO 1 PRE-COLLAUDO (stime, stime-dettagliate, messaggi)
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "stime", "stime-dettagliate", "zona", "edifici", "immobili", "venditori", "acquisizioni",
-                                "incarichi", "acquirenti", "abbinamenti", "attivita", "automazioni", "messaggi", "cestino"], out["navRoutes"]
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1 (decisione del titolare): barra
+    # essenziale in quest'ordine; "edifici" e' sottovoce di "immobili"; "stime-dettagliate",
+    # "abbinamenti", "attivita", "automazioni" e "cestino" non sono piu' voci ma restano rotte
+    # valide dentro Stime, Richieste, Oggi e Impostazioni. "impostazioni" chiude la barra.
+    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "edifici", "zona", "venditori", "acquisizioni",
+                                "incarichi", "acquirenti", "stime", "messaggi", "impostazioni"], out["navRoutes"]
     assert out["navRoutes"].count("agenda") == 1
     assert out["nav"].count("Agenda") == 1
     # Rete resta assente per un tenant
@@ -977,7 +985,9 @@ def test_s4_platform_admin_senza_agenzia_resta_sulla_rete_senza_agenda(shell_sta
                  rt.script(rt.ok(rt.PLATFORM_ADMIN), rt.ok(rt.PLATFORM_ME), rt.ok(rt.AGENZIE)),
                  hash="#/agenda")
     # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: il Cestino e' la sola voce di agenzia che resta in modalita' piattaforma (vista globale del Super Admin designato; agli altri il backend risponde 403)
-    assert out["navRoutes"] == ["cestino", "rete"], out["navRoutes"]
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: nuova barra (Immobili > Edifici, poi Zona,
+    # Venditori, Acquisizioni, Incarichi, Richieste, Stime, WhatsApp, Impostazioni in fondo).
+    assert out["navRoutes"] == ["impostazioni", "rete"], out["navRoutes"]
     assert out["title"] == "Rete", out["title"]
     assert not any(u.startswith("/api/appointments") for u in out["urls"]), out["urls"]
 

@@ -480,7 +480,9 @@ def test_d01_voce_di_menu_ed_elenco_con_colonne_e_filtri(staged):  # noqa: F811
     # SENTINELLA AGGIORNATA DA VENDITORI-1: il flusso reale e' Immobili ->
     # Venditori -> Acquisizioni; le Acquisizioni restano subito dopo i Venditori,
     # che stanno subito dopo gli Immobili. Le posizioni restano esatte.
-    assert out["nav"].index("venditori") == out["nav"].index("immobili") + 1
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: nuova barra (Immobili > Edifici, poi Zona,
+    # Venditori, Acquisizioni, Incarichi, Richieste, Stime, WhatsApp, Impostazioni in fondo).
+    assert out["nav"].index("venditori") == out["nav"].index("zona") + 1
     assert out["nav"].index("acquisizioni") == out["nav"].index("venditori") + 1
     testo = out["content"]
     for atteso in ("Trilocale", "Mario Rossi", "Anna Agente", "Appuntamento fissato", "Ultima attività",   # SEMPLIFICAZIONE-CRM-1: senza codice

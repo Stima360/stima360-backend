@@ -542,7 +542,7 @@ def test_n1_menu_entry_appears_only_when_the_server_says_yes(staged):  # noqa: F
     spento = _shell(staged, {"status": 404, "body": {"detail": "Not Found"}})
     assert "voce" not in spento["nav"] and "non è attivo" in spento["content"]
     acceso = _shell(staged, ACCESA)
-    assert "voce" in acceso["nav"] and acceso["nav"].index("voce") > acceso["nav"].index("cestino")
+    assert "voce" in acceso["nav"] and acceso["nav"].index("voce") > acceso["nav"].index("impostazioni")
     assert acceso["title"] == "Voce"
     # le altre voci restano quelle di prima, nello stesso ordine
     assert [r for r in acceso["nav"] if r != "voce"] == spento["nav"]

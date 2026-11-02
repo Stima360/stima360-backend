@@ -220,7 +220,8 @@ def test_routes_are_mounted_behind_the_operator_session():
 
 def test_shell_has_the_messages_section_and_route():
     main_js = (APP / "main.js").read_text(encoding="utf-8")
-    assert "{ name: 'messaggi', label: 'Messaggi WhatsApp' }" in main_js
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: la voce si chiama «WhatsApp».
+    assert "{ name: 'messaggi', label: 'WhatsApp' }" in main_js
     assert "registerRoute('messaggi'" in main_js
     # ogni voce della sidebar ha la sua icona: senza, la Shell si ferma (creaVoceNav)
     assert re.search(r"^  messaggi: \[", main_js, re.M)

@@ -30,10 +30,13 @@ COMPONENTS = ASSETS / "components"
 CORE = ASSETS / "core"
 MAIN_JS = ASSETS / "main.js"
 
+# SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: "abbinamenti", "attivita" e
+# "automazioni" non sono piu' voci della barra (vivono dentro Richieste, Oggi e
+# Impostazioni) ma restano rotte esplicite: la seconda lista le controlla.
 EXPECTED_SECTION_NAMES = [
-    "oggi", "contatti", "immobili", "acquirenti", "abbinamenti",
-    "attivita", "automazioni",
+    "oggi", "contatti", "immobili", "acquirenti", "impostazioni",
 ]
+ROTTE_CONTENUTE = ["abbinamenti", "attivita", "automazioni", "cestino", "agenzia", "stime-dettagliate"]
 # NOTA (P25 pre-push compliance patch): 'impostazioni' era nella baseline
 # P0/P25.0 come sezione placeholder in sidebar. La specifica P25.7 approvata
 # richiedeva di NON implementare Impostazioni e di rimuoverla/nasconderla
@@ -57,6 +60,12 @@ def test_expected_sections_present_in_nav():
     names = re.findall(r"name:\s*'([a-z]+)'", main_js)
     for expected in EXPECTED_SECTION_NAMES:
         assert expected in names, f"sezione '{expected}' non trovata in SECTIONS (main.js)"
+
+
+def test_le_rotte_contenute_restano_registrate():
+    main_js = _read(MAIN_JS)
+    explicit = set(re.findall(r"registerRoute\('([a-z-]+)'", main_js))
+    assert set(ROTTE_CONTENUTE) <= explicit, sorted(set(ROTTE_CONTENUTE) - explicit)
 
 
 def test_every_section_has_a_registered_route_or_placeholder():

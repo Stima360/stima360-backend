@@ -200,14 +200,17 @@ def test_s05_main_js_una_voce_discreta_e_una_rotta():
     main = (ASSETS / "main.js").read_text(encoding="utf-8")
     inizio = main.index("const SECTIONS = [")
     sezioni = main[inizio:main.index("];", inizio)]
-    assert re.findall(r"name:\s*'([a-z]+)'", sezioni)[-1] == "cestino"       # in fondo
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: il Cestino vive dentro «Impostazioni»
+    # (ultima voce, discreta, in fondo); la rotta #/cestino resta registrata e valida.
+    assert re.findall(r"name:\s*'([a-z]+)'", sezioni)[-1] == "impostazioni"  # in fondo
+    assert "key: 'cestino', label: 'Cestino'" in (ASSETS / "views" / "sezioni.js").read_text(encoding="utf-8")
     assert main.count("registerRoute('cestino'") == 1
     # SENTINELLA AGGIORNATA DA CESTINO-GENERALE-1: la rotta passa alla pagina cio' che serve a MOSTRARE la vista
     # globale (piattaforma) e il filtro «Eliminati da me»; la voce resta in fondo ma non piu' discreta
     assert "registerRoute('cestino', (container) => {" in main and "return renderCestino(container, {" in main
     css = (ASSETS / "app.css").read_text(encoding="utf-8")
-    assert '.nav-item[data-route="cestino"] { margin-top: auto; font-size: 13px; color: var(--muted);' in css
-    assert '#nav .nav-item[data-route="cestino"] { font-size: inherit; color: inherit; }' in css
+    assert '.nav-item[data-route="impostazioni"] { margin-top: auto; font-size: 13px; color: var(--muted);' in css
+    assert '#nav .nav-item[data-route="impostazioni"] { font-size: inherit; color: inherit; }' in css
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +488,9 @@ def test_e_pagina_cestino_admin_agenzia_agent_propri(staged):  # noqa: F811
     assert "IMM-31" in uno and "Via Roma 31, Giulianova" in uno and "Duplicato — Doppione di IMM-12" in uno
     assert "Anna Agente" in uno and "Bozza" in uno
     assert "IMM-32" in due and "Record di prova" in due and "Ada Admin" in due and "Attivo · archiviato" in due
-    assert admin["nav"][-1] == "cestino" and admin["titolo"] == "Cestino"
+    # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: nuova barra (Immobili > Edifici, poi Zona,
+    # Venditori, Acquisizioni, Incarichi, Richieste, Stime, WhatsApp, Impostazioni in fondo).
+    assert admin["nav"][-1] == "impostazioni" and admin["titolo"] == "Impostazioni"
     # la pagina non filtra e non aggiunge parametri: lo scope lo decide il backend
     for out in (admin, agente):
         letture = [c["url"] for c in out["calls"] if c["url"].startswith("/api/property/trash")]

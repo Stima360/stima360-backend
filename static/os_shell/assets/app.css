@@ -941,7 +941,8 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
    «Cestino» e la sua voce discreta in fondo alla sidebar. Solo regole NUOVE
    (prefisso trash-), nessuna ridefinizione. Mobile-first: bottom-sheet,
    card a una colonna, azioni toccabili da 44px. */
-.nav-item[data-route="cestino"] { margin-top: auto; font-size: 13px; color: var(--muted); border-top: 1px solid var(--border); }
+/* SEMPLIFICAZIONE-NAV-1: «Impostazioni» prende il posto in fondo che era del Cestino. */
+.nav-item[data-route="impostazioni"] { margin-top: auto; font-size: 13px; color: var(--muted); border-top: 1px solid var(--border); }
 .trash-open { color: var(--danger); }
 .trash-link { font-size: 13px; }
 dialog.modal.trash-sheet { max-width: 520px; }
@@ -972,7 +973,6 @@ dialog.modal.trash-sheet { max-width: 520px; }
   .trash-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 860px) {
-  .nav-item[data-route="cestino"] { margin-top: 0; border-top: none; }
 }
 @media (max-width: 767px) {
   dialog.modal.trash-sheet { margin: auto 0 0 0; width: 100vw; max-width: 100vw; max-height: 92vh; border-radius: 16px 16px 0 0; padding: 16px; }
@@ -1081,9 +1081,14 @@ a.census-unit-main { text-decoration: none; }
 /* STIME-UI-1 — Icone della sidebar e viste Stime, solo presentazione. */
 .nav-item { display: flex; align-items: center; gap: 10px; }
 .nav-icon { width: 18px; height: 18px; flex: 0 0 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
-.nav-item[data-route="stime"] { border-top: 1px solid var(--border); margin-top: 6px; padding-top: 14px; }
-.nav-item[data-route="stime-dettagliate"] { padding-left: 34px; font-size: 13px; }
-.nav-item[data-route="stime-dettagliate"] .nav-icon { width: 16px; height: 16px; flex-basis: 16px; }
+/* SEMPLIFICAZIONE-NAV-1: sottovoci rientrate (es. Edifici sotto Immobili). */
+.nav-item.nav-sub { margin-left: 22px; font-size: 13px; }
+.nav-item.nav-sub .nav-icon { width: 16px; height: 16px; flex-basis: 16px; }
+.sezione-tabs { margin-bottom: 12px; }
+@media (max-width: 860px) {
+  .nav-item[data-route="impostazioni"] { margin-top: 0; border-top: none; }
+}
+.sezione-content { min-width: 0; }
 .stime-page { max-width: 1200px; }
 .stime-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 16px 0 18px; }
 .stime-stat { display: grid; gap: 5px; border-radius: var(--radius); padding: 14px; background: var(--bg); }
@@ -1116,7 +1121,7 @@ a.census-unit-main { text-decoration: none; }
   .stime-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .stime-detail-grid { grid-template-columns: 1fr; }
   .stime-field { grid-template-columns: minmax(105px, 36%) minmax(0,1fr); }
-  .nav-item[data-route="stime-dettagliate"] { padding-left: 24px; }
+  .nav-item.nav-sub { margin-left: 12px; }
 }
 
 /* ---------------------------------------------------------------------------
@@ -1230,7 +1235,7 @@ a.census-unit-main { text-decoration: none; }
 /* CESTINO-GENERALE-1: il Cestino UNICO. La voce del menu non e' piu' discreta
    (stessa forma delle altre; `#nav` vince sulle regole di 2B3 e di aurora),
    la scheda «Tutti» ha filtri, contatori e collegamenti. Solo regole nuove. */
-#nav .nav-item[data-route="cestino"] { font-size: inherit; color: inherit; }
+#nav .nav-item[data-route="impostazioni"] { font-size: inherit; color: inherit; }
 .trash-filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
 .trash-filters input[type="search"] { flex: 1 1 240px; min-height: 40px; }
 .trash-filters select, .trash-filters .btn { min-height: 40px; }
@@ -1712,7 +1717,7 @@ a.census-unit-main { text-decoration: none; }
 .wa-bubble-error { display: block; margin-top: 6px; font-size: 12px; color: #b91c1c; }
 .wa-reply-compact { border-top: 1px solid var(--border); background: #fff; padding: 8px 12px; gap: 6px; }
 .wa-composer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
-.wa-composer textarea { width: 100%; box-sizing: border-box; resize: none; border: 1px solid var(--border); border-radius: 20px; padding: 10px 14px; font: inherit; line-height: 1.3; max-height: 160px; background: var(--bg); }
+.wa-composer textarea { width: 100%; box-sizing: border-box; border: 1px solid var(--border); border-radius: 20px; padding: 10px 14px; font: inherit; line-height: 1.3; max-height: 160px; background: var(--bg); }
 .wa-composer .btn.wa-send { width: 42px; height: 42px; border-radius: 50%; padding: 0; font-size: 18px; display: inline-grid; place-items: center; }
 .wa-composer.is-disabled textarea { color: var(--muted); }
 .wa-reply-compact .wa-reply-confirm { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; justify-content: space-between; }
