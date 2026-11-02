@@ -438,6 +438,16 @@ app.mount(
     StaticFiles(directory=str(OWNER_PORTAL_DIR), html=True),
     name="owner-portal",
 )
+# Landing pubblica "Bonus Casa 2026" (`/bonus-casa-2026/`): pagina statica
+# senza login, come `/owner`. I file (index.html, assets/logo.jpg,
+# assets/locandina.webp, assets/bonus-casa-2026.pdf) stanno in
+# `landing/bonus-casa-2026/`; nessuna API, nessun database.
+LANDING_BONUS_CASA_DIR = BASE_DIR / "landing" / "bonus-casa-2026"
+app.mount(
+    "/bonus-casa-2026",
+    StaticFiles(directory=str(LANDING_BONUS_CASA_DIR), html=True),
+    name="landing-bonus-casa-2026",
+)
 # P30 - la pagina pubblica del link di prenotazione A30-12 (`/prenota/{token}`).
 # Un mount statico come `/owner`, non una rotta API: la pagina e' la stessa per
 # qualunque token e parla solo con `/api/public/booking/...` (vedi
