@@ -106,6 +106,64 @@ def environment_gate(g: Gate, expected_host: str) -> None:
     g.stop_if_failed("ambiente non verificato, nessuna connessione aperta")
 
 
+def smtp_effective() -> dict:
+    """La configurazione SMTP EFFETTIVA, con le stesse regole del trasporto.
+
+    Non le ripete: chiede al trasporto stesso (`database.invia_mail`) con
+    `smtplib.SMTP` sostituito per la durata della prova da un finto che registra
+    host e porta e poi rifiuta. Nessuna connessione, nessun login, nessuna email,
+    e nessun valore duplicato qui: default dell'host, default della porta, utente
+    e password obbligatori sono quelli di `invia_mail`, oggi e domani. Se il
+    trasporto non arriva a costruire la connessione, la configurazione non e'
+    valida. L'output del trasporto viene catturato e scartato.
+
+    Restituisce solo cio' che e' lecito mostrare: configurata si'/no, host e
+    porta (non sono segreti), da dove viene l'host (variabile o default del
+    trasporto), PRESENZA (mai il valore) di utente e password.
+    """
+    import contextlib
+    import io
+    import smtplib
+    from unittest import mock
+
+    import database
+
+    visto: dict = {}
+
+    class _Sonda(Exception):
+        pass
+
+    def _finto(host, port=0, *args, **kwargs):
+        visto["host"], visto["port"] = host, port
+        raise _Sonda("sonda: nessuna connessione aperta")
+
+    esito = {"configurata": False, "host": None, "port": None, "host_da": None,
+             "utente_presente": bool(os.getenv("SMTP_USER")), "password_presente": bool(os.getenv("SMTP_PASS")),
+             "errore": None}
+    muto = io.StringIO()
+    with mock.patch.object(smtplib, "SMTP", _finto), contextlib.redirect_stdout(muto):
+        try:
+            database.invia_mail("sonda@example.invalid", "sonda", "<p>sonda</p>")
+        except Exception as exc:  # noqa: BLE001 - es. SMTP_PORT non numerica: il trasporto stesso fallirebbe
+            esito["errore"] = type(exc).__name__
+    if "host" in visto:
+        esito.update(configurata=True, host=visto["host"], port=visto["port"],
+                     host_da="variabile SMTP_HOST" if os.getenv("SMTP_HOST") else "default del trasporto")
+    return esito
+
+
+def smtp_gate(g: Gate) -> None:
+    eff = smtp_effective()
+    g.need(eff["utente_presente"], "SMTP_USER presente")
+    g.need(eff["password_presente"], "SMTP_PASS presente (solo la presenza, mai il valore)")
+    if eff["errore"]:
+        g.need(False, f"il trasporto SMTP non e' utilizzabile: {eff['errore']} (es. SMTP_PORT non numerica)")
+    else:
+        g.need(eff["configurata"], "il trasporto SMTP risulta configurato (stesse regole di invia_mail, senza connettersi)")
+    if eff["configurata"]:
+        print(f"INFO  server SMTP effettivo: {eff['host']}:{eff['port']} ({eff['host_da']})", flush=True)
+
+
 def config_gate(g: Gate, recipient: str | None) -> None:
     """Le tre impostazioni del collaudo, e SOLO indirizzi elencati a mano."""
     from appointment_reminders import policy, settings
@@ -120,7 +178,7 @@ def config_gate(g: Gate, recipient: str | None) -> None:
     if recipient is not None:
         g.need(recipient.strip().lower() in elenco, "il destinatario del collaudo e' nell'elenco")
         g.need(len(elenco) == 1, "l'elenco contiene SOLO il destinatario del collaudo")
-    g.need(bool(os.getenv("SMTP_HOST")) and bool(os.getenv("SMTP_USER")), "SMTP configurato (host e utente presenti)")
+    smtp_gate(g)
 
 
 def db_gate(g: Gate, cur, agency_id: int, actor: int, agent: int) -> dict:

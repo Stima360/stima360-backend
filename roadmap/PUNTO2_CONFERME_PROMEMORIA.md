@@ -116,8 +116,11 @@ Nessuna modifica JavaScript.
 Al termine del collaudo le tre variabili vanno **rimosse** (o riportate al valore precedente): senza di
 esse conferme e 2h tornano spente e chiuse.
 
-Gli invii email passano dal provider SMTP gia' configurato (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
-`SMTP_PASS`) e dal cron esistente (`run_communication_dispatch_cron.py` →
+Gli invii email passano dal provider SMTP gia' configurato (`SMTP_USER` e `SMTP_PASS` obbligatori; `SMTP_HOST`
+e `SMTP_PORT` hanno un default nel trasporto, quindi **possono mancare dall'ambiente**: il `preflight` del
+collaudo chiede al trasporto stesso la configurazione effettiva, senza connettersi, senza inviare e senza
+mostrare segreti; stampa host e porta effettivi e se vengono dalla variabile o dal default, e di utente e
+password dice solo se sono presenti) e dal cron esistente (`run_communication_dispatch_cron.py` →
 `POST /api/internal/communication/cron/run`: giro dei promemoria + dispatch email).
 
 ## 5. Deploy e migrazione sul TEST
