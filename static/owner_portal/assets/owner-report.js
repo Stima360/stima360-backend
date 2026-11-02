@@ -63,6 +63,7 @@
       row('Contatti interessati', String(rep.interested_contacts.total)),
       row('Richieste ricevute', rep.requests.available ? String(rep.requests.total) : NOT_AVAILABLE),
       row('Visite svolte', String(rep.visits.completed)),
+      row('Visite annullate o non svolte', String(rep.visits.not_held ? rep.visits.not_held.total : 0)),
       row('Visite in programma', String(rep.visits.upcoming.count)),
       row('Proposte (situazione attuale)', String(rep.proposals.total)),
     );
@@ -81,7 +82,14 @@
       }
       content.appendChild(list);
     }
-    content.appendChild(el('p', 'muted', 'I feedback delle visite pubblicati per te sono nella sezione «Feedback visite».'));
+    // ROADMAP VISITE (fase D): quanti riscontri approvati dall'agenzia e con quale esito; i testi
+    // stanno nella sezione «Feedback visite», una volta sola.
+    const fb = rep.visit_feedback || { total: 0, by_sentiment: [] };
+    const riscontri = fb.total
+      ? `Riscontri sulle visite approvati dall’agenzia: ${fb.total}${fb.by_sentiment.length ? ` (${fb.by_sentiment.map((x) => `${x.count} ${x.label.toLowerCase()}`).join(', ')})` : ''}.`
+      : 'Nessun riscontro sulle visite pubblicato nel periodo.';
+    content.appendChild(el('p', 'muted', riscontri));
+    content.appendChild(el('p', 'muted', 'I testi dei riscontri pubblicati per te sono nella sezione «Feedback visite».'));
   }
 
   async function load() {

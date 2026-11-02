@@ -97,6 +97,8 @@ export function renderPreview(r) {
     ['Contatti interessati registrati', String(r.interested_contacts.total), 'interested'],
     ['Richieste ricevute', r.requests.available ? String(r.requests.total) : NOT_AVAILABLE, 'requests'],
     ['Visite effettuate', String(r.visits.completed), 'visits'],
+    // ROADMAP VISITE (fase D): annullate o non svolte, solo conteggio
+    ['Visite annullate o non svolte', String(r.visits.not_held ? r.visits.not_held.total : 0), 'not_held'],
     [`Visite in programma dal ${dayText(up.from)} al ${dayText(up.to)}`, String(up.count), 'upcoming'],
   ]) {
     const card = el('div', 'owner-report-card');
@@ -105,6 +107,31 @@ export function renderPreview(r) {
     cards.appendChild(card);
   }
   root.appendChild(cards);
+  // ROADMAP VISITE (fase D): i soli riscontri che l'agente ha approvato per il proprietario
+  const fb = r.visit_feedback || { total: 0, items: [], by_sentiment: [] };
+  root.appendChild(el('h4', null, 'Riscontri sulle visite (approvati dall’agenzia)'));
+  root.appendChild(el('p', 'muted owner-report-hint',
+    'Il proprietario legge solo questi testi, scritti e approvati dall’agente dalla scheda dell’appuntamento. Le note interne e i dati degli acquirenti non vengono mai pubblicati.'));
+  if (fb.drafts_pending) {
+    const att = el('p', 'owner-report-pending', `${fb.drafts_pending} ${fb.drafts_pending === 1 ? 'bozza attende' : 'bozze attendono'} ancora la tua approvazione: non ${fb.drafts_pending === 1 ? 'è visibile' : 'sono visibili'} al proprietario.`);
+    att.setAttribute('data-owner-report-drafts', '');
+    root.appendChild(att);
+  }
+  if (fb.items.length) {
+    if (fb.by_sentiment.length) {
+      root.appendChild(el('p', 'muted', `Esito dei riscontri: ${fb.by_sentiment.map((x) => `${x.count} ${x.label.toLowerCase()}`).join(', ')}`));
+    }
+    const lista = el('ul', 'owner-report-feedback');
+    lista.setAttribute('data-owner-report-feedback', '');
+    for (const x of fb.items) {
+      const li = el('li');
+      li.append(el('strong', null, `${dayText(x.date)} · ${x.category_label}${x.sentiment_label ? ` · ${x.sentiment_label}` : ''}`), el('div', null, x.summary));
+      lista.appendChild(li);
+    }
+    root.appendChild(lista);
+  } else {
+    root.appendChild(el('p', 'muted', 'Nessun riscontro sulle visite pubblicato nel periodo.'));
+  }
   root.appendChild(el('h4', null, 'Andamento mese per mese'));
   root.appendChild(table(['Mese', 'Contatti interessati', 'Visite'], r.monthly.map((x) => [x.label, String(x.interested_contacts), String(x.visits)])));
   root.appendChild(el('h4', null, 'Proposte di acquisto (situazione attuale)'));

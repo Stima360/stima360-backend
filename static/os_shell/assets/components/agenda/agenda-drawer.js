@@ -34,6 +34,7 @@ import {
 } from '../../agenda/agenda-model.js';
 import { getAppointment, getEvents } from '../../agenda/agenda-api.js';
 import { mountVisitOutcome, mountVisitSheet } from './agenda-visit.js';
+import { mountOwnerUpdate } from '../visit-owner-update.js';
 
 function el(tag, className, text) {
   const nodo = document.createElement(tag);
@@ -250,6 +251,8 @@ export async function openAppointmentDrawer(drawerEl, {
   mountVisitOutcome(pannello, { detail, onSaved: ricarica });
   // ROADMAP VISITE (fase C): il foglio visita dall'appuntamento (apri o genera, firma «Da firmare»).
   mountVisitSheet(pannello, { detail });
+  // ROADMAP VISITE (fase D): l'aggiornamento al proprietario, con l'approvazione dell'agente.
+  mountOwnerUpdate(pannello, { detail });
 
   const cronologia = el('section', 'agenda-drawer-history');
   cronologia.appendChild(el('h3', 'section-title', 'Cronologia'));

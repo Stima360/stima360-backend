@@ -34,6 +34,7 @@ from .enums import (
     COMMERCIAL_STATUS_LABELS,
     DEFAULT_PERIOD_DAYS,
     DEFINITIONS,
+    FEEDBACK_SENTIMENT_ORDER,
     LOGO_UNREADABLE_MESSAGE,
     MANDATE_STATE_LABELS,
     MAX_PERIOD_DAYS,
@@ -139,10 +140,11 @@ def build_report(ctx, property_id: int, date_from: date | None = None, date_to: 
     agency_id = ctx.require_agency()
     with core_cursor() as (_, cur):
         prop = _property(cur, ctx, property_id)
-        return _compose(cur, agency_id, prop, date_from, date_to)
+        return _compose(cur, agency_id, prop, date_from, date_to, operator=True)
 
 
-def _compose(cur, agency_id: int, prop: dict, date_from: date | None, date_to: date | None) -> dict:
+def _compose(cur, agency_id: int, prop: dict, date_from: date | None, date_to: date | None, *,
+             owner_account_id: int | None = None, operator: bool = False) -> dict:
     """Il report di un immobile GIA' autorizzato dal chiamante (operatore o
     proprietario): stessi dati, stesse esclusioni."""
     property_id = prop["id"]
@@ -153,6 +155,9 @@ def _compose(cur, agency_id: int, prop: dict, date_from: date | None, date_to: d
     now = datetime.now(timezone.utc)
     upcoming_end = now + timedelta(days=UPCOMING_DAYS)
     upcoming = repository.upcoming_visits(cur, agency_id, property_id, now, upcoming_end)
+    not_held = repository.not_held_visits(cur, agency_id, property_id, start, end)
+    feedback = repository.published_visit_feedback(cur, agency_id, property_id, start, end,
+                                                   owner_account_id=owner_account_id, all_owners=operator)
     proposals = repository.proposals_by_status(cur, agency_id, property_id)
     prices = repository.price_history(cur, property_id, start, end)
     statuses = repository.status_history(cur, property_id, start, end)
@@ -186,7 +191,11 @@ def _compose(cur, agency_id: int, prop: dict, date_from: date | None, date_to: d
         # Nessuna fonte attendibile: mai uno zero al posto del dato mancante.
         "requests": {"available": False, "total": None},
         "visits": {"completed": len(visits),
-                   "upcoming": {"count": upcoming, "from": _day(now), "to": _day(upcoming_end)}},
+                   "upcoming": {"count": upcoming, "from": _day(now), "to": _day(upcoming_end)},
+                   # ROADMAP VISITE (fase D): annullate o non svolte, solo conteggi
+                   "not_held": {"total": not_held["cancelled"] + not_held["no_show"],
+                                "cancelled": not_held["cancelled"], "no_show": not_held["no_show"]}},
+        "visit_feedback": _feedback_block(cur, agency_id, property_id, feedback, operator),
         "monthly": list(months.values()),
         "proposals": {"scope": "current", "total": sum(proposals.values()),
                       "by_status": [{"status": s, "label": label, "count": proposals.get(s, 0)}
@@ -199,6 +208,24 @@ def _compose(cur, agency_id: int, prop: dict, date_from: date | None, date_to: d
                            for s in statuses],
         "definitions": list(DEFINITIONS),
     }
+
+
+def _feedback_block(cur, agency_id: int, property_id: int, rows: list, operator: bool) -> dict:
+    """I riscontri sulle visite APPROVATI dall'agente: il solo testo pubblicato, la categoria e
+    l'esito (sentiment) con le loro frasi in italiano. Per il consulente anche quante bozze
+    attendono ancora l'approvazione (mai il loro testo qui)."""
+    from owner.repository import CATEGORY_LABELS, SENTIMENT_LABELS
+
+    items = [{"id": r["id"], "date": _day(r["published_at"]), "category": r["category"],
+              "category_label": CATEGORY_LABELS.get(r["category"], r["category"]),
+              "summary": r["public_summary"], "sentiment": r["sentiment"],
+              "sentiment_label": SENTIMENT_LABELS.get(r["sentiment"]) if r["sentiment"] else None} for r in rows]
+    by_sentiment = [{"sentiment": s, "label": SENTIMENT_LABELS[s], "count": sum(1 for i in items if i["sentiment"] == s)}
+                    for s in FEEDBACK_SENTIMENT_ORDER if any(i["sentiment"] == s for i in items)]
+    block = {"total": len(items), "items": items, "by_sentiment": by_sentiment}
+    if operator:
+        block["drafts_pending"] = repository.pending_visit_feedback(cur, agency_id, property_id)
+    return block
 
 
 def _identity(ctx) -> dict:
@@ -263,7 +290,7 @@ def build_owner_report(owner_account_id: int, property_id: int, date_from: date 
     interessati, importi delle proposte), senza «indicazioni dell'agente»."""
     with core_cursor() as (_, cur):
         prop = _owner_property(cur, owner_account_id, property_id)
-        report = _compose(cur, prop["agency_id"], prop, date_from, date_to)
+        report = _compose(cur, prop["agency_id"], prop, date_from, date_to, owner_account_id=owner_account_id)
     report["audience"] = "owner"
     return report
 

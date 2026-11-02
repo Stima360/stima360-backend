@@ -5,6 +5,8 @@
 //
 //   * «Esito della visita»      interesse dell'acquirente e feedback (fase B)
 //   * «Foglio visita»           apri o genera il PDF, stato della firma (fase C)
+//   (l'«Aggiornamento al proprietario», fase D, e' in `../visit-owner-update.js`: stesso
+//    criterio del foglio visita, i percorsi delle altre API non stanno nei file dell'Agenda)
 //
 // Riusano i dati che il server include nel dettaglio dell'appuntamento
 // (`detail.visit`) e le API esistenti: nessun dato inserito due volte, nessuna

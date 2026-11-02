@@ -110,9 +110,25 @@ def render_owner_report_pdf(report: dict, identity: dict, *, agent_notes: str | 
         ("Contatti interessati registrati", str(report["interested_contacts"]["total"])),
         ("Richieste ricevute", str(requests["total"]) if requests["available"] else NOT_AVAILABLE),
         ("Visite effettuate", str(report["visits"]["completed"])),
+        ("Visite annullate o non svolte", str(report["visits"]["not_held"]["total"])),
         (f"Visite in programma dal {italian_date(upcoming['from'])} al {italian_date(upcoming['to'])}",
          str(upcoming["count"])),
     )], styles, width))
+
+    # ROADMAP VISITE (fase D): solo i riscontri che l'agente ha approvato per il proprietario.
+    feedback = report.get("visit_feedback") or {"items": [], "by_sentiment": []}
+    story.append(Paragraph("Riscontri sulle visite (approvati dall'agenzia)", styles["h2"]))
+    if feedback["items"]:
+        if feedback["by_sentiment"]:
+            story.append(Paragraph(clean_text("Esito dei riscontri: " + ", ".join(
+                f"{x['count']} {x['label'].lower()}" for x in feedback["by_sentiment"])), styles["small"]))
+        for item in feedback["items"]:
+            esito = f" · {item['sentiment_label']}" if item.get("sentiment_label") else ""
+            story.append(Paragraph(clean_text(f"{italian_date(item['date'])} · {item['category_label']}{esito}"),
+                                   styles["label"]))
+            story.append(Paragraph(clean_text(item["summary"]), styles["body"]))
+    else:
+        story.append(Paragraph(clean_text("Nessun riscontro sulle visite pubblicato nel periodo."), styles["note"]))
 
     story.append(Paragraph("Andamento mese per mese", styles["h2"]))
     rows = [("Mese", "Contatti interessati registrati", "Visite effettuate")]

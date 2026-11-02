@@ -89,7 +89,14 @@ def _report(**over):
                     "state": "active", "state_label": "In corso"},
         "period": {"from": "2026-06-01", "to": "2026-10-29", "days": 151},
         "interested_contacts": {"total": 3}, "requests": {"available": False, "total": None},
-        "visits": {"completed": 2, "upcoming": {"count": 1, "from": "2026-10-29", "to": "2026-11-28"}},
+        # SENTINELLA AGGIORNATA DALLA ROADMAP VISITE (fase D): il report vero porta anche le visite
+        # annullate o non svolte e i riscontri approvati dall'agente.
+        "visits": {"completed": 2, "upcoming": {"count": 1, "from": "2026-10-29", "to": "2026-11-28"},
+                   "not_held": {"total": 1, "cancelled": 1, "no_show": 0}},
+        "visit_feedback": {"total": 1, "by_sentiment": [{"sentiment": "positive", "label": "Positivo", "count": 1}],
+                           "items": [{"id": 5, "date": "2026-10-20", "category": "general",
+                                      "category_label": "Osservazione generale", "summary": "Visita effettuata con interesse.",
+                                      "sentiment": "positive", "sentiment_label": "Positivo"}]},
         "monthly": [{"month": "2026-06", "label": "giugno 2026", "interested_contacts": 1, "visits": 0}],
         "proposals": {"scope": "current", "total": 1,
                       "by_status": [{"status": "submitted", "label": "In attesa di risposta", "count": 1}]},

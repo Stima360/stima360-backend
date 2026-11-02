@@ -14,7 +14,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_owner_and_operator_reports_share_one_composition():
-    assert "_compose(cur, agency_id, prop, date_from, date_to)" in inspect.getsource(service.build_report)
+    # SENTINELLA AGGIORNATA DALLA ROADMAP VISITE (fase D): il consulente vede anche quante bozze di
+    # riscontro attendono l'approvazione (`operator=True`); il proprietario no. Resta UNA composizione.
+    assert "_compose(cur, agency_id, prop, date_from, date_to, operator=True)" in inspect.getsource(service.build_report)
     owner = inspect.getsource(service.build_owner_report)
     assert "_owner_property(" in owner and "_compose(" in owner
     assert "require_property" in inspect.getsource(service._owner_property)          # riletta a ogni richiesta

@@ -37,6 +37,12 @@ DEFINITIONS = (
     "Visite effettuate: visite all'immobile segnate come svolte in agenda, per data di svolgimento, più le "
     "visite registrate prima dell'agenda; una visita registrata due volte (scheda e agenda, stesso giorno) "
     "conta una sola volta.",
+    "Visite annullate o non svolte: visite all'immobile annullate o in cui l'acquirente non si è presentato, "
+    "per data dell'annullamento o dell'assenza; non contano le visite create per errore e quelle che l'acquirente "
+    "ha solo spostato (hanno una nuova visita), né compaiono nomi, motivi o note.",
+    "Riscontri sulle visite: solo i testi che l'agente ha scritto, controllato e approvato per il proprietario, nella "
+    "versione corrente, per data di pubblicazione. Le note interne, i nomi e i recapiti degli acquirenti e le bozze "
+    "non vengono mai pubblicati; i conteggi per esito si riferiscono ai soli riscontri approvati.",
     f"Visite in programma: visite già fissate o confermate nei {UPCOMING_DAYS} giorni successivi alla "
     "generazione del documento; le richieste di visita non ancora fissate non sono contate.",
     "Proposte di acquisto: situazione attuale delle proposte inviate (mai le bozze); la data di invio non è "
@@ -44,6 +50,9 @@ DEFINITIONS = (
     "Prezzo richiesto: variazioni del prezzo di annuncio registrate nella scheda; non è una stima del valore "
     "di mercato.",
 )
+
+#: ROADMAP VISITE (fase D): l'ordine in cui i riscontri approvati si contano per esito.
+FEEDBACK_SENTIMENT_ORDER = ("positive", "mixed", "neutral", "negative")
 
 PROPERTY_NOT_FOUND_MESSAGE = "Immobile non trovato."
 NOT_ALLOWED_MESSAGE = "Non puoi preparare il report di questo immobile."
