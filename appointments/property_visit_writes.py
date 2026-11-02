@@ -32,7 +32,8 @@ from operator_auth.context import SystemAgencyContext
 from . import availability, errors, repository, working_hours
 from . import working_hours_repository as _wh_repository
 from .enums import VISIT_TYPE
-from .service import _GCAL_PRESENT, _contatto_pubblico_coerente, _gcal, _in_transazione, _visite, cancel_locked
+from .service import (_GCAL_PRESENT, _conferme, _contatto_pubblico_coerente, _gcal, _in_transazione, _visite,
+                      cancel_locked)
 
 SOURCE = "booking_link"
 PUBLIC_MANDATE_STATE = "active"
@@ -162,6 +163,18 @@ def create_visit(ctx, *, link: dict, start_at: datetime, contact_data: dict, sou
         _visite.on_create(cur, agency_id, riga, actor_user_id=None)
         if riga["status"] in _GCAL_PRESENT:
             _gcal.on_appointment_mutation(cur, agency_id, riga["id"])
+        # ROADMAP VISITE (fase A): la conferma al cliente anche per la visita
+        # prenotata dal collegamento dell'immobile, con lo stesso aggancio degli
+        # altri percorsi dell'Agenda (stessa transazione, in un savepoint, spenta
+        # senza APPOINTMENT_CONFIRMATIONS=1 e chiusa ai destinatari non elencati).
+        # Una richiesta ancora da autorizzare (`requested`) non la riceve: la
+        # riceve quando l'agenzia la fissa. Un cliente che riprogramma riceve il
+        # «Nuovo orario»; i messaggi in coda della visita vecchia sono gia' ritirati
+        # da `cancel_locked`.
+        if riga["status"] in ("scheduled", "confirmed"):
+            _conferme.on_scheduled(cur, agency_id, riga["id"],
+                                   kind=(_conferme.KIND_RESCHEDULED if replaces_appointment_id is not None
+                                         else _conferme.KIND_SCHEDULED))
         if after_insert is not None:
             after_insert(cur, riga)
         return riga
