@@ -5,7 +5,7 @@ Contenuto:
   index.html                 pagina (HTML + CSS integrato, nessun JavaScript, nessuna dipendenza)
   assets/logo.jpg            logo ufficiale (copia identica di communication/brand/stima360_logo.jpg)
   assets/locandina.webp      locandina promozionale usata come immagine separata
-  assets/bonus-casa-2026.pdf guida da scaricare (copia identica di communication/guida/STIMA360_Guida_Vendere_Casa_2026.pdf)
+  assets/bonus-casa-2026.pdf guida "Bonus Casa 2026" fornita dal cliente, copiata senza modifiche
 
 Pubblicazione:
   caricare l'intera cartella (index.html + assets/) nella posizione scelta sul sito.
