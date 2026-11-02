@@ -82,8 +82,12 @@ def test_03_nessuno_importa_il_package_fuori_dai_test():
         # SENTINELLA AGGIORNATA DAL PUNTO 2: il service degli appuntamenti chiama
         # gli agganci di `confirmation` (conferma al cliente, ritiro dei messaggi
         # in coda) DENTRO la transazione che scrive l'appuntamento.
+        # SENTINELLA AGGIORNATA DAL COLLAUDO DEL PUNTO 2: lo strumento di collaudo
+        # sintetico su TEST legge le impostazioni e la lista chiusa dei destinatari
+        # (`policy`, `settings`) per rifiutare un ambiente non configurato come
+        # previsto. E' uno script operativo: non e' importato da nessuno.
         if relativo in ("main.py", "communication/dispatcher.py", "communication/cron_router.py",
-                        "appointments/service.py"):
+                        "appointments/service.py", "scripts/collaudo_punto2.py"):
             continue
         assert "appointment_reminders" not in file.read_text(encoding="utf-8",
                                                              errors="ignore"), relativo

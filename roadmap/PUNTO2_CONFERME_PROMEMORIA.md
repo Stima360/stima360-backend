@@ -58,10 +58,18 @@ Tutto cio' che e' nuovo nasce **spento**: senza le variabili del § 4 il CRM si 
 
 ### 2E — Sicurezza, consensi, duplicati
 
-- Conferme e 2h sono **spenti** senza `APPOINTMENT_CONFIRMATIONS=1` / `APPOINTMENT_REMINDER_OFFSETS`.
-- `APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS` (elenco di email) limita **tutte** le notifiche degli
-  appuntamenti (conferme, 24h, 2h) ai soli destinatari elencati, sia all'accodamento sia alla
-  revalida: e' il limite del collaudo. Assente = nessun limite (comportamento di sempre del 24h).
+- **Tre interruttori indipendenti**, nessuno ne implica un altro:
+  1. promemoria **24h gia' esistenti**: si accendono dal cron (agenzie servite e token); nessuna delle
+     variabili del Punto 2 li accende o li spegne;
+  2. promemoria **2h**: `APPOINTMENT_REMINDER_OFFSETS` contiene `2h`;
+  3. **conferme** al cliente: `APPOINTMENT_CONFIRMATIONS=1`. Governa **solo** la conferma e il
+     «nuovo orario» accodati dall'Agenda; non tocca ne' il 24h ne' il 2h.
+- **Destinatari: elenco esplicito, mai dedotto.** `APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS` e'
+  letto solo dalla variabile, mai dagli indirizzi dei clienti, e vale sia all'accodamento sia alla
+  revalida prima dell'invio.
+  - **Conferme e 2h: fail-closed.** Variabile assente o vuota = nessun destinatario. `*` apre a tutti
+    ed e' una scelta da fare a mano, mai un effetto dell'assenza di configurazione.
+  - **24h di prima: invariato.** Assente = nessun limite; se presente, limita anche lui.
 - Comunicazioni di **servizio**: come il promemoria, non interrogano il consenso marketing; il
   divieto di contatto e la revalida restano quelli del dispatcher. Nessun invio reale a tutti i
   clienti per effetto di un deploy.
@@ -84,8 +92,9 @@ Nessuna modifica JavaScript.
 
 - Nuovi: `appointment_reminders/confirmation.py`, `appointment_reminders/settings.py`,
   `migrations/127_appointment_confirmations.sql`, `migrations/127_appointment_confirmations_down.sql`,
-  `scripts/release_127_migration.py`, `tests/test_punto2_conferme_unit.py`,
-  `tests/test_punto2_conferme_postgres.py`, `tests/test_release_127_migration.py`, questo documento.
+  `scripts/release_127_migration.py`, `scripts/collaudo_punto2.py`, `tests/test_punto2_conferme_unit.py`,
+  `tests/test_punto2_conferme_postgres.py`, `tests/test_release_127_migration.py`, `tests/test_collaudo_punto2.py`,
+  questo documento.
 - Modificati: `appointment_reminders/{policy,template,planner,revalidation,repository}.py`,
   `appointments/service.py` (5 agganci), `communication/{enums,repository,service,dispatcher,contact_view}.py`,
   sentinelle di inventario (`tests/migration_inventory.py`, `tests/test_a32_*`, `tests/test_a30_1_appointments.py`,
@@ -102,7 +111,10 @@ Nessuna modifica JavaScript.
 |---|---|---|
 | `APPOINTMENT_CONFIRMATIONS` | `1` | conferme spente |
 | `APPOINTMENT_REMINDER_OFFSETS` | `24h,2h` | solo `24h` |
-| `APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS` | l'email del destinatario autorizzato (solo quella) | nessun limite: **non** usare sul TEST con contatti reali |
+| `APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS` | l'email di prova autorizzata (**solo quella**, scritta a mano) | conferme e 2h: nessun destinatario; 24h: nessun limite |
+
+Al termine del collaudo le tre variabili vanno **rimosse** (o riportate al valore precedente): senza di
+esse conferme e 2h tornano spente e chiuse.
 
 Gli invii email passano dal provider SMTP gia' configurato (`SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
 `SMTP_PASS`) e dal cron esistente (`run_communication_dispatch_cron.py` →
@@ -133,31 +145,96 @@ python scripts/release_127_migration.py verify --expected-host <HOST_DB_TEST_VER
    127», `apply` → applicata e registrata, `verify` → «VERIFICA FINALE SUPERATA».
 3. Impostare le variabili del § 4 e riavviare il servizio.
 
-## 6. Collaudo reale (2F) con il destinatario autorizzato
+**Se l'`apply` e' gia' stato eseguito e segnalato verde, non ripeterlo.** Per controllare registro e
+checksum basta il `verify`, che e' di **sola lettura** (sessione `read only`) e **deve** mostrare:
 
-Prerequisiti: punto 5 completato; un contatto di prova con l'email autorizzata.
+- `DB_NAME` = `stima360_db_test`, `DB_HOST` = host atteso, database primario, sessione in sola lettura;
+- le migrazioni 115–126 con i checksum attesi e nessuna annullata, nessuna migrazione estranea;
+- `127_appointment_confirmations` registrata con checksum up `2bf5b852…ed63fb` e down
+  `36d9a7cd…bbd638`, down disponibile, non annullata, con l'operatore e l'ora dell'apply;
+- il vincolo `communication_messages_reason_code_chk` che contiene `appointment_confirmation`;
+- l'ultima riga `VERIFICA FINALE SUPERATA: 127 applicata e registrata`.
 
-1. Dall'Agenda, fissare un appuntamento per quel contatto a 2 giorni di distanza (ore 10:00).
-   Atteso: nella timeline del contatto compare «Conferma appuntamento» in coda; al giro del cron
-   arriva l'email «Conferma: … alle 10:00» con riferimenti dell'agenzia.
-2. Premere «Conferma» sullo stesso appuntamento. Atteso: nessuna seconda email.
-3. Spostarlo al giorno dopo alle 11:00. Atteso: la conferma/promemoria vecchi passano a
-   `cancelled`; arriva «Nuovo orario: … alle 11:00»; nessuna email con il vecchio orario.
-4. Il giorno prima alle 10:00 (giro del cron entro le 20:00): arriva il promemoria 24h; il giorno
-   stesso alle 09:00: arriva il promemoria 2h («tra circa due ore»).
-5. Annullare un altro appuntamento con messaggi in coda. Atteso: righe `cancelled`, nessuna email.
-6. Un appuntamento per un contatto con email **non** in allowlist: nessun messaggio
-   (`recipient_not_allowed` nei conteggi del giro).
+Se il job di verifica gia' lanciato ha stampato queste righe, il punto e' chiuso: l'output del job e'
+la prova. Il codice del servizio deve essere il commit piu' recente di `core-0.1-test` (le conferme
+senza elenco di destinatari sono chiuse solo da quel commit in poi): confrontare il commit del
+deploy su Render con `git log -1 origin/core-0.1-test`.
 
-Ogni passo si verifica nella timeline del contatto (stato `queued` / `sent` / `cancelled` /
-`suppressed` con motivo) e nella casella del destinatario.
+## 6. Collaudo reale su TEST (2F) con dati sintetici
+
+Strumento: `scripts/collaudo_punto2.py`, da lanciare come One-Off Job del servizio TEST (stesse
+variabili del servizio). **Non spedisce nulla da solo**: scrive solo contatti e appuntamenti sintetici
+attraverso i service dell'Agenda; la spedizione la fa il giro del cron esistente, solo verso l'elenco
+esplicito di destinatari. Ogni modo si ferma prima di connettersi se `DB_NAME` non e'
+`stima360_db_test` o `DB_HOST` non e' l'host atteso; non stampa mai un indirizzo email per intero.
+
+Prerequisiti: deploy fatto, 127 verificata (§ 5), variabili del § 4 impostate con **un solo**
+destinatario, agenzia di prova fra `COMMUNICATION_CRON_AGENCY_IDS`, cron attivo. Servono l'id
+agenzia, un owner/admin (`--actor-user-id`) e un agente attivo (`--agent-user-id`).
+
+```bash
+python scripts/collaudo_punto2.py preflight --expected-host <HOST_DB_TEST_VERIFICATO> --agency-id <ID> --actor-user-id <OWNER> --agent-user-id <AGENTE>
+```
+
+```bash
+python scripts/collaudo_punto2.py setup --expected-host <HOST_DB_TEST_VERIFICATO> --agency-id <ID> --actor-user-id <OWNER> --agent-user-id <AGENTE> --recipient <EMAIL_DI_PROVA>
+```
+
+Il `preflight` e' di sola lettura e dice anche **cosa altro e' in coda** per l'agenzia (il cron lo
+spedirebbe comunque): se non e' vuoto, fermarsi e decidere. Il `setup` va lanciato fra le 08:00 e le
+17:00 di Roma. Poi attendere il giro del cron (o lanciarne uno) e:
+
+```bash
+python scripts/collaudo_punto2.py report --expected-host <HOST_DB_TEST_VERIFICATO> --agency-id <ID> --actor-user-id <OWNER> --agent-user-id <AGENTE>
+```
+
+| Scenario | Atteso |
+|---|---|
+| A: appuntamento fra ~1h50, poi «Conferma» e un secondo clic | **una** conferma + promemoria **2h** (non il 24h) |
+| B: appuntamento fra ~20h | **una** conferma + promemoria **24h** (non il 2h) |
+| C: appuntamento fra 3 giorni, subito spostato di un'ora | conferma del vecchio orario **annullata**; parte solo «Nuovo orario» |
+| D: appuntamento fra 4 giorni, subito annullato | conferma **annullata**, nessuna email |
+| E: contatto con divieto di contatto | conferma accodata e **soppressa** (`do_not_contact`) |
+| F: email fuori elenco | nessuna conferma accodata |
+
+Totale atteso nella casella autorizzata: **5 email** (A: 2, B: 2, C: 1). Il `report` le elenca per oggetto.
+Con `--property-id <immobile con incarico>` lo scenario A diventa una visita con **indirizzo** nel testo.
+
+```bash
+python scripts/collaudo_punto2.py cleanup --expected-host <HOST_DB_TEST_VERIFICATO> --agency-id <ID> --actor-user-id <OWNER> --agent-user-id <AGENTE>
+```
+
+Il `cleanup` annulla gli appuntamenti sintetici ancora aperti, toglie il divieto di contatto, prova a
+mettere i contatti sintetici nel Cestino (quelli con storico possono restare, marcati `collaudo_punto2`)
+ed e' ripetibile. Poi rimuovere le variabili temporanee (§ 4).
+
+**Tre stati distinti**, mai confusi nei report:
+
+- **accodata**: riga `queued` nel registro comunicazioni;
+- **accettata dal provider**: `sent` nel registro; vuol dire che il server SMTP ha accettato il
+  messaggio, non che e' arrivato;
+- **ricevuta**: non verificabile dal CRM (il provider non riporta la consegna); la conferma una persona
+  guardando la casella.
+
+Controlli sulla casella, a mano: data e ora **italiane**, indirizzo (con `--property-id`), riferimenti
+dell'agenzia su righe separate (nome, telefono, email), lettura da telefono **senza scorrimento
+orizzontale**. Il rendering a 360 e 320 px e' stato verificato in locale (vedi § 7).
 
 ## 7. Test eseguiti (locale, PostgreSQL 16 reale)
 
-Vedi il resoconto della consegna per l'output esatto. In sintesi: 27 unitari nuovi, 21 PostgreSQL
-nuovi (conferme, spostamento, annullamento, allowlist, 2h, spegnimento, 127 assente, 127 up/down),
-suite A32-1/A32-2 (36), suite della comunicazione (178 + 274), Agenda A30-2 (31), script di
-rilascio 127 (3) e la suite completa non-PostgreSQL confrontata con la base del branch.
+Vedi il resoconto della consegna per l'output esatto. In sintesi: unitari e PostgreSQL nuovi
+(conferme, spostamento, annullamento, destinatari fail-closed, 2h, spegnimento, 127 assente, 127
+up/down, divieto di contatto, doppio clic), suite A32-1/A32-2, suite della comunicazione, Agenda
+A30-2, script di rilascio 127 e suite completa non-PostgreSQL confrontata con la base del branch.
+
+Il collaudo con lo strumento (§ 6) e' stato **provato sulla replica locale del TEST** con un trasporto
+finto: preflight, setup, un giro di cron, report (6 scenari coerenti, 5 messaggi accettati dal
+trasporto finto, nessuno per D, E, F e il vecchio orario di C) e cleanup ripetuto. Non e' una prova
+su TEST: quella resta da fare con il Job.
+
+Email di conferma: rese a 360 e 320 px in un browser; orari italiani corretti in ora legale e
+solare. Il test ha trovato un difetto, corretto: con un indirizzo email lungo la tabella sbordava
+(449 px su 360); ora celle a capo, riferimenti su righe separate, telefono con spazi non separabili.
 
 ## 8. Fuori perimetro, da decidere
 
