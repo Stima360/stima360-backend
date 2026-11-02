@@ -13,7 +13,8 @@ import io
 
 from property_valuations.pdf_render import _header, _kv_table, _register_fonts, _styles, clean_text, plain_text
 
-TEMPLATE_VERSION = "foglio_visita_bozza_v1"
+# v2 (ROADMAP VISITE, fase C): telefono ed email del visitatore e lo stato della firma, «Da firmare».
+TEMPLATE_VERSION = "foglio_visita_bozza_v2"
 TITLE = "Foglio visita"
 DRAFT_NOTICE = ("Bozza di modello da revisionare prima dell'uso. Il documento registra soltanto la visita "
                 "all'immobile indicato: non contiene clausole provvigionali né impegni del visitatore.")
@@ -65,6 +66,8 @@ def render_visit_sheet_pdf(snapshot: dict, identity: dict, *, generated_at_text:
         ("Orario", clean_text(visit["time_text"])),
         ("Agente", clean_text(visit.get("agent_name") or "")),
         ("Visitatore", clean_text(visit.get("visitor_name") or "")),
+        ("Telefono del visitatore", clean_text(visit.get("visitor_phone") or "")),
+        ("Email del visitatore", clean_text(visit.get("visitor_email") or "")),
         ("Altri partecipanti", clean_text(", ".join(visit.get("participants") or []))),
     ], styles, width))
 
@@ -73,7 +76,11 @@ def render_visit_sheet_pdf(snapshot: dict, identity: dict, *, generated_at_text:
     firme.setStyle(TableStyle([("LINEBELOW", (0, 1), (0, 1), 0.6, styles["colors"]["ink"]),
                                ("LINEBELOW", (2, 1), (2, 1), 0.6, styles["colors"]["ink"]),
                                ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0)]))
-    story.append(KeepTogether([Paragraph("Firme", styles["h2"]), firme, Spacer(1, 4),
+    firma = snapshot.get("signature") or {}
+    story.append(KeepTogether([Paragraph("Firme", styles["h2"]),
+                               Paragraph(clean_text(f"Stato della firma: {firma.get('label') or 'Da firmare'}"),
+                                         styles["note"]),
+                               Spacer(1, 4), firme, Spacer(1, 4),
                                Paragraph("Spazi per la firma: il foglio stampato o generato non è un documento "
                                          "sottoscritto finché non lo firmano le parti.", styles["small"])]))
     story.append(Spacer(1, 14))

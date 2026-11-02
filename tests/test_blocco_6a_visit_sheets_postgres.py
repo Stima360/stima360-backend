@@ -81,7 +81,10 @@ def test_g_a_booked_visit_sheet_with_data_template_and_author(app):
     assert r.status_code == 200, r.text
     out = r.json()
     assert out["created"] is True and out["sheet"]["version"] == 1 and out["sheet"]["visit_state"] == "booked"
-    assert out["sheet"]["template_version"] == "foglio_visita_bozza_v1" and out["sheet"]["signed"] is False
+    # SENTINELLA AGGIORNATA DALLA ROADMAP VISITE (fase C): il modello e' v2 (telefono ed email del
+    # visitatore, stato della firma «Da firmare»); la firma resta mai registrata qui.
+    assert out["sheet"]["template_version"] == "foglio_visita_bozza_v2" and out["sheet"]["signed"] is False
+    assert out["sheet"]["signature_state"] == "unsigned" and out["sheet"]["signature_label"] == "Da firmare"
     pdf = _download(owner, out["sheet"]["id"])
     assert pdf.startswith(b"%PDF") and hashlib.sha256(pdf).hexdigest() == out["sheet"]["sha256"]
     text = _text(pdf)
@@ -93,7 +96,7 @@ def test_g_a_booked_visit_sheet_with_data_template_and_author(app):
         assert reserved not in text, reserved
     row = _q(app, "SELECT generated_by_user_id, data_snapshot->'visit'->>'visitor_name', template_version "
                   "FROM visit_sheets WHERE id = %s", (out["sheet"]["id"],))[0]
-    assert row == (app["ids"]["owner_a"], "Visitatore Sintetico", "foglio_visita_bozza_v1")
+    assert row == (app["ids"]["owner_a"], "Visitatore Sintetico", "foglio_visita_bozza_v2")
     again = owner.post(f"{API}/appointments/{aid}").json()
     assert again["created"] is False and again["sheet"]["id"] == out["sheet"]["id"]
 

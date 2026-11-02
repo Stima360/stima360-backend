@@ -4,6 +4,7 @@
 // pulsanti di azione:
 //
 //   * «Esito della visita»      interesse dell'acquirente e feedback (fase B)
+//   * «Foglio visita»           apri o genera il PDF, stato della firma (fase C)
 //
 // Riusano i dati che il server include nel dettaglio dell'appuntamento
 // (`detail.visit`) e le API esistenti: nessun dato inserito due volte, nessuna
@@ -19,6 +20,7 @@
 
 import { INTEREST_LEVELS, errorMessage } from '../../agenda/agenda-model.js';
 import { putVisitOutcome } from '../../agenda/agenda-api.js';
+import { mountAppointmentSheet } from '../visit-sheets.js';
 
 export function el(tag, className, text) {
   const nodo = document.createElement(tag);
@@ -130,4 +132,14 @@ export function mountVisitOutcome(container, { detail, onSaved }) {
   sezione.appendChild(form);
   container.appendChild(sezione);
   return sezione;
+}
+
+
+/** «Foglio visita»: i fogli della visita, da qui, con lo stato «Da firmare». */
+export function mountVisitSheet(container, { detail }) {
+  if (!isVisit(detail)) return null;
+  const segnaposto = el('div', 'agenda-visit-sheet');
+  container.appendChild(segnaposto);
+  mountAppointmentSheet(segnaposto, { appointmentId: detail.appointment.id }).catch(() => {});
+  return segnaposto;
 }

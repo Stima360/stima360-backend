@@ -33,7 +33,7 @@ import {
   typeLabel,
 } from '../../agenda/agenda-model.js';
 import { getAppointment, getEvents } from '../../agenda/agenda-api.js';
-import { mountVisitOutcome } from './agenda-visit.js';
+import { mountVisitOutcome, mountVisitSheet } from './agenda-visit.js';
 
 function el(tag, className, text) {
   const nodo = document.createElement(tag);
@@ -248,6 +248,8 @@ export async function openAppointmentDrawer(drawerEl, {
   // stessa scheda. `onSaved` riapre la scheda con i dati riletti dal server.
   const ricarica = () => openAppointmentDrawer(drawerEl, { appointmentId, agents, onAction, isStale, onGone });
   mountVisitOutcome(pannello, { detail, onSaved: ricarica });
+  // ROADMAP VISITE (fase C): il foglio visita dall'appuntamento (apri o genera, firma «Da firmare»).
+  mountVisitSheet(pannello, { detail });
 
   const cronologia = el('section', 'agenda-drawer-history');
   cronologia.appendChild(el('h3', 'section-title', 'Cronologia'));

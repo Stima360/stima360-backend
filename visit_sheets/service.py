@@ -37,6 +37,10 @@ from .pdf_render import TEMPLATE_VERSION, render_visit_sheet_pdf
 ROME = ZoneInfo("Europe/Rome")
 SHEET_STATUSES = ("scheduled", "confirmed", "completed")
 STATE_LABELS = {"booked": "Prenotata (esito non registrato)", "completed": "Svolta (esito registrato)"}
+#: ROADMAP VISITE (fase C): la firma elettronica reale e' una fase separata. Finche' non
+#: e' operativa, il foglio dice chiaramente «Da firmare»: mai una firma simulata come valida.
+SIGNATURE_STATE = "unsigned"
+SIGNATURE_LABEL = "Da firmare"
 
 
 class VisitSheetError(Exception):
@@ -80,7 +84,26 @@ def _sheet_view(sheet: dict) -> dict:
     return {"id": sheet["id"], "appointment_id": sheet["appointment_id"], "version": sheet["sheet_version"],
             "template_version": sheet["template_version"], "visit_state": sheet["visit_state"],
             "visit_state_label": STATE_LABELS[sheet["visit_state"]], "sha256": sheet["sha256"],
-            "generated_at": sheet["generated_at"].isoformat(), "signed": False}
+            "generated_at": sheet["generated_at"].isoformat(), "signed": False,
+            "signature_state": SIGNATURE_STATE, "signature_label": SIGNATURE_LABEL}
+
+
+def list_for_appointment(ctx, appointment_id: int) -> dict:
+    """ROADMAP VISITE (fase C): la visita di UN appuntamento e i suoi fogli, con la stessa forma
+    e la stessa visibilita' dell'elenco per immobile (titolare e amministratori tutta l'agenzia,
+    l'agente le proprie visite). Per aprire o generare il foglio dalla scheda dell'Agenda."""
+    agency_id = ctx.require_agency()
+    with core_cursor() as (_, cur):
+        _require_installed(cur)
+        visit = repository.visit(cur, agency_id, appointment_id)
+        if visit is None or not _visible(ctx, visit) or visit["appointment_type"] != "buyer_visit":
+            raise NotFound("VISIT_NOT_FOUND", "Visita non trovata.")
+        if visit["property_id"] is None:
+            raise VisitSheetError("NO_PROPERTY", "La visita non è collegata a un immobile.")
+        sheets = repository.sheets_for_appointments(cur, agency_id, [visit["id"]])
+    return {"appointment_id": visit["id"], "property_id": visit["property_id"], "status": visit["status"],
+            "start_at": visit["start_at"].isoformat(), "end_at": visit["end_at"].isoformat(),
+            "can_generate": visit["status"] in SHEET_STATUSES, "sheets": [_sheet_view(s) for s in sheets]}
 
 
 def list_for_property(ctx, property_id: int) -> dict:
@@ -104,6 +127,7 @@ def _snapshot(cur, ctx, agency_id: int, visit: dict, prop: dict) -> dict:
     prop["signed_mandate"] = signed_link_mandate(cur, prop["id"])
     real = is_real_mandate(prop)
     start, end = _rome(visit["start_at"]), _rome(visit["end_at"])
+    visitor = repository.contact_card(cur, agency_id, visit.get("contact_id")) or {}
     address = ", ".join(x for x in (" ".join(y for y in (prop.get("address"), prop.get("civic_number")) if y),
                                     prop.get("city")) if x)
     state = "completed" if visit["status"] == "completed" else "booked"
@@ -118,10 +142,12 @@ def _snapshot(cur, ctx, agency_id: int, visit: dict, prop: dict) -> dict:
                   "date_text": start.strftime("%d/%m/%Y"), "time_text": f"{start:%H:%M}–{end:%H:%M} (ora italiana)",
                   "agent_name": appointment_repository.agent_name(cur, agency_id, visit["assigned_user_id"])
                   if visit.get("assigned_user_id") else None,
-                  "visitor_name": repository.contact_name(cur, agency_id, visit.get("contact_id")),
+                  "visitor_name": visitor.get("name"), "visitor_phone": visitor.get("phone"),
+                  "visitor_email": visitor.get("email"),
                   "participants": [],
                   "completed_at_text": _rome(visit["completed_at"]).strftime("%d/%m/%Y %H:%M")
                   if state == "completed" and visit.get("completed_at") else None},
+        "signature": {"state": SIGNATURE_STATE, "label": SIGNATURE_LABEL},
         "author_name": appointment_repository.agent_name(cur, agency_id, ctx.user_id),
     }
 

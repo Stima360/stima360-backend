@@ -44,6 +44,18 @@ def contact_name(cur, agency_id: int, contact_id: int | None) -> str | None:
     return row["name"] if row else None
 
 
+def contact_card(cur, agency_id: int, contact_id: int | None) -> dict | None:
+    """Nome, telefono ed email del visitatore, dalla stessa agenzia (ROADMAP VISITE, fase C):
+    stessi dati dell'anagrafica, nessun dato interno (note, fonte, consensi)."""
+    if contact_id is None:
+        return None
+    cur.execute("SELECT COALESCE(NULLIF(btrim(display_name), ''), btrim(concat_ws(' ', first_name, last_name))) "
+                "AS name, NULLIF(btrim(phone), '') AS phone, NULLIF(btrim(email), '') AS email "
+                "FROM contacts WHERE id = %s AND agency_id = %s", (contact_id, agency_id))
+    row = cur.fetchone()
+    return dict(row) if row else None
+
+
 def latest(cur, appointment_id: int) -> dict | None:
     cur.execute(f"SELECT {SHEET_COLUMNS} FROM visit_sheets WHERE appointment_id = %s "
                 "ORDER BY sheet_version DESC LIMIT 1", (appointment_id,))

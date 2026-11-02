@@ -160,6 +160,48 @@ async function downloadPdf(sheet, holder) {
   }
 }
 
+/**
+ * Il blocco di UNA visita: i suoi fogli (versione, stato, firma, scarico, richieste di
+ * firma) e «Genera foglio visita». Lo usano la scheda dell'immobile e la scheda
+ * dell'appuntamento in Agenda: un solo componente, nessuna copia. `reload(notice)`
+ * ridisegna il contenitore dopo una generazione. Con `compact` non ripete la data.
+ */
+export function buildVisitItem(v, reload, { compact = false } = {}) {
+  const item = el('li');
+  item.setAttribute('data-visit-sheet-visit', String(v.appointment_id));
+  if (!compact) item.append(el('strong', null, when(v.start_at)), el('span', 'muted', ` · ${STATUS[v.status] || v.status}`));
+  for (const s of v.sheets) {
+    const line = el('div', 'visit-sheet-line');
+    // ROADMAP VISITE (fase C): lo stato della firma in chiaro, mai una firma simulata come valida.
+    line.append(el('span', null, `Versione ${s.version} · ${s.visit_state_label} · ${when(s.generated_at)}`));
+    const firma = el('span', 'badge badge-gray', s.signature_label || 'Da firmare');
+    firma.setAttribute('data-visit-sheet-signature-state', s.signature_state || 'unsigned');
+    line.appendChild(firma);
+    const dl = button('Scarica PDF', 'ghost', 'data-visit-sheet-download');
+    dl.addEventListener('click', () => downloadPdf(s, item));
+    line.appendChild(dl);
+    item.appendChild(line);
+    mountSignatures(item, s).catch(() => {});
+  }
+  if (v.can_generate) {
+    const gen = button('Genera foglio visita', 'ghost', 'data-visit-sheet-generate');
+    gen.addEventListener('click', async () => {
+      gen.disabled = true;
+      try {
+        const out = await apiPost(`${API}/appointments/${v.appointment_id}`, {});
+        await reload(el('div', 'success-box', out.created
+          ? `Foglio generato (versione ${out.sheet.version}).`
+          : `Nessun dato cambiato: resta la versione ${out.sheet.version}.`));
+      } catch (error) {
+        gen.disabled = false;
+        item.appendChild(el('div', 'error-box', errorText(error)));
+      }
+    });
+    item.appendChild(gen);
+  }
+  return item;
+}
+
 export async function mountVisitSheets(container, { propertyId }) {
   const root = el('section', 'visit-sheets');
   root.setAttribute('data-visit-sheets', '');
@@ -181,39 +223,48 @@ export async function mountVisitSheets(container, { propertyId }) {
       return;
     }
     const list = el('ul', 'visit-sheets-list');
-    for (const v of data.items) {
-      const item = el('li');
-      item.setAttribute('data-visit-sheet-visit', String(v.appointment_id));
-      item.append(el('strong', null, when(v.start_at)), el('span', 'muted', ` · ${STATUS[v.status] || v.status}`));
-      for (const s of v.sheets) {
-        const line = el('div', 'visit-sheet-line');
-        line.append(el('span', null, `Versione ${s.version} · ${s.visit_state_label} · ${when(s.generated_at)}`));
-        const dl = button('Scarica PDF', 'ghost', 'data-visit-sheet-download');
-        dl.addEventListener('click', () => downloadPdf(s, item));
-        line.appendChild(dl);
-        item.appendChild(line);
-        mountSignatures(item, s).catch(() => {});
-      }
-      if (v.can_generate) {
-        const gen = button('Genera foglio visita', 'ghost', 'data-visit-sheet-generate');
-        gen.addEventListener('click', async () => {
-          gen.disabled = true;
-          try {
-            const out = await apiPost(`${API}/appointments/${v.appointment_id}`, {});
-            await load(el('div', 'success-box', out.created
-              ? `Foglio generato (versione ${out.sheet.version}).`
-              : `Nessun dato cambiato: resta la versione ${out.sheet.version}.`));
-          } catch (error) {
-            gen.disabled = false;
-            item.appendChild(el('div', 'error-box', errorText(error)));
-          }
-        });
-        item.appendChild(gen);
-      }
-      list.appendChild(item);
-    }
+    for (const v of data.items) list.appendChild(buildVisitItem(v, load));
     root.appendChild(list);
   }
 
   await load();
+}
+
+/**
+ * ROADMAP VISITE (fase C): il foglio visita DALLA SCHEDA DELL'APPUNTAMENTO in Agenda.
+ * Legge i fogli della sola visita (`GET /api/visit-sheets/appointments/{id}`), li
+ * elenca con versione, stato e «Da firmare», e permette di generare o scaricare il
+ * PDF. Stessa API, stessi permessi e stesso componente della scheda dell'immobile.
+ */
+export async function mountAppointmentSheet(container, { appointmentId }) {
+  const root = el('section', 'visit-sheets visit-sheets-appointment');
+  root.setAttribute('data-appointment-sheet', String(appointmentId));
+  container.appendChild(root);
+
+  async function load(notice) {
+    root.replaceChildren(el('h3', 'section-title', 'Foglio visita'));
+    root.appendChild(el('p', 'muted', 'Bozza di modello da revisionare: il foglio non è un documento firmato. '
+      + 'La firma elettronica reale è una fase separata: finché non è operativa lo stato è «Da firmare».'));
+    if (notice) root.appendChild(notice);
+    let data;
+    try {
+      data = await apiGet(`${API}/appointments/${encodeURIComponent(String(appointmentId))}`);
+    } catch (error) {
+      if (error && (error.status === 404 || error.status === 503)) {
+        root.replaceChildren();
+        return;
+      }
+      root.appendChild(el('div', 'error-box', errorText(error)));
+      return;
+    }
+    const list = el('ul', 'visit-sheets-list');
+    list.appendChild(buildVisitItem(data, load, { compact: true }));
+    root.appendChild(list);
+    if (!data.can_generate && !data.sheets.length) {
+      root.appendChild(el('p', 'muted', 'Il foglio si genera per una visita fissata, confermata o svolta.'));
+    }
+  }
+
+  await load();
+  return root;
 }

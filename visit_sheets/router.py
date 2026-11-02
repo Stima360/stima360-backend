@@ -3,6 +3,7 @@
 Montato in main.py con `require_authenticated_operator`; scope da `require_operator`.
 
     GET  /api/visit-sheets?property_id=              visite dell'immobile e loro fogli
+    GET  /api/visit-sheets/appointments/{id}         la visita di un appuntamento e i suoi fogli (Agenda)
     POST /api/visit-sheets/appointments/{id}         genera (o restituisce, se nulla e' cambiato)
     GET  /api/visit-sheets/{id}/pdf                  scarica il PDF salvato (stessi byte)
 """
@@ -31,6 +32,12 @@ def _call(fn, *args):
 @router.get("")
 def list_sheets(property_id: int = Query(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
     return _call(service.list_for_property, ctx, property_id)
+
+
+@router.get("/appointments/{appointment_id}")
+def for_appointment(appointment_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
+    """ROADMAP VISITE (fase C): i fogli di UNA visita, per la scheda dell'appuntamento."""
+    return _call(service.list_for_appointment, ctx, appointment_id)
 
 
 @router.post("/appointments/{appointment_id}")
