@@ -19,6 +19,7 @@
 import {
   ACTION_LABELS,
   ACTION_ORDER,
+  actionLabel,
   EVENT_LABELS,
   availableFrom,
   durationMinutes,
@@ -32,6 +33,7 @@ import {
   typeLabel,
 } from '../../agenda/agenda-model.js';
 import { getAppointment, getEvents } from '../../agenda/agenda-api.js';
+import { mountVisitOutcome } from './agenda-visit.js';
 
 function el(tag, className, text) {
   const nodo = document.createElement(tag);
@@ -216,7 +218,7 @@ export async function openAppointmentDrawer(drawerEl, {
   }
   for (const azione of ammesse) {
     const pulsante = el('button', `btn${azione === 'cancel' || azione === 'no_show' ? ' danger' : ''}`,
-      ACTION_LABELS[azione]);
+      actionLabel(azione, riga.appointment_type));
     pulsante.type = 'button';
     pulsante.dataset.action = azione;
     pulsante.addEventListener('click', () => onAction(azione, detail));
@@ -230,17 +232,22 @@ export async function openAppointmentDrawer(drawerEl, {
       if (ammesse.includes(azione)) continue;
       const da = availableFrom(riga, azione);
       if (!da) continue;
-      const inAttesa = el('button', 'btn', ACTION_LABELS[azione]);
+      const inAttesa = el('button', 'btn', actionLabel(azione, riga.appointment_type));
       inAttesa.type = 'button';
       inAttesa.disabled = true;
       inAttesa.dataset.pendingAction = azione;
       inAttesa.title = `Disponibile dal ${formatDateTime(da)}`;
       azioni.appendChild(inAttesa);
       azioni.appendChild(el('span', 'muted agenda-available-from',
-        `${ACTION_LABELS[azione]}: disponibile dal ${formatDateTime(da)}`));
+        `${actionLabel(azione, riga.appointment_type)}: disponibile dal ${formatDateTime(da)}`));
     }
   }
   pannello.appendChild(azioni);
+
+  // ROADMAP VISITE (fase B): l'esito della visita (interesse e feedback), sulla
+  // stessa scheda. `onSaved` riapre la scheda con i dati riletti dal server.
+  const ricarica = () => openAppointmentDrawer(drawerEl, { appointmentId, agents, onAction, isStale, onGone });
+  mountVisitOutcome(pannello, { detail, onSaved: ricarica });
 
   const cronologia = el('section', 'agenda-drawer-history');
   cronologia.appendChild(el('h3', 'section-title', 'Cronologia'));
@@ -251,7 +258,8 @@ export async function openAppointmentDrawer(drawerEl, {
   const nomi = new Map((agents || []).map((a) => [Number(a.id), a.name]));
   caricaCronologia(cronologia, riga.id, nomi, isStale, (eventi) => {
     const nota = outcomeNote(eventi);
-    if (nota) aggiungi(dati, voce('Nota esito', nota));
+    // la stessa frase registrata come feedback della visita non si ripete
+    if (nota && !(detail.visit && detail.visit.feedback === nota)) aggiungi(dati, voce('Nota esito', nota));
   });
 
   return detail;

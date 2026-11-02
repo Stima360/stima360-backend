@@ -37,6 +37,7 @@ from .schemas import (
     CompleteBody,
     ConfirmBody,
     NoShowBody,
+    VisitOutcomeBody,
     PatchBody,
     ReassignBody,
     RescheduleBody,
@@ -486,6 +487,17 @@ def cancel_appointment(appointment_id: int, dati: dict = Body(...),
 def complete_appointment(appointment_id: int, dati: dict = Body(...),
                          ctx: OperatorContext = Depends(require_operator)):
     return _azione(service.complete_appointment, CompleteBody, appointment_id, dati, ctx)
+
+
+@router.put("/{appointment_id}/visit-outcome")
+def visit_outcome(appointment_id: int, dati: dict = Body(...),
+                  ctx: OperatorContext = Depends(require_operator)):
+    """ROADMAP VISITE (fase B): interesse e feedback di una visita chiusa."""
+    try:
+        corpo = _corpo(VisitOutcomeBody, dati)
+    except Exception as exc:  # noqa: BLE001 - tradotto da _errore
+        return _errore(exc)
+    return _x(service.record_visit_outcome, ctx, appointment_id, corpo)
 
 
 @router.post("/{appointment_id}/no-show")

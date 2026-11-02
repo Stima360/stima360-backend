@@ -17,6 +17,9 @@ BUYER_VISIT_MANAGED_BY_AGENDA = "BUYER_VISIT_MANAGED_BY_AGENDA"
 BUYER_VISIT_LEGACY_REOPEN = "BUYER_VISIT_LEGACY_REOPEN"
 BUYER_VISIT_SCHEDULE_VIA_AGENDA = "BUYER_VISIT_SCHEDULE_VIA_AGENDA"
 BUYER_VISIT_INVALID = "BUYER_VISIT_INVALID"
+# ROADMAP VISITE (fase B) - l'esito registrato dall'operatore
+BUYER_VISIT_OUTCOME_NOT_ALLOWED = "BUYER_VISIT_OUTCOME_NOT_ALLOWED"
+BUYER_VISIT_OUTCOME_INVALID = "BUYER_VISIT_OUTCOME_INVALID"
 
 
 class _ConCodice(ConflictError):
@@ -69,6 +72,23 @@ class BuyerVisitScheduleViaAgenda(_ConCodice):
 class BuyerVisitInvalid(ValidationError):
     """I dati di una visita non formano un appuntamento valido (fuso, durata)."""
     code = BUYER_VISIT_INVALID
+
+    def __init__(self, message, **extra):
+        super().__init__(message)
+        self.extra = extra
+
+
+class BuyerVisitOutcomeNotAllowed(_ConCodice):
+    """L'esito si registra dopo che la visita e' stata chiusa in Agenda
+    (effettuata, cliente assente, non effettuata): mai su una visita ancora
+    aperta, e l'interesse solo per una visita effettuata."""
+    code = BUYER_VISIT_OUTCOME_NOT_ALLOWED
+
+
+class BuyerVisitOutcomeInvalid(ValidationError):
+    """Interesse sconosciuto, feedback troppo lungo, appuntamento che non e' una
+    visita collegata a un immobile."""
+    code = BUYER_VISIT_OUTCOME_INVALID
 
     def __init__(self, message, **extra):
         super().__init__(message)

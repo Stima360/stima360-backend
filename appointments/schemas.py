@@ -252,6 +252,19 @@ class NoShowBody(_ConVersione):
         return _testo(valore)
 
 
+class VisitOutcomeBody(_Corpo):
+    """ROADMAP VISITE (fase B) - interesse e feedback di una visita chiusa in Agenda.
+    Un campo assente non cambia; `null` lo svuota. Nessuna versione: scrive solo
+    la visita collegata, mai lo stato dell'appuntamento."""
+    interest: str | None = None
+    feedback: str | None = Field(None, max_length=4000)
+
+    @field_validator("feedback")
+    @classmethod
+    def _feedback(cls, valore):
+        return _testo(valore)
+
+
 class PatchBody(_ConVersione):
     """Solo campi non temporali. Un campo assente non cambia; `null` lo svuota."""
     notes: str | None = Field(None, max_length=5000)

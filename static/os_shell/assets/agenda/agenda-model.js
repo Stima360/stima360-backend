@@ -108,6 +108,28 @@ export const ACTION_LABELS = Object.freeze({
   patch: 'Modifica note e luogo',
 });
 /** Ordine dei pulsanti nel pannello. */
+// ROADMAP VISITE (fase B): per una visita all'immobile gli esiti hanno il nome
+// che il consulente usa. Le azioni sono le stesse del server (complete, no_show,
+// cancel): cambia solo l'etichetta. Una visita non si chiude da sola.
+export const VISIT_ACTION_LABELS = Object.freeze({
+  complete: 'Visita effettuata',
+  no_show: 'Cliente assente',
+  cancel: 'Visita non effettuata (annulla)',
+});
+
+export function actionLabel(action, appointmentType) {
+  if (appointmentType === 'buyer_visit' && VISIT_ACTION_LABELS[action]) return VISIT_ACTION_LABELS[action];
+  return ACTION_LABELS[action] || action;
+}
+
+// Specchio di buyer_visits/visit_outcome.py::INTEREST_LEVELS (codice, frase).
+export const INTEREST_LEVELS = Object.freeze([
+  { code: 'high', label: 'Molto interessato' },
+  { code: 'medium', label: 'Interessato' },
+  { code: 'undecided', label: 'Indeciso' },
+  { code: 'none', label: 'Non interessato' },
+]);
+
 export const ACTION_ORDER = Object.freeze(
   ['schedule', 'confirm', 'reschedule', 'reassign', 'complete', 'no_show', 'cancel', 'patch']);
 /** Il segmento di percorso di ogni azione (`POST /api/appointments/{id}/<...>`). */

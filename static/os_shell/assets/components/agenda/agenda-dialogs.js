@@ -24,6 +24,8 @@
 
 import {
   ACTION_LABELS,
+  INTEREST_LEVELS,
+  actionLabel,
   TYPE_LABELS,
   addDays,
   canAssignRecords,
@@ -72,6 +74,7 @@ import {
   lookupStime,
   patchAppointment,
   patchBookingLink,
+  putVisitOutcome,
   putWorkingHours,
   rotateBookingLink,
   runAction,
@@ -505,6 +508,45 @@ const BLOCCO_NOTA_ESITO = `
   <div class="form-field"><label>Nota esito</label>
     <textarea class="input" data-field="outcome-note" maxlength="1000"></textarea>
     <small class="muted">Facoltativa. Resta nella cronologia dell'appuntamento.</small></div>`;
+
+// ROADMAP VISITE (fase B): per una visita all'immobile l'esito si scrive UNA
+// volta sola. Il campo unico «Feedback e osservazioni» resta nella cronologia
+// dell'appuntamento (come la nota esito) e diventa il feedback della visita;
+// per «Visita effettuata» si aggiunge l'interesse dell'acquirente. Nota interna:
+// mai pubblicata al proprietario senza l'approvazione dell'agente.
+function bloccoEsitoVisita({ conInteresse }) {
+  const opzioni = INTEREST_LEVELS.map((l) => `<option value="${l.code}">${l.label}</option>`).join('');
+  return `
+  ${conInteresse ? `<div class="form-field"><label>Interesse dell'acquirente</label>
+    <select class="input" data-field="visit-interest"><option value="">— non indicato —</option>${opzioni}</select></div>` : ''}
+  <div class="form-field"><label>Feedback e osservazioni</label>
+    <textarea class="input" data-field="outcome-note" maxlength="1000"></textarea>
+    <small class="muted">Facoltativo. Nota interna: resta nella cronologia dell'appuntamento e nella visita dell'immobile; non viene mai pubblicata al proprietario senza la tua approvazione.</small></div>`;
+}
+
+function eVisita(riga) {
+  return riga.appointment_type === 'buyer_visit' && riga.property_id != null;
+}
+
+/**
+ * Dopo l'azione di esito di una visita, salva interesse e feedback sulla visita
+ * collegata. Se questo secondo passo fallisce l'azione e' GIA' riuscita: l'errore
+ * lo dice, e un nuovo invio ripete solo questo passo (mai l'azione).
+ */
+async function salvaEsitoVisita(riga, { interesse, feedback }) {
+  if (!interesse && !feedback) return;
+  const corpo = {};
+  if (feedback) corpo.feedback = feedback;
+  if (interesse) corpo.interest = interesse;
+  try {
+    await putVisitOutcome(riga.id, corpo);
+  } catch (e) {
+    const errore = new Error(`La visita è stata registrata, ma interesse e feedback non sono stati salvati: ${errorMessage(e)} `
+      + 'Premi di nuovo il pulsante per riprovare solo questo passaggio, oppure usa «Esito della visita» nella scheda.');
+    errore.parziale = true;
+    throw errore;
+  }
+}
 
 const BLOCCO_FOLLOW_UP = `
   <fieldset class="agenda-follow-up" data-follow-up>
@@ -1396,7 +1438,7 @@ export function openCreateDialog(dialogEl, {
  */
 export function openActionDialog(dialogEl, { action, detail, agents, onDone, onOpenAppointment }) {
   const riga = detail.appointment;
-  const titolo = `${ACTION_LABELS[action] || action} · ${typeLabel(riga.appointment_type) || 'Appuntamento'}`;
+  const titolo = `${actionLabel(action, riga.appointment_type)} · ${typeLabel(riga.appointment_type) || 'Appuntamento'}`;
   const versione = { version: riga.version };
   const ammesse = detail.allowed_actions || [];
 
@@ -1412,22 +1454,29 @@ export function openActionDialog(dialogEl, { action, detail, agents, onDone, onO
   // A30-8: gli esiti. Nessun successo prima del 2xx (collegaInvio); il corpo
   // porta solo `version`, i campi dell'esito e l'eventuale `follow_up`.
   if (action === 'no_show') {
-    const form = preparaDialog(dialogEl, 'Cliente non presentato', `
+    const visita = eVisita(riga);
+    const form = preparaDialog(dialogEl, visita ? 'Cliente assente' : 'Cliente non presentato', `
       <p data-question></p>
-      ${BLOCCO_NOTA_ESITO}
+      ${visita ? bloccoEsitoVisita({ conInteresse: false }) : BLOCCO_NOTA_ESITO}
       ${bloccoFollowUp(riga)}`);
     form.querySelector('[data-question]').textContent =
       `Registrare che il cliente non si è presentato all'appuntamento del ${formatDateTime(riga.start_at)}?`;
-    form.querySelector('[data-submit]').textContent = 'Segna non presentato';
+    form.querySelector('[data-submit]').textContent = visita ? 'Segna cliente assente' : 'Segna non presentato';
     montaFollowUp(form);
-    collegaInvio(dialogEl, form, () => {
-      const corpo = { ...versione };
+    let chiusa = false;                              // l'azione e' gia' riuscita: non si ripete
+    collegaInvio(dialogEl, form, async () => {
       const nota = leggiNotaEsito(form);
-      const followUp = leggiFollowUp(form);
-      if (nota) corpo.outcome_note = nota;
-      if (followUp) corpo.follow_up = followUp;
-      return runAction(riga.id, 'no_show', corpo);
-    }, { onDone });
+      if (!chiusa) {
+        const corpo = { ...versione };
+        const followUp = leggiFollowUp(form);
+        if (nota) corpo.outcome_note = nota;
+        if (followUp) corpo.follow_up = followUp;
+        await runAction(riga.id, 'no_show', corpo);
+        chiusa = true;
+      }
+      if (visita) await salvaEsitoVisita(riga, { interesse: null, feedback: nota });
+      return true;
+    }, { onDone, messaggio: (e) => (e && e.parziale ? e.message : null) });
     dialogEl.showModal();
     return;
   }
@@ -1466,30 +1515,40 @@ export function openActionDialog(dialogEl, { action, detail, agents, onDone, onO
   }
 
   if (action === 'complete') {
-    const form = preparaDialog(dialogEl, 'Registra esito: appuntamento svolto', `
+    const visita = eVisita(riga);
+    const form = preparaDialog(dialogEl, visita ? 'Visita effettuata' : 'Registra esito: appuntamento svolto', `
       <p class="muted">Lascia vuoto per registrare l'orario attuale del server.</p>
       <div class="form-grid-2">
         <div class="form-field"><label>Svolto il</label><input type="date" class="input" data-field="done-date"></div>
         <div class="form-field"><label>Alle</label><input type="time" class="input" data-field="done-time" step="60"></div>
       </div>
-      ${BLOCCO_NOTA_ESITO}
+      ${visita ? bloccoEsitoVisita({ conInteresse: true }) : BLOCCO_NOTA_ESITO}
       ${bloccoFollowUp(riga)}`);
-    form.querySelector('[data-submit]').textContent = 'Completa appuntamento';
+    form.querySelector('[data-submit]').textContent = visita ? 'Registra visita effettuata' : 'Completa appuntamento';
     montaFollowUp(form);
-    collegaInvio(dialogEl, form, () => {
-      const data = form.querySelector('[data-field="done-date"]').value;
-      const ora = parseTime(form.querySelector('[data-field="done-time"]').value);
-      const corpo = { ...versione };
-      if (data || ora) {
-        if (!data || !ora) throw new Error('Indica sia la data sia l’ora, oppure lascia entrambe vuote.');
-        corpo.completed_at = romeIso(data, ora[0], ora[1]);
-      }
+    let chiusa = false;                              // l'azione e' gia' riuscita: non si ripete
+    collegaInvio(dialogEl, form, async () => {
       const nota = leggiNotaEsito(form);
-      const followUp = leggiFollowUp(form);
-      if (nota) corpo.outcome_note = nota;
-      if (followUp) corpo.follow_up = followUp;
-      return runAction(riga.id, 'complete', corpo);
-    }, { onDone });
+      if (!chiusa) {
+        const data = form.querySelector('[data-field="done-date"]').value;
+        const ora = parseTime(form.querySelector('[data-field="done-time"]').value);
+        const corpo = { ...versione };
+        if (data || ora) {
+          if (!data || !ora) throw new Error('Indica sia la data sia l’ora, oppure lascia entrambe vuote.');
+          corpo.completed_at = romeIso(data, ora[0], ora[1]);
+        }
+        const followUp = leggiFollowUp(form);
+        if (nota) corpo.outcome_note = nota;
+        if (followUp) corpo.follow_up = followUp;
+        await runAction(riga.id, 'complete', corpo);
+        chiusa = true;
+      }
+      if (visita) {
+        const interesse = form.querySelector('[data-field="visit-interest"]');
+        await salvaEsitoVisita(riga, { interesse: interesse && interesse.value ? interesse.value : null, feedback: nota });
+      }
+      return true;
+    }, { onDone, messaggio: (e) => (e && e.parziale ? e.message : null) });
     dialogEl.showModal();
     return;
   }

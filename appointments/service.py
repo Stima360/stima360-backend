@@ -121,6 +121,8 @@ from buyer_visits import integration as _visite
 # il pacchetto vive fuori dall'Agenda, qui solo le chiamate, sullo STESSO
 # cursore, prima del mark dirty Google.
 from acquisitions import integration as _acquisizioni
+# ROADMAP VISITE (fase B): interesse e feedback della visita, scritti dall'operatore.
+from buyer_visits import visit_outcome as _esito_visita
 # ROADMAP PUNTO 2: conferma al cliente e ritiro dei messaggi in coda, nella
 # stessa transazione dell'Agenda, in un savepoint: non rompono mai l'Agenda.
 from appointment_reminders import confirmation as _conferme
@@ -1414,6 +1416,9 @@ def get_appointment_detail(ctx, appointment_id):
             immobile = repository.sale_mandate_property(cur, agency_id, row["property_id"])
             scheda_incarico = bool(immobile and immobile["deleted_at"] is None
                                    and mandate_origin(immobile) == ORIGIN_ACQUISITION)
+        # ROADMAP VISITE (fase B): l'esito gia' registrato sulla visita collegata.
+        visita = (_esito_visita.summary(cur, agency_id, row["id"], row["status"])
+                  if row["appointment_type"] == "buyer_visit" and row["property_id"] is not None else None)
     azioni = state_machine.allowed_actions(
         row, is_manager=_puo_assegnare(ctx), is_own=row["assigned_user_id"] == io,
         now=_adesso())
@@ -1432,7 +1437,33 @@ def get_appointment_detail(ctx, appointment_id):
         # solo se esiste (vedi sopra).
         if scheda_incarico:
             link.append("mandate")
-    return {"appointment": row, **collegati, "allowed_actions": azioni, "allowed_links": link}
+    return {"appointment": row, **collegati, "visit": visita, "allowed_actions": azioni,
+            "allowed_links": link}
+
+
+def record_visit_outcome(ctx, appointment_id, body):
+    """ROADMAP VISITE (fase B): interesse e feedback di una visita chiusa.
+
+    Stessa visibilita' dell'Agenda (il titolare e gli amministratori tutta
+    l'agenzia, l'agente le proprie visite). Non cambia lo stato dell'appuntamento
+    e non lo chiude: la visita si chiude con «effettuata», «cliente assente» o
+    l'annullamento; qui si aggiungono interesse e feedback, e si possono
+    correggere dopo. Una visita non diventa mai `completed` da sola."""
+    agency_id = ctx.require_agency()
+    _attore(ctx)
+    campi = {}
+    if "interest" in body.model_fields_set:
+        campi["interest"] = body.interest
+    if "feedback" in body.model_fields_set:
+        campi["feedback"] = body.feedback
+
+    def _lavoro(cur):
+        row = repository.lock_appointment(cur, agency_id, appointment_id)
+        if row is None or not _visibile(ctx, row):
+            raise errors.AppointmentNotFound("Appuntamento non trovato")
+        return _esito_visita.record(cur, agency_id, row, **campi)
+
+    return _in_transazione(_lavoro)
 
 
 def list_events(ctx, appointment_id):

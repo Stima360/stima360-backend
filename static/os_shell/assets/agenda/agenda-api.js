@@ -171,6 +171,12 @@ const PERCORSI_AZIONE = Object.freeze({
 
 /** POST /{id}/<azione> per schedule, confirm, reschedule, reassign, cancel,
  *  complete, no_show. Ogni corpo porta `version` (lock ottimistico). */
+/** ROADMAP VISITE (fase B): interesse e feedback di una visita chiusa. Un campo
+ *  non indicato non cambia; `null` lo svuota. */
+export function putVisitOutcome(appointmentId, body) {
+  return request('PUT', `/${id(appointmentId)}/visit-outcome`, body);
+}
+
 export function runAction(appointmentId, action, body) {
   const percorso = PERCORSI_AZIONE[action];
   if (!percorso) throw new Error(`Azione non supportata: ${action}`);

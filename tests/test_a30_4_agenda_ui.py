@@ -49,7 +49,12 @@ CSS = ASSETS / "app.css"
 CALENDAR_SYNC_API = ASSETS / "agenda" / "calendar-sync-api.js"
 CALENDAR_SYNC_PANEL = ASSETS / "components" / "agenda" / "agenda-calendar-sync-panel.js"
 
-AGENDA_FILES = (MODEL, API, LOOKUP, PAGE, VIEWS_JS, DRAWER, DIALOGS)
+# SENTINELLA AGGIORNATA DALLA ROADMAP VISITE: le sezioni della scheda di una visita
+# (esito, foglio visita, aggiornamento al proprietario) stanno in un file dell'Agenda
+# a parte, `components/agenda/agenda-visit.js`, importato solo dal drawer.
+VISIT_SECTIONS = ASSETS / "components" / "agenda" / "agenda-visit.js"
+
+AGENDA_FILES = (MODEL, API, LOOKUP, PAGE, VIEWS_JS, DRAWER, DIALOGS, VISIT_SECTIONS)
 AGENDA_FILES_GOOGLE = (CALENDAR_SYNC_API, CALENDAR_SYNC_PANEL)
 NODE = shutil.which("node")
 
@@ -857,7 +862,13 @@ def test_27_ogni_orario_scritto_dall_operatore_passa_da_romeiso_dentro_l_invio()
     for esito in ("complete", "no_show", "cancel"):
         corpo = dialoghi[dialoghi.index(f"if (action === '{esito}') {{"):]
         corpo = corpo[:corpo.index("dialogEl.showModal();")]
-        invio = corpo[corpo.index("collegaInvio(dialogEl, form, () => {"):]
+        # SENTINELLA AGGIORNATA DALLA ROADMAP VISITE: complete e no_show eseguono, dopo
+        # l'azione, il salvataggio di interesse e feedback della visita: la callback e'
+        # `async` (l'ordine non cambia: il follow-up si legge PRIMA di scrivere).
+        marcatore = ("collegaInvio(dialogEl, form, async () => {"
+                     if "collegaInvio(dialogEl, form, async () => {" in corpo
+                     else "collegaInvio(dialogEl, form, () => {")
+        invio = corpo[corpo.index(marcatore):]
         assert invio.index("leggiFollowUp(form)") < invio.index("runAction("), esito
     # leggiIntervallo serve nuovo appuntamento, pianifica e sposta, sempre
     # dentro la funzione di invio (quindi prima di qualunque richiesta).
@@ -873,7 +884,9 @@ def test_27_ogni_orario_scritto_dall_operatore_passa_da_romeiso_dentro_l_invio()
     # completa: romeIso dentro il corpo dell'invio
     completa = dialoghi[dialoghi.index("if (action === 'complete') {"):]
     completa = completa[:completa.index("dialogEl.showModal();")]
-    assert "collegaInvio(dialogEl, form, () => {" in completa
+    # SENTINELLA AGGIORNATA DALLA ROADMAP VISITE: la callback e' `async` (dopo l'azione si
+    # salvano interesse e feedback della visita); `romeIso` resta dentro il corpo dell'invio.
+    assert "collegaInvio(dialogEl, form, async () => {" in completa
     assert "corpo.completed_at = romeIso(data, ora[0], ora[1]);" in completa
     # un errore senza `status` si mostra con il suo testo
     assert ("errore.textContent = e && e.status !== undefined ? errorMessage(e) : "
