@@ -118,6 +118,7 @@ APPROVED_VERSIONS = (
     "124_do_not_contact_and_link_revocation",
     "125_signature_provider_readiness",
     "126_whatsapp_inbound_reads",
+    "127_appointment_confirmations",
 )
 
 

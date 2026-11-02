@@ -164,7 +164,8 @@ def test_01_la_071_e_valida_e_in_coda():
     # SENTINELLA AGGIORNATA DA BLOCCO-6: 124_do_not_contact_and_link_revocation (additiva).
     # SENTINELLA AGGIORNATA DA BLOCCO-5: 125_signature_provider_readiness (additiva).
     # SENTINELLA AGGIORNATA dall'integrazione WhatsApp: 126_whatsapp_inbound_reads (additiva).
-    assert numeri[numeri.index(76):] == list(range(76, 127))
+    # SENTINELLA AGGIORNATA DAL PUNTO 2 della roadmap: 127_appointment_confirmations (additiva).
+    assert numeri[numeri.index(76):] == list(range(76, 128))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))
