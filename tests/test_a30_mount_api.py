@@ -59,6 +59,9 @@ OPERAZIONI_AGENDA_ROUTER = frozenset({
     ("POST", "/api/appointments/{appointment_id}/cancel"),
     ("POST", "/api/appointments/{appointment_id}/complete"),
     ("POST", "/api/appointments/{appointment_id}/no-show"),
+    # SENTINELLA AGGIORNATA DALLA ROADMAP VISITE: l'esito della visita (interesse
+    # e feedback) dalla scheda appuntamento, sul modulo `buyer_visits.visit_outcome`.
+    ("PUT", "/api/appointments/{appointment_id}/visit-outcome"),
     # SENTINELLA AGGIORNATA DA A30-12: la gestione operatore dei link di
     # booking pubblico (D2), dichiarate PRIMA di "/{appointment_id}" come
     # "/lookups/stime" e le rotte A30-11.
