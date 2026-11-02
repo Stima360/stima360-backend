@@ -289,9 +289,14 @@ def test_11_il_pacchetto_non_importa_main_ne_moduli_di_altri_domini_da_scrivere(
         # canonica di incarico (`core.property_mandate`, modulo foglia in sola
         # lettura, lo stesso di `property/` e `flow/`) per verificare che
         # l'appuntamento di vendita sia su un incarico in corso o scaduto.
+        # SENTINELLA AGGIORNATA DAL PUNTO 2: gli agganci delle notifiche al
+        # cliente (`appointment_reminders.confirmation`), stessa forma degli hook
+        # A31-2/CRM-OPS-3: chiamati nella STESSA transazione, dentro un SAVEPOINT,
+        # il package vive FUORI da `appointments/`; un loro errore non rompe mai
+        # l'Agenda.
         "service.py": {"core.repository", "calendar_sync", "calendar_sync.constants",
                        "operator_auth.context", "core.scope", "buyer_visits",
-                       "acquisitions", "core.property_mandate"},
+                       "acquisitions", "core.property_mandate", "appointment_reminders"},
         # SENTINELLA AGGIORNATA DA A30-12: le 5 rotte OPERATORE di gestione
         # dei link di booking pubblico (create/list/patch/rotate/disable)
         # sono montate qui per URL (`/api/appointments/booking-links...`),

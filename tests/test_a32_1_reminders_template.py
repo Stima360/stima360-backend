@@ -94,8 +94,10 @@ def test_V_la_firma_e_la_lista_chiusa_dei_campi():
     """MAI note, location_text, outcome_note, telefono, lead, fonte, id, token,
     email: non esiste un parametro per farli arrivare nel messaggio."""
     parametri = list(inspect.signature(template.render_email).parameters)
+    # SENTINELLA AGGIORNATA DAL PUNTO 2: `offset` (24h o 2h) sceglie solo
+    # l'incipit del promemoria; non e' un dato del cliente.
     assert parametri == ["appointment_type", "start_at", "agency_name", "customer_name",
-                         "property_address"]
+                         "property_address", "offset"]
 
 
 def test_V_nessun_dato_vietato_nel_testo_prodotto():

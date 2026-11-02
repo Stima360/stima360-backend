@@ -48,7 +48,7 @@ from communication.enums import (CHANNEL_EMAIL, MODE_AUTOMATIC, REASON_APPOINTME
 from communication.exceptions import ConflictError
 from operator_auth.context import SystemAgencyContext
 
-from . import policy, repository, template
+from . import policy, repository, settings, template
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +64,7 @@ SKIP_REASONS = (
     policy.REASON_TYPE, policy.REASON_SOURCE, policy.REASON_STATUS,
     policy.REASON_NO_CONTACT, policy.REASON_CONTACT_ARCHIVED, policy.REASON_NO_EMAIL,
     policy.REASON_BOOKING_TOO_LATE, policy.REASON_LEAD_TOO_SHORT,
+    policy.REASON_OUTSIDE_WINDOW, policy.REASON_RECIPIENT_NOT_ALLOWED,
 )
 
 COUNTS = ("scanned", "due", "queued", "queued_idempotent", "not_due", "ineligible",
@@ -94,13 +95,13 @@ def contesto_di_sistema(ctx_operatore) -> SystemAgencyContext:
                                origin=REMINDER_ORIGIN)
 
 
-def metadata_for(appointment_id: int, start_at: datetime) -> dict[str, Any]:
+def metadata_for(appointment_id: int, start_at: datetime, offset: str = policy.OFFSET_24H) -> dict[str, Any]:
     """I metadata TECNICI del messaggio. Nessun dato personale."""
     return {
         "kind": METADATA_KIND,
         "appointment_id": appointment_id,
-        "offset": policy.OFFSET_24H,
-        "occurrence_key": policy.occurrence_key(appointment_id, start_at),
+        "offset": offset,
+        "occurrence_key": policy.occurrence_key(appointment_id, start_at, offset),
         "start_epoch": int(start_at.timestamp()),
     }
 
@@ -112,7 +113,7 @@ def _conteggi_vuoti() -> dict[str, Any]:
 
 
 def _accoda(ctx: SystemAgencyContext, candidato: dict[str, Any],
-            agenzia: str) -> bool:
+            agenzia: str, offset: str = policy.OFFSET_24H) -> bool:
     """Rende e accoda UN promemoria dovuto. True se creato, False se c'era gia'."""
     appuntamento = candidato["appointment"]
     contatto = candidato["contact"]
@@ -123,8 +124,9 @@ def _accoda(ctx: SystemAgencyContext, candidato: dict[str, Any],
         customer_name=contatto.get("first_name"),
         property_address=(candidato["property_address"]
                           if appuntamento["appointment_type"] == "buyer_visit" else None),
+        offset=offset,
     )
-    chiave = policy.occurrence_key(appuntamento["id"], appuntamento["start_at"])
+    chiave = policy.occurrence_key(appuntamento["id"], appuntamento["start_at"], offset)
     esito = communication_service.enqueue(
         ctx,
         contact_id=appuntamento["contact_id"],
@@ -136,9 +138,9 @@ def _accoda(ctx: SystemAgencyContext, candidato: dict[str, Any],
         destination_snapshot=contatto["email"],
         idempotency_key=chiave,
         subject_snapshot=oggetto,
-        template_key=template.TEMPLATE_KEY,
+        template_key=template.template_key(offset),
         template_version=template.TEMPLATE_VERSION,
-        metadata=metadata_for(appuntamento["id"], appuntamento["start_at"]),
+        metadata=metadata_for(appuntamento["id"], appuntamento["start_at"], offset),
     )
     return bool(esito["created"])
 
@@ -162,25 +164,31 @@ def tick(ctx_operatore, *, limit: int = repository.MAX_CANDIDATES,
         candidati = repository.candidates(cur, ctx.agency_id, now=adesso, limit=limit)
 
     conteggi = _conteggi_vuoti()
+    # ROADMAP PUNTO 2: un giro per ogni offset attivo (24h e, se configurato, 2h).
+    offsets = settings.offsets()
+    destinatari_ammessi = settings.allowed_recipients()
+    conteggi["offsets"] = list(offsets)
     for candidato in candidati:
         conteggi["scanned"] += 1
         appuntamento = candidato["appointment"]
-        try:
-            decisione = policy.is_reminder_eligible(
-                now=adesso, appointment=appuntamento, contact=candidato["contact"])
-            if decisione.reason is not None:
-                conteggi["ineligible"] += 1
-                conteggi["skipped_by_reason"][decisione.reason] += 1
-                continue
-            if not decisione.due:
-                conteggi["not_due"] += 1
-                continue
-            conteggi["due"] += 1
-            creato = _accoda(ctx, candidato, agenzia)
-            conteggi["queued" if creato else "queued_idempotent"] += 1
-        except Exception:  # noqa: BLE001 - un candidato rotto non ferma il giro
-            # Nessun dato personale nel log: solo id tecnici.
-            logger.exception("appointment reminder candidate failed: agency_id=%s "
-                             "appointment_id=%s", ctx.agency_id, appuntamento.get("id"))
-            conteggi["errors"] += 1
+        for offset in offsets:
+            try:
+                decisione = policy.is_reminder_eligible(
+                    now=adesso, appointment=appuntamento, contact=candidato["contact"], offset=offset,
+                    allowed_recipients=destinatari_ammessi)
+                if decisione.reason is not None:
+                    conteggi["ineligible"] += 1
+                    conteggi["skipped_by_reason"][decisione.reason] += 1
+                    continue
+                if not decisione.due:
+                    conteggi["not_due"] += 1
+                    continue
+                conteggi["due"] += 1
+                creato = _accoda(ctx, candidato, agenzia, offset)
+                conteggi["queued" if creato else "queued_idempotent"] += 1
+            except Exception:  # noqa: BLE001 - un candidato rotto non ferma il giro
+                # Nessun dato personale nel log: solo id tecnici.
+                logger.exception("appointment reminder candidate failed: agency_id=%s "
+                                 "appointment_id=%s offset=%s", ctx.agency_id, appuntamento.get("id"), offset)
+                conteggi["errors"] += 1
     return conteggi

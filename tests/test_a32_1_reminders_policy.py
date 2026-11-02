@@ -324,7 +324,9 @@ def test_la_chiave_rifiuta_id_non_validi(args):
 
 
 def test_la_chiave_rifiuta_offset_sconosciuti_e_orari_senza_fuso():
+    # SENTINELLA AGGIORNATA DAL PUNTO 2: "2h" e' ora un offset della lista
+    # chiusa; l'offset sconosciuto di prova e' "48h".
     with pytest.raises(ValueError):
-        policy.occurrence_key(42, R(2026, 10, 14, 10), "2h")
+        policy.occurrence_key(42, R(2026, 10, 14, 10), "48h")
     with pytest.raises(ValueError):
         policy.occurrence_key(42, datetime(2026, 10, 14, 10))

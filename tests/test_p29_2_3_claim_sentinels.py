@@ -219,6 +219,17 @@ def test_F2_le_due_transizioni_pre_claim_sono_solo_due():
     assert "status = ANY(%s)" in anticipa[0], "l'anticipo non e' condizionato alla coda"
     assert "status =" not in anticipa[0].split("WHERE")[0], "l'anticipo non tocca lo stato"
     pre_claim = [x for x in pre_claim if x is not anticipa[0]]
+    # SENTINELLA AGGIORNATA DAL PUNTO 2 della roadmap: la quarta e' il ritiro
+    # per APPUNTAMENTO (`cancel_queued_for_appointment`): lo stesso annullamento
+    # `queued -> cancelled`, con lo stesso compare-and-set sulla coda, applicato
+    # a tutti i promemoria e le conferme di un appuntamento annullato o
+    # spostato (`metadata->>'appointment_id'`). La si NOMINA e la si mette da
+    # parte: non puo' strappare una riga a un dispatcher che l'ha reclamata.
+    per_appuntamento = [x for x in pre_claim if "metadata->>'appointment_id'" in x.split("WHERE", 1)[1]]
+    assert len(per_appuntamento) == 1, "manca il ritiro per appuntamento"
+    assert "status = ANY(%s)" in per_appuntamento[0], "il ritiro non e' condizionato alla coda"
+    assert "agency_id = %s" in per_appuntamento[0].split("WHERE", 1)[1], "il ritiro non e' dell'agenzia"
+    pre_claim = [x for x in pre_claim if x is not per_appuntamento[0]]
     assert len(pre_claim) == 2, f"transizioni pre-claim: {len(pre_claim)}"
 
     # Le due si riconoscono dalla FORMA dell'SQL, non da un nome di costante
@@ -382,6 +393,12 @@ def test_A2_la_superficie_pubblica_e_quella_prevista():
         # SENTINELLA AGGIORNATA DA BLOCCO-4D/6: sola lettura degli id in coda mai
         # presi in carico; chi li prende passa comunque da `claim_message`.
         "queued_unclaimed",
+        # SENTINELLA AGGIORNATA DAL PUNTO 2 della roadmap: `cancel_queued_for_appointment`
+        # ritira (queued -> cancelled, stesso compare-and-set di `cancel`) i promemoria
+        # e le conferme in coda di un appuntamento annullato o spostato, nella
+        # transazione dell'Agenda; `reason_code_supported` e' una sola lettura del
+        # vincolo dei motivi (la 127 e' applicata?). Nessuna delle due reclama o spedisce.
+        "cancel_queued_for_appointment", "reason_code_supported",
     }, sorted(pubbliche)
 
 

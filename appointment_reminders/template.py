@@ -31,6 +31,26 @@ from . import policy
 
 TEMPLATE_KEY = "appointment_reminder_24h"
 TEMPLATE_VERSION = 1
+#: ROADMAP PUNTO 2: una chiave per offset; `TEMPLATE_KEY` resta quella delle 24h.
+TEMPLATE_KEYS = {policy.OFFSET_24H: TEMPLATE_KEY, policy.OFFSET_2H: "appointment_reminder_2h"}
+CONFIRMATION_TEMPLATE_KEY = "appointment_confirmation"
+CONFIRMATION_TEMPLATE_VERSION = 1
+REMINDER_INTRO = {
+    policy.OFFSET_24H: "ti ricordiamo il tuo prossimo appuntamento.",
+    policy.OFFSET_2H: "ti ricordiamo il tuo appuntamento di oggi, tra circa due ore.",
+}
+CONFIRMATION_TITLES = {
+    "scheduled": ("Conferma appuntamento", "Conferma", "il tuo appuntamento è fissato."),
+    "rescheduled": ("Nuovo orario dell'appuntamento", "Nuovo orario",
+                    "il tuo appuntamento è stato spostato: ecco il nuovo orario, che sostituisce il precedente."),
+}
+
+
+def template_key(offset: str = policy.OFFSET_24H) -> str:
+    try:
+        return TEMPLATE_KEYS[offset]
+    except KeyError:
+        raise ValueError(f"unknown reminder offset {offset!r}") from None
 
 #: Etichette per il CLIENTE (non quelle interne dell'Agenda).
 CUSTOMER_LABELS = {
@@ -99,8 +119,11 @@ def _etichetta(appointment_type: str) -> str:
 
 def render_email(*, appointment_type: str, start_at: datetime, agency_name: str,
                  customer_name: str | None = None,
-                 property_address: Mapping[str, Any] | None = None) -> tuple[str, str]:
+                 property_address: Mapping[str, Any] | None = None,
+                 offset: str = policy.OFFSET_24H) -> tuple[str, str]:
     """`(subject, html_body)`."""
+    if offset not in REMINDER_INTRO:
+        raise ValueError(f"unknown reminder offset {offset!r}")
     etichetta = _etichetta(appointment_type)
     agenzia = _testo(agency_name)
     if not agenzia:
@@ -129,7 +152,7 @@ def render_email(*, appointment_type: str, start_at: datetime, agency_name: str,
         'max-width:560px;">'
         '<h2 style="font-size:18px;margin:0 0 16px 0;">Promemoria appuntamento</h2>'
         f'<p style="margin:0 0 14px 0;">{saluto}</p>'
-        f'<p style="margin:0 0 14px 0;">ti ricordiamo il tuo prossimo appuntamento.</p>'
+        f'<p style="margin:0 0 14px 0;">{REMINDER_INTRO[offset]}</p>'
         f'<table style="border-collapse:collapse;margin:0 0 18px 0;">{tabella}</table>'
         '<p style="margin:0 0 14px 0;">Se hai bisogno di spostarlo o annullarlo, '
         "contatta l'agenzia.</p>"
@@ -137,3 +160,50 @@ def render_email(*, appointment_type: str, start_at: datetime, agency_name: str,
         '</div>'
     )
     return render_subject(appointment_type=appointment_type, start_at=start_at), corpo
+
+
+def render_confirmation_email(*, kind: str, appointment_type: str, start_at: datetime, agency_name: str,
+                              customer_name: str | None = None,
+                              property_address: Mapping[str, Any] | None = None,
+                              agency_phone: str | None = None,
+                              agency_email: str | None = None) -> tuple[str, str]:
+    """ROADMAP PUNTO 2: la conferma (`scheduled`) o il nuovo orario
+    (`rescheduled`) dell'appuntamento. Stessa lista chiusa di dati del
+    promemoria, piu' i riferimenti dell'agenzia (nome, telefono, email del
+    profilo): nessun id interno, nessun agente, nessuna nota."""
+    try:
+        titolo, prefisso, frase = CONFIRMATION_TITLES[kind]
+    except KeyError:
+        raise ValueError(f"unknown confirmation kind {kind!r}") from None
+    etichetta = _etichetta(appointment_type)
+    agenzia = _testo(agency_name)
+    if not agenzia:
+        raise ValueError("agency_name is required: the agency signs the confirmation")
+    nome = _testo(customer_name)
+    indirizzo = ""
+    if appointment_type == "buyer_visit" and property_address is not None:
+        indirizzo = format_address(property_address)
+    riferimenti = ", ".join(p for p in (agenzia, _testo(agency_phone), _testo(agency_email)) if p)
+    saluto = f"Buongiorno {_e(nome)}," if nome else "Buongiorno,"
+    righe = [("Appuntamento", etichetta), ("Data", format_date(start_at)), ("Ora", format_time(start_at))]
+    if indirizzo:
+        righe.append(("Indirizzo", indirizzo))
+    righe.append(("Riferimenti", riferimenti))
+    tabella = "".join(
+        f'<tr><td style="padding:4px 12px 4px 0;color:#555;">{_e(k)}</td>'
+        f'<td style="padding:4px 0;"><strong>{_e(v)}</strong></td></tr>'
+        for k, v in righe)
+    corpo = (
+        '<div style="font-family:Arial,Helvetica,sans-serif;color:#222;line-height:1.5;'
+        'max-width:560px;">'
+        f'<h2 style="font-size:18px;margin:0 0 16px 0;">{_e(titolo)}</h2>'
+        f'<p style="margin:0 0 14px 0;">{saluto}</p>'
+        f'<p style="margin:0 0 14px 0;">{_e(frase)}</p>'
+        f'<table style="border-collapse:collapse;margin:0 0 18px 0;">{tabella}</table>'
+        '<p style="margin:0 0 14px 0;">Se hai bisogno di spostarlo o annullarlo, '
+        "contatta l'agenzia.</p>"
+        f'<p style="margin:0;">{_e(agenzia)}</p>'
+        '</div>'
+    )
+    oggetto = f"{prefisso}: {etichetta} {format_date(start_at)} alle {format_time(start_at)}"
+    return oggetto, corpo

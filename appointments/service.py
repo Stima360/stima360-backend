@@ -121,6 +121,9 @@ from buyer_visits import integration as _visite
 # il pacchetto vive fuori dall'Agenda, qui solo le chiamate, sullo STESSO
 # cursore, prima del mark dirty Google.
 from acquisitions import integration as _acquisizioni
+# ROADMAP PUNTO 2: conferma al cliente e ritiro dei messaggi in coda, nella
+# stessa transazione dell'Agenda, in un savepoint: non rompono mai l'Agenda.
+from appointment_reminders import confirmation as _conferme
 
 try:  # il driver vero; in sviluppo senza psycopg2 il conftest ne mette uno finto
     from psycopg2 import errors as _pg_errors
@@ -532,6 +535,8 @@ def _creazione(ctx, payload):
         # dirty; una CREATE `requested` non ha bisogno di riga di sync.
         if riga["status"] in _GCAL_PRESENT:
             _gcal.on_appointment_mutation(cur, agency_id, riga["id"])
+        if riga["status"] in ("scheduled", "confirmed"):
+            _conferme.on_scheduled(cur, agency_id, riga["id"], kind=_conferme.KIND_SCHEDULED)
         return riga, False
 
     return _lavoro
@@ -849,6 +854,8 @@ def create_public_booking_appointment(ctx, *, link, submission_hash, start_at, c
         # 13. A30-9B: mark dirty, mai una chiamata Google qui dentro.
         if riga["status"] in _GCAL_PRESENT:
             _gcal.on_appointment_mutation(cur, agency_id, riga["id"])
+        # ROADMAP PUNTO 2: la prenotazione confermata riceve la conferma.
+        _conferme.on_scheduled(cur, agency_id, riga["id"], kind=_conferme.KIND_SCHEDULED)
         return riga
 
     # 14. commit (o rollback): stessa `_in_transazione` di ogni altra
@@ -920,6 +927,7 @@ def schedule_appointment(ctx, appointment_id, body):
         _visite.on_status(cur, agency_id, nuova, actor_user_id=actor)
         # A30-9B, matrice §18: SCHEDULE requested->scheduled -> mark dirty.
         _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
+        _conferme.on_scheduled(cur, agency_id, nuova["id"], kind=_conferme.KIND_SCHEDULED)
         return nuova
     return _su_riga(ctx, appointment_id, "schedule", body.version, lavoro)
 
@@ -1025,6 +1033,10 @@ def reschedule_appointment(ctx, appointment_id, payload):
         # sulla riga viva; l'id evento remoto non cambia (deterministico sulla
         # radice della catena), il worker aggiorna lo STESSO evento Google.
         _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
+        # ROADMAP PUNTO 2: i messaggi in coda della riga vecchia si ritirano
+        # subito; la riga nuova riceve la conferma del nuovo orario.
+        _conferme.on_closed(cur, agency_id, vecchia["id"])
+        _conferme.on_scheduled(cur, agency_id, nuova["id"], kind=_conferme.KIND_RESCHEDULED)
         return nuova
 
     return _su_riga(ctx, appointment_id, "reschedule", versione, lavoro)
@@ -1077,6 +1089,8 @@ def _annulla(cur, agency_id, actor, row, *, reason, kind, follow_up=None):
     # A30-9B, matrice §18: CANCEL -> mark dirty (l'evento remoto, se
     # esiste, va rimosso).
     _gcal.on_appointment_mutation(cur, agency_id, nuova["id"])
+    # ROADMAP PUNTO 2: promemoria e conferme in coda si ritirano subito.
+    _conferme.on_closed(cur, agency_id, nuova["id"])
     return nuova
 
 

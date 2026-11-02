@@ -47,7 +47,7 @@ from operator_auth.context import SystemAgencyContext
 from . import integrations, service, test_recipients
 from .database import communication_cursor
 from .enums import (CHANNEL_EMAIL, ERROR_OUTCOME_UNKNOWN, ERROR_PROVIDER_REJECTED,
-                    ERROR_UNKNOWN, REASON_APPOINTMENT_REMINDER, TYPE_MARKETING)
+                    ERROR_UNKNOWN, REASON_APPOINTMENT_CONFIRMATION, REASON_APPOINTMENT_REMINDER, TYPE_MARKETING)
 from .exceptions import ValidationError
 from .providers import email_smtp as provider_email
 from .providers import null as provider_finto
@@ -323,7 +323,9 @@ def dispatch_batch(ctx_operatore, *, channel: str,
         # di quello. Dopo il claim, immediatamente prima del provider: rilegge
         # appuntamento e contatto ADESSO e sopprime se qualcosa non regge piu'.
         # Nessun altro `reason_code` passa di qui.
-        if ragione is None and message.get("reason_code") == REASON_APPOINTMENT_REMINDER:
+        # ROADMAP PUNTO 2: la stessa revalida per la CONFERMA dell'appuntamento.
+        if ragione is None and message.get("reason_code") in (REASON_APPOINTMENT_REMINDER,
+                                                               REASON_APPOINTMENT_CONFIRMATION):
             ragione = revalida_promemoria.revalidate(ctx, message)
         if ragione is not None:
             esito = service.finalize_suppressed(ctx, message["id"], token, reason=ragione)

@@ -34,7 +34,7 @@ from typing import Any
 
 from communication.database import communication_cursor
 
-from . import policy, repository, template
+from . import policy, repository, settings, template
 
 REASON_APPOINTMENT_MISSING = "appointment_missing"
 REASON_METADATA_INVALID = "reminder_metadata_invalid"
@@ -42,17 +42,23 @@ REASON_OCCURRENCE_CHANGED = "occurrence_changed"
 REASON_CONTACT_CHANGED = "contact_changed"
 REASON_DESTINATION_CHANGED = "destination_changed"
 REASON_NOT_DUE_NOW = "reminder_not_due_now"
+REASON_APPOINTMENT_STARTED = "appointment_already_started"
 
 #: L'insieme chiuso dei motivi propri della revalida.
 REVALIDATION_REASONS = frozenset({
     REASON_APPOINTMENT_MISSING, REASON_METADATA_INVALID, REASON_OCCURRENCE_CHANGED,
     REASON_CONTACT_CHANGED, REASON_DESTINATION_CHANGED, REASON_NOT_DUE_NOW,
+    REASON_APPOINTMENT_STARTED,
 })
 
 #: Le chiavi ESATTE dei metadata scritti dal planner.
 METADATA_KEYS = frozenset({"kind", "appointment_id", "offset", "occurrence_key",
                            "start_epoch"})
 METADATA_KIND = "appointment_reminder"
+#: ROADMAP PUNTO 2: le chiavi ESATTE dei metadata della conferma (confirmation.py).
+CONFIRMATION_METADATA_KEYS = frozenset({"kind", "appointment_id", "start_epoch", "occurrence_key", "variant"})
+CONFIRMATION_METADATA_KIND = "appointment_confirmation"
+CONFIRMATION_PREFIX = "appointment_confirmation:v1"
 
 
 def _adesso() -> datetime:
@@ -64,23 +70,59 @@ def _intero_positivo(valore: Any) -> bool:
     return isinstance(valore, int) and not isinstance(valore, bool) and valore >= 1
 
 
-def _metadata_validi(message: dict[str, Any]) -> dict[str, Any] | None:
-    """(A) i metadata del planner, esatti; altrimenti None."""
+def _metadata_conferma(message: dict[str, Any]) -> dict[str, Any] | None:
+    """(A) i metadata della conferma, esatti; altrimenti None."""
     meta = message.get("metadata")
-    if not isinstance(meta, dict) or set(meta) != METADATA_KEYS:
+    if not isinstance(meta, dict) or set(meta) != CONFIRMATION_METADATA_KEYS:
         return None
-    if meta["kind"] != METADATA_KIND or meta["offset"] != policy.OFFSET_24H:
+    if meta["kind"] != CONFIRMATION_METADATA_KIND or meta["variant"] not in ("scheduled", "rescheduled"):
         return None
     if not _intero_positivo(meta["appointment_id"]) or not _intero_positivo(meta["start_epoch"]):
         return None
     if not isinstance(meta["occurrence_key"], str):
         return None
-    if message.get("template_key") != template.TEMPLATE_KEY \
+    if message.get("template_key") != template.CONFIRMATION_TEMPLATE_KEY \
+            or message.get("template_version") != template.CONFIRMATION_TEMPLATE_VERSION:
+        return None
+    if message.get("channel") != "email" or message.get("communication_type") != "service":
+        return None
+    return meta
+
+
+def _metadata_validi(message: dict[str, Any]) -> dict[str, Any] | None:
+    """(A) i metadata del planner, esatti; altrimenti None."""
+    if message.get("reason_code") == "appointment_confirmation":
+        return _metadata_conferma(message)
+    meta = message.get("metadata")
+    if not isinstance(meta, dict) or set(meta) != METADATA_KEYS:
+        return None
+    if meta["kind"] != METADATA_KIND or meta["offset"] not in policy.OFFSETS:
+        return None
+    if not _intero_positivo(meta["appointment_id"]) or not _intero_positivo(meta["start_epoch"]):
+        return None
+    if not isinstance(meta["occurrence_key"], str):
+        return None
+    if message.get("template_key") != template.template_key(meta["offset"]) \
             or message.get("template_version") != template.TEMPLATE_VERSION:
         return None
     if message.get("channel") != "email" or message.get("communication_type") != "service":
         return None
     return meta
+
+
+def _chiave_conferma(appuntamento: dict[str, Any]) -> str:
+    return f"{CONFIRMATION_PREFIX}:{appuntamento['id']}:{int(appuntamento['start_at'].timestamp())}"
+
+
+def _decide_conferma(message: dict[str, Any], appuntamento: dict[str, Any], *, chiave: str,
+                     now: datetime) -> str | None:
+    """ROADMAP PUNTO 2: la conferma parte finche' l'appuntamento e' davanti a noi
+    e la chiave e' ancora quella dell'occorrenza."""
+    if appuntamento["start_at"] <= now:
+        return REASON_APPOINTMENT_STARTED
+    if message.get("idempotency_key") != chiave:
+        return REASON_OCCURRENCE_CHANGED
+    return None
 
 
 def decide(message: dict[str, Any], letto: dict[str, Any] | None,
@@ -100,23 +142,30 @@ def decide(message: dict[str, Any], letto: dict[str, Any] | None,
     if appuntamento["id"] != meta["appointment_id"] \
             or appuntamento["agency_id"] != agency_id:                  # C
         return REASON_APPOINTMENT_MISSING
-    chiave = policy.occurrence_key(appuntamento["id"], appuntamento["start_at"])
+    conferma = meta["kind"] == CONFIRMATION_METADATA_KIND
+    chiave = (_chiave_conferma(appuntamento) if conferma
+              else policy.occurrence_key(appuntamento["id"], appuntamento["start_at"], meta["offset"]))
     if int(appuntamento["start_at"].timestamp()) != meta["start_epoch"] \
             or chiave != meta["occurrence_key"]:                        # D
         return REASON_OCCURRENCE_CHANGED
     if appuntamento["contact_id"] is not None \
             and appuntamento["contact_id"] != message.get("contact_id"):  # I
         return REASON_CONTACT_CHANGED
-    motivo = policy.ineligibility_reason(appuntamento, contatto)        # E F G H J
+    motivo = policy.ineligibility_reason(appuntamento, contatto,         # E F G H J
+                                         allowed_recipients=settings.allowed_recipients())
     if motivo is not None:
         return motivo
     if contatto["email"] != message.get("destination_snapshot"):        # K
         return REASON_DESTINATION_CHANGED
+    if conferma:
+        # ROADMAP PUNTO 2: per la conferma i controlli di tempo sono quelli di _decide_conferma.
+        return _decide_conferma(message, appuntamento, chiave=chiave, now=now)
     decisione = policy.send_decision(now=now, start_at=appuntamento["start_at"],
-                                     created_at=appuntamento["created_at"])
+                                     created_at=appuntamento["created_at"], offset=meta["offset"])
     if decisione.reason is not None:                                    # L M
         return decisione.reason
-    if appuntamento["start_at"] - now < policy.MIN_LEAD:                # M
+    anticipo = policy.MIN_LEAD if meta["offset"] == policy.OFFSET_24H else policy.MIN_LEAD_2H
+    if appuntamento["start_at"] - now < anticipo:                       # M
         return policy.REASON_LEAD_TOO_SHORT
     if not policy.in_window(now) or not decisione.due:                  # N O
         return REASON_NOT_DUE_NOW

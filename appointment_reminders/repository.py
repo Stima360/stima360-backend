@@ -83,6 +83,39 @@ SELECT {", ".join(f"a.{c}" for c in APPOINTMENT_COLUMNS)},
 #: La migration che il giro pretende.
 MIGRATION_079 = "079_a32_1_appointment_reminders"
 
+#: ROADMAP PUNTO 2: la conferma legge anche il profilo dell'agenzia (nome e
+#: riferimenti, `agencies.settings`) e l'indirizzo dell'immobile. La sola riga
+#: dell'appuntamento, sempre nell'agenzia.
+_PER_CONFERMA = f"""
+SELECT {", ".join(f"a.{c}" for c in APPOINTMENT_COLUMNS)},
+       {", ".join(f"c.{c} AS contact__{c}" for c in CONTACT_COLUMNS)},
+       {", ".join(f"p.{c} AS property__{c}" for c in PROPERTY_COLUMNS)},
+       g.name AS agency__name,
+       g.settings->'report_profile' AS agency__profile
+  FROM appointments a
+  JOIN agencies g        ON g.id = a.agency_id
+  LEFT JOIN contacts c   ON c.id = a.contact_id  AND c.agency_id = a.agency_id
+  LEFT JOIN properties p ON p.id = a.property_id AND p.agency_id = a.agency_id
+                         AND (to_jsonb(p)->>'deleted_at') IS NULL
+ WHERE a.id = %(appointment_id)s
+   AND a.agency_id = %(agency_id)s
+"""
+
+
+def appointment_for_confirmation(cur, agency_id: int, appointment_id: int) -> dict[str, Any] | None:
+    """Appuntamento, contatto, indirizzo strutturato e riferimenti dell'agenzia, ADESSO."""
+    cur.execute(_PER_CONFERMA, {"appointment_id": appointment_id, "agency_id": agency_id})
+    riga = cur.fetchone()
+    if riga is None:
+        return None
+    piatta = dict(riga)
+    separata = _separa(piatta)
+    profilo = piatta.get("agency__profile")
+    return {"appointment": separata["appointment"], "contact": separata["contact"],
+            "property_address": separata.get("property_address"),
+            "agency": {"name": piatta["agency__name"],
+                       "profile": profilo if isinstance(profilo, dict) else {}}}
+
 
 def schema_ready(cur) -> bool:
     """La 079 e' applicata - e non rolled back - su QUESTO database?

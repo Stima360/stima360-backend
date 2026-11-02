@@ -306,6 +306,38 @@ def reschedule_queued(cur, ctx, message_id: int, *, quando) -> dict[str, Any] | 
     return _row(riga) if riga else None
 
 
+def reason_code_supported(cur, reason_code: str) -> bool:
+    """Il CHECK dei motivi del ledger ammette `reason_code`? (es. prima che una
+    migrazione additiva sia applicata su un ambiente)."""
+    cur.execute("SELECT pg_get_constraintdef(oid) AS def FROM pg_constraint "
+                "WHERE conname = 'communication_messages_reason_code_chk' "
+                "AND conrelid = 'public.communication_messages'::regclass")
+    riga = cur.fetchone()
+    return bool(riga) and f"'{reason_code}'" in (riga["def"] or "")
+
+
+def cancel_queued_for_appointment(cur, ctx, appointment_id: int, reason_codes) -> int:
+    """ROADMAP PUNTO 2: `queued` -> `cancelled` per TUTTI i messaggi in coda di
+    un appuntamento (metadata `appointment_id`) con uno dei motivi indicati,
+    nell'agenzia del contesto. Stesso compare-and-set di `cancel_queued`: un
+    messaggio gia' reclamato dal dispatcher non viene toccato (lo chiudera' la
+    revalida). Ritorna quanti ne ha annullati."""
+    cur.execute(
+        """
+        UPDATE communication_messages
+           SET status = %s, updated_at = NOW()
+         WHERE agency_id = %s
+           AND status = ANY(%s)
+           AND reason_code = ANY(%s)
+           AND (metadata->>'appointment_id') = %s
+        RETURNING id
+        """,
+        [STATUS_CANCELLED, ctx.require_agency(), sorted(CANCELLABLE_STATUSES), list(reason_codes),
+         str(int(appointment_id))],
+    )
+    return len(cur.fetchall())
+
+
 def cancel_queued(cur, ctx, message_id: int) -> dict[str, Any]:
     """`queued` -> `cancelled`, e solo quella.
 

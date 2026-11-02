@@ -621,4 +621,11 @@ def test_n9_la_superficie_pubblica_del_service_e_dichiarata():
         # SENTINELLA AGGIORNATA DA BLOCCO-4D/6: `queued_unclaimed`, sola lettura degli id
         # in coda mai presi in carico (ripresa del motore, chiusura a finestra scaduta).
         "queued_unclaimed",
+        # SENTINELLA AGGIORNATA DAL PUNTO 2: `cancel_queued_for_appointment` ritira
+        # (queued -> cancelled) i promemoria e le conferme in coda di un
+        # appuntamento annullato o spostato, nella transazione dell'Agenda, e sta
+        # QUI perche' scrive sul ledger. `reason_code_supported` e' la sola lettura
+        # del vincolo dei motivi: dice se la migrazione 127 e' applicata, senza che
+        # altri package nominino la tabella.
+        "cancel_queued_for_appointment", "reason_code_supported",
     }, sorted(pubbliche)

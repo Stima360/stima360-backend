@@ -328,9 +328,12 @@ def test_batch_misto_un_soppresso_non_ferma_gli_altri(mondo):
 def test_i_motivi_sono_stabili_corti_e_senza_pii():
     motivi = revalidation.REVALIDATION_REASONS | set(
         getattr(policy, n) for n in dir(policy) if n.startswith("REASON_"))
+    # SENTINELLA AGGIORNATA DAL PUNTO 2: una conferma non parte piu' se
+    # l'appuntamento e' intanto cominciato.
     assert revalidation.REVALIDATION_REASONS == {
         "appointment_missing", "reminder_metadata_invalid", "occurrence_changed",
-        "contact_changed", "destination_changed", "reminder_not_due_now"}
+        "contact_changed", "destination_changed", "reminder_not_due_now",
+        "appointment_already_started"}
     for m in motivi:
         assert len(m) <= 60 and m.replace("_", "").isalnum() and m == m.lower()
 

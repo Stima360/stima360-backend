@@ -53,9 +53,13 @@ def _import(relativo: str) -> set[str]:
 
 
 def test_s01_il_package_ha_esattamente_i_moduli_attesi():
+    # SENTINELLA AGGIORNATA DAL PUNTO 2: `settings` (unico lettore dell'ambiente
+    # del package) e `confirmation` (conferma al cliente e ritiro dei messaggi
+    # in coda quando l'appuntamento cambia).
     assert {p.name for p in PACCHETTO.glob("*.py")} == {
         "__init__.py", "policy.py", "template.py",                       # A32-1
-        "repository.py", "planner.py", "revalidation.py", "router.py"}   # A32-2
+        "repository.py", "planner.py", "revalidation.py", "router.py",   # A32-2
+        "settings.py", "confirmation.py"}                                # PUNTO 2
 
 
 def test_s02_nessun_provider_nessuno_smtp_nessuna_rete_nel_package():
@@ -85,7 +89,12 @@ def test_s03_il_provider_si_raggiunge_solo_dal_dispatcher():
 
 def test_s04_il_ramo_del_dispatcher_e_stretto():
     codice = _codice("communication/dispatcher.py")
-    assert ('if ragione is None and message.get("reason_code") == REASON_APPOINTMENT_REMINDER:'
+    # SENTINELLA AGGIORNATA DAL PUNTO 2: lo stesso ramo, e la stessa revalida,
+    # anche per la conferma dell'appuntamento (motivo `appointment_confirmation`):
+    # il dispatcher rilegge l'appuntamento prima di spedire e, se intanto e'
+    # stato annullato o spostato, nessuna informazione vecchia esce.
+    assert ('if ragione is None and message.get("reason_code") in (REASON_APPOINTMENT_REMINDER,\n'
+            '                                                               REASON_APPOINTMENT_CONFIRMATION):'
             in codice)
     # il gate del consenso e' quello di prima, e resta il primo
     assert codice.index("ragione = _consenso_nega(ctx, message)") < codice.index(
@@ -93,6 +102,7 @@ def test_s04_il_ramo_del_dispatcher_e_stretto():
     assert "if message[\"communication_type\"] != TYPE_MARKETING:" in codice
     # nessun'altra parte del dispatcher conosce i promemoria
     assert codice.count("REASON_APPOINTMENT_REMINDER") == 2        # import + ramo
+    assert codice.count("REASON_APPOINTMENT_CONFIRMATION") == 2    # import + ramo (PUNTO 2)
     assert codice.count("revalida_promemoria") == 2                # import + chiamata
 
 
@@ -104,7 +114,9 @@ def test_s05_il_planner_scrive_solo_con_enqueue_e_i_campi_sono_quelli():
         assert vietato not in codice, vietato
     for atteso in ("channel=CHANNEL_EMAIL", "communication_type=TYPE_SERVICE",
                    "mode=MODE_AUTOMATIC", "reason_code=REASON_APPOINTMENT_REMINDER",
-                   "idempotency_key=chiave", "template_key=template.TEMPLATE_KEY",
+                   # SENTINELLA AGGIORNATA DAL PUNTO 2: il template dipende
+                   # dall'offset (24h o 2h), scelto dalla lista chiusa di `template`.
+                   "idempotency_key=chiave", "template_key=template.template_key(offset)",
                    "template_version=template.TEMPLATE_VERSION",
                    'destination_snapshot=contatto["email"]'):
         assert atteso in codice, atteso
@@ -167,7 +179,9 @@ def test_s08_location_text_note_telefono_mai_letti():
 
 def test_s09_il_repository_e_sempre_dell_agenzia():
     codice = _codice("appointment_reminders/repository.py")
-    assert codice.count("a.agency_id = %(agency_id)s") == 2
+    # SENTINELLA AGGIORNATA DAL PUNTO 2: la terza lettura, quella della conferma
+    # (`appointment_for_confirmation`), ha lo stesso predicato di agenzia.
+    assert codice.count("a.agency_id = %(agency_id)s") == 3
     assert "c.agency_id = a.agency_id" in codice and "p.agency_id = a.agency_id" in codice
     assert "ORDER BY a.start_at ASC, a.id ASC" in codice
 
@@ -246,7 +260,9 @@ def test_s11_la_chiave_non_contiene_l_email():
     assert list(inspect.signature(policy.occurrence_key).parameters) == [
         "appointment_id", "start_at", "offset"]
     assert "idempotency_key=chiave" in _codice("appointment_reminders/planner.py")
-    assert "chiave = policy.occurrence_key(appuntamento[\"id\"], appuntamento[\"start_at\"])" \
+    # SENTINELLA AGGIORNATA DAL PUNTO 2: la chiave porta l'offset (24h o 2h);
+    # ancora nessuna email.
+    assert "chiave = policy.occurrence_key(appuntamento[\"id\"], appuntamento[\"start_at\"], offset)" \
         in _codice("appointment_reminders/planner.py")
     meta = planner.metadata_for(5, __import__("datetime").datetime(
         2031, 1, 1, 10, tzinfo=__import__("datetime").timezone.utc))

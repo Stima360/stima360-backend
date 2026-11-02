@@ -321,6 +321,25 @@ def cancel(ctx, message_id: int, *, cur=None) -> dict[str, Any]:
         return repository.cancel_queued(proprio_cur, ctx, message_id)
 
 
+def reason_code_supported(reason_code: str, *, cur=None) -> bool:
+    """ROADMAP PUNTO 2: il database ammette questo motivo? Serve a un flusso che
+    vuole accodare un motivo introdotto da una migrazione additiva senza
+    rompere la propria transazione se quella non e' ancora applicata."""
+    if cur is not None:
+        return repository.reason_code_supported(cur, reason_code)
+    with communication_cursor() as (_conn, proprio_cur):
+        return repository.reason_code_supported(proprio_cur, reason_code)
+
+
+def cancel_queued_for_appointment(ctx, *, appointment_id: int, reason_codes, cur=None) -> int:
+    """ROADMAP PUNTO 2: ritira dalla coda i messaggi (promemoria, conferme) di un
+    appuntamento annullato o spostato. Con `cur` nella transazione del chiamante."""
+    if cur is not None:
+        return repository.cancel_queued_for_appointment(cur, ctx, appointment_id, reason_codes)
+    with communication_cursor(commit=True) as (_conn, proprio_cur):
+        return repository.cancel_queued_for_appointment(proprio_cur, ctx, appointment_id, reason_codes)
+
+
 def send_now(ctx, message_id: int, *, cur=None) -> dict[str, Any]:
     """P29-3D - anticipa un messaggio GIA' IN CODA a subito.
 

@@ -57,6 +57,8 @@ ETICHETTE_MOTIVO = {
     "owner_login_link": "Accesso proprietario",
     "m6": "M6", "m7": "M7", "m8": "M8", "m9": "M9", "m10": "M10",
     "appointment_reminder": "Promemoria appuntamento",
+    # ROADMAP PUNTO 2 (127): la conferma / il nuovo orario dell'appuntamento.
+    "appointment_confirmation": "Conferma appuntamento",
     "consent_confirmation": "Conferma consenso email",
     # BLOCCO-4D (123): la risposta del motore delle risposte automatiche WhatsApp.
     "auto_reply": "Risposta automatica WhatsApp",

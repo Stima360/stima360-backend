@@ -242,12 +242,15 @@ def test_P13_meno_di_3h_zero(mondo):
 
 def test_P6_P13_tutti_i_motivi_della_policy_sono_nei_conteggi(mondo):
     c = giro(mondo)
+    # SENTINELLA AGGIORNATA DAL PUNTO 2: due motivi in piu' (il promemoria a 2h
+    # fuori dalla finestra 08-20; il destinatario fuori dall'allowlist del
+    # collaudo) e, nei conteggi, gli offset attivi del giro.
     assert set(c["skipped_by_reason"]) == {
         "type_not_allowed", "source_not_allowed", "status_not_allowed", "contact_missing",
         "contact_archived", "email_missing_or_invalid", "booked_less_than_12h_before",
-        "less_than_3h_left"}
+        "less_than_3h_left", "outside_send_window", "recipient_not_allowed"}
     assert set(c) == {"scanned", "due", "queued", "queued_idempotent", "not_due",
-                      "ineligible", "errors", "skipped_by_reason"}
+                      "ineligible", "errors", "skipped_by_reason", "offsets"}
 
 
 # ---------------------------------------------------------------------------

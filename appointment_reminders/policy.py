@@ -50,10 +50,25 @@ from zoneinfo import ZoneInfo
 TIMEZONE = "Europe/Rome"
 ZONA = ZoneInfo(TIMEZONE)
 
-#: L'unico offset dell'MVP. Vive nel `template_key` e nei metadata, mai nel
+#: Gli offset conosciuti. Vivono nel `template_key` e nei metadata, mai nel
 #: `reason_code` (che resta `appointment_reminder` per ogni offset).
+#: ROADMAP PUNTO 2: `2h` si aggiunge a `24h`; quali sono ATTIVI lo decide
+#: `APPOINTMENT_REMINDER_OFFSETS` (es. `24h,2h`), per impostazione solo `24h`.
 OFFSET_24H = "24h"
-OFFSETS = (OFFSET_24H,)
+OFFSET_2H = "2h"
+OFFSETS = (OFFSET_24H, OFFSET_2H)
+OFFSETS_ENV = "APPOINTMENT_REMINDER_OFFSETS"
+DEFAULT_OFFSETS = (OFFSET_24H,)
+#: Regole del promemoria a 2 ore: target `start_at - 2h`, se gia' passato si
+#: manda al primo giro utile; deve cadere nella finestra 08-20 (nessuno
+#: spostamento: un target fuori finestra non si manda) e lasciare almeno 1h.
+MIN_LEAD_2H = timedelta(hours=1)
+OFFSET_DELTAS = {OFFSET_2H: timedelta(hours=2)}
+#: ROADMAP PUNTO 2: durante il collaudo le notifiche degli appuntamenti
+#: (promemoria di ogni offset e conferme) partono SOLO verso gli indirizzi
+#: elencati; variabile assente = nessun limite (comportamento di sempre);
+#: presente ma vuota = nessuno (chiuso per difetto).
+RECIPIENTS_ENV = "APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS"
 
 ALLOWED_TYPES = frozenset({
     "buyer_visit", "inspection", "seller_meeting", "valuation_presentation",
@@ -91,6 +106,8 @@ REASON_CONTACT_ARCHIVED = "contact_archived"
 REASON_NO_EMAIL = "email_missing_or_invalid"
 REASON_BOOKING_TOO_LATE = "booked_less_than_12h_before"
 REASON_LEAD_TOO_SHORT = "less_than_3h_left"
+REASON_OUTSIDE_WINDOW = "outside_send_window"
+REASON_RECIPIENT_NOT_ALLOWED = "recipient_not_allowed"
 
 # Volutamente conservativa: una parte locale e un dominio con almeno un punto,
 # niente spazi, niente caratteri che in un header o in HTML cambierebbero
@@ -105,6 +122,31 @@ def _con_fuso(valore: Any, nome: str) -> datetime:
     if valore.tzinfo is None or valore.utcoffset() is None:
         raise ValueError(f"{nome} must be timezone-aware: a naive time is ambiguous")
     return valore
+
+
+def enabled_offsets(raw: str | None) -> tuple[str, ...]:
+    """Gli offset attivi (dal valore della variabile, letto da `settings`),
+    nell'ordine di `OFFSETS`; valori sconosciuti ignorati; vuoto = predefiniti."""
+    if raw is None or not raw.strip():
+        return DEFAULT_OFFSETS
+    scelti = {v.strip().lower() for v in raw.split(",")}
+    attivi = tuple(o for o in OFFSETS if o in scelti)
+    return attivi or DEFAULT_OFFSETS
+
+
+def allowed_recipients(raw: str | None) -> frozenset[str] | None:
+    """Gli indirizzi ammessi (minuscoli) dal valore della variabile, o None se
+    il limite non e' attivo (variabile assente)."""
+    if raw is None:
+        return None
+    return frozenset(v.strip().lower() for v in re.split(r"[,;\s]+", raw) if "@" in v)
+
+
+def recipient_allowed(email: Any, destinatari_ammessi: frozenset[str] | None) -> bool:
+    """None = nessun limite; altrimenti solo gli indirizzi elencati."""
+    if destinatari_ammessi is None:
+        return True
+    return isinstance(email, str) and email.strip().lower() in destinatari_ammessi
 
 
 def is_valid_email(value: Any) -> bool:
@@ -122,9 +164,11 @@ def is_valid_email(value: Any) -> bool:
 # ---------------------------------------------------------------------------
 
 def ineligibility_reason(appointment: Mapping[str, Any],
-                         contact: Mapping[str, Any] | None) -> str | None:
+                         contact: Mapping[str, Any] | None, *,
+                         allowed_recipients: frozenset[str] | None = None) -> str | None:
     """None se l'appuntamento e il suo contatto possono ricevere un
-    promemoria; altrimenti il motivo (uno solo, il primo che fallisce)."""
+    promemoria; altrimenti il motivo (uno solo, il primo che fallisce).
+    `allowed_recipients`: il limite del collaudo (None = nessun limite)."""
     if appointment.get("appointment_type") not in ALLOWED_TYPES:
         return REASON_TYPE
     if appointment.get("source") not in ALLOWED_SOURCES:
@@ -137,6 +181,8 @@ def ineligibility_reason(appointment: Mapping[str, Any],
         return REASON_CONTACT_ARCHIVED
     if not is_valid_email(contact.get("email")):
         return REASON_NO_EMAIL
+    if not recipient_allowed(contact.get("email"), allowed_recipients):
+        return REASON_RECIPIENT_NOT_ALLOWED
     return None
 
 
@@ -195,12 +241,34 @@ class SendDecision:
     reason: str | None
 
 
-def send_decision(*, now: datetime, start_at: datetime, created_at: datetime) -> SendDecision:
+def min_lead(offset: str = OFFSET_24H) -> timedelta:
+    return MIN_LEAD_2H if offset == OFFSET_2H else MIN_LEAD
+
+
+def _send_decision_2h(*, now: datetime, start_at: datetime) -> SendDecision:
+    """Il promemoria a 2 ore: nessuna soglia di prenotazione, finestra senza
+    spostamenti, almeno 1h di anticipo."""
+    candidato = start_at - OFFSET_DELTAS[OFFSET_2H]
+    if candidato < now:
+        candidato = now
+    if not in_window(candidato):
+        return SendDecision(None, False, REASON_OUTSIDE_WINDOW)
+    if start_at - candidato < MIN_LEAD_2H:
+        return SendDecision(None, False, REASON_LEAD_TOO_SHORT)
+    return SendDecision(candidato.astimezone(timezone.utc), candidato <= now, None)
+
+
+def send_decision(*, now: datetime, start_at: datetime, created_at: datetime,
+                  offset: str = OFFSET_24H) -> SendDecision:
     """Soglie 12h/3h, finestra, promemoria tardivo. Solo tempo: l'idoneita'
-    statica e' `ineligibility_reason`."""
+    statica e' `ineligibility_reason`. `offset` sceglie le regole (24h / 2h)."""
     now = _con_fuso(now, "now")
     start_at = _con_fuso(start_at, "start_at")
     created_at = _con_fuso(created_at, "created_at")
+    if offset not in OFFSETS:
+        raise ValueError(f"unknown reminder offset {offset!r}")
+    if offset == OFFSET_2H:
+        return _send_decision_2h(now=now, start_at=start_at)
     if start_at - created_at < MIN_BOOKING_NOTICE:
         return SendDecision(None, False, REASON_BOOKING_TOO_LATE)
     candidato = effective_reminder_at(start_at)
@@ -214,15 +282,16 @@ def send_decision(*, now: datetime, start_at: datetime, created_at: datetime) ->
 
 
 def is_reminder_eligible(*, now: datetime, appointment: Mapping[str, Any],
-                         contact: Mapping[str, Any] | None) -> SendDecision:
+                         contact: Mapping[str, Any] | None, offset: str = OFFSET_24H,
+                         allowed_recipients: frozenset[str] | None = None) -> SendDecision:
     """La decisione completa: idoneita' statica, poi tempo. `appointment`
     porta `appointment_type`, `source`, `status`, `start_at`, `created_at`;
     `contact` porta `status` ed `email` (o e' None)."""
-    motivo = ineligibility_reason(appointment, contact)
+    motivo = ineligibility_reason(appointment, contact, allowed_recipients=allowed_recipients)
     if motivo is not None:
         return SendDecision(None, False, motivo)
     return send_decision(now=now, start_at=appointment["start_at"],
-                         created_at=appointment["created_at"])
+                         created_at=appointment["created_at"], offset=offset)
 
 
 # ---------------------------------------------------------------------------

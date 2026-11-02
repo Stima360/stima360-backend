@@ -151,6 +151,10 @@ REASON_CONSENT_CONFIRMATION = "consent_confirmation"
 #: `operator_reply`, la manda un percorso dedicato (`auto_replies`), mai il
 #: claim generico.
 REASON_AUTO_REPLY = "auto_reply"
+#: ROADMAP PUNTO 2 (127): la conferma (o il nuovo orario) di un appuntamento
+#: fissato, inviata al cliente dal CRM (flusso delle notifiche degli appuntamenti).
+#: Di servizio, come il promemoria.
+REASON_APPOINTMENT_CONFIRMATION = "appointment_confirmation"
 REASON_CODES = frozenset({
     REASON_STIMA_PDF, REASON_OPERATOR_MANUAL, REASON_OPERATOR_REPLY,
     REASON_M1, REASON_M2, REASON_M3, REASON_M4, REASON_M5,
@@ -158,6 +162,7 @@ REASON_CODES = frozenset({
     REASON_APPOINTMENT_REMINDER,
     REASON_CONSENT_CONFIRMATION,
     REASON_AUTO_REPLY,
+    REASON_APPOINTMENT_CONFIRMATION,
 } | {f"m{i}" for i in range(6, 21)})  # 108: fino a m20 (il calendario a 180 giorni ne usa 17)
 
 # --------------------------------------------------------------------------

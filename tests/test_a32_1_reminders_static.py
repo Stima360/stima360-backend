@@ -40,10 +40,15 @@ def test_01_il_package_ha_solo_i_moduli_della_foundation():
     # SENTINELLA AGGIORNATA DA A32-2 (collisione dichiarata): il planner, la
     # revalida finale, le letture e la rotta arrivano nello stesso package.
     # La foundation PURA resta `policy` + `template` (test_02).
+    # SENTINELLA AGGIORNATA DAL PUNTO 2 (conferme e promemoria configurabili):
+    # `settings` e' l'UNICO lettore dell'ambiente del package (la policy resta
+    # pura); `confirmation` accoda la conferma al cliente e ritira i messaggi in
+    # coda quando l'appuntamento cambia.
     assert {p.name for p in PACCHETTO.glob("*.py")} == {"__init__.py", "policy.py",
                                                         "template.py", "repository.py",
                                                         "planner.py", "revalidation.py",
-                                                        "router.py"}
+                                                        "router.py", "settings.py",
+                                                        "confirmation.py"}
 
 
 def test_02_il_package_e_puro_nessun_db_rete_router_dominio():
@@ -74,7 +79,11 @@ def test_03_nessuno_importa_il_package_fuori_dai_test():
         # il mount della rotta e la revalida finale nel dispatcher.
         # SENTINELLA AGGIORNATA DA CRON-TECNICO: la rotta interna del cron, che
         # esegue lo stesso giro dei promemoria della rotta di A32-2.
-        if relativo in ("main.py", "communication/dispatcher.py", "communication/cron_router.py"):
+        # SENTINELLA AGGIORNATA DAL PUNTO 2: il service degli appuntamenti chiama
+        # gli agganci di `confirmation` (conferma al cliente, ritiro dei messaggi
+        # in coda) DENTRO la transazione che scrive l'appuntamento.
+        if relativo in ("main.py", "communication/dispatcher.py", "communication/cron_router.py",
+                        "appointments/service.py"):
             continue
         assert "appointment_reminders" not in file.read_text(encoding="utf-8",
                                                              errors="ignore"), relativo
