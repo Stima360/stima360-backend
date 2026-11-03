@@ -5,6 +5,7 @@ Caricare via FTP / file manager dell'hosting:
   Bonus-casa.html                    -> radice del sito (accanto a index.html)
   bonus-casa/logo.jpg                -> cartella bonus-casa/ nella radice
   bonus-casa/locandina.webp          -> cartella bonus-casa/ nella radice
+  bonus-casa/guida-anteprima.jpg     -> cartella bonus-casa/ nella radice
   bonus-casa/bonus-casa-2026.pdf     -> cartella bonus-casa/ nella radice
 
 Link risultante: https://www.stima360.it/Bonus-casa.html

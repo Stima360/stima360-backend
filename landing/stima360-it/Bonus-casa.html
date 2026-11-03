@@ -11,14 +11,16 @@
   <meta property="og:type" content="website">
   <meta property="og:locale" content="it_IT">
   <link rel="icon" href="bonus-casa/logo.jpg">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@500;600;700;800&display=swap">
   <style>
     :root {
       --navy: #1b2a4a;
       --ink: #1a1a1a;
-      --muted: #555e6d;
-      --line: #e5e7eb;
+      --muted: #566070;
+      --line: #e6e9ef;
       --bg: #ffffff;
-      --bg-soft: #f6f8fb;
       --purple: #6a3fa0;
       --blue: #1f5fbf;
       --green: #2e8b57;
@@ -27,7 +29,7 @@
       --red: #d8342c;
       --brand-gradient: linear-gradient(90deg, var(--purple) 0%, var(--blue) 25%, var(--green) 50%, var(--yellow) 70%, var(--orange) 85%, var(--red) 100%);
       --shadow-sm: 0 1px 2px rgba(27, 42, 74, .06), 0 4px 14px rgba(27, 42, 74, .06);
-      --shadow-md: 0 2px 6px rgba(27, 42, 74, .08), 0 14px 34px rgba(27, 42, 74, .10);
+      --shadow-md: 0 2px 6px rgba(27, 42, 74, .07), 0 16px 40px rgba(27, 42, 74, .10);
       --radius: 20px;
     }
 
@@ -37,7 +39,7 @@
 
     body {
       margin: 0;
-      font-family: "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
+      font-family: "Manrope", "Segoe UI", "Helvetica Neue", Helvetica, Arial, sans-serif;
       font-size: 17px;
       line-height: 1.55;
       color: var(--ink);
@@ -75,14 +77,14 @@
 
     .container {
       width: 100%;
-      max-width: 1040px;
+      max-width: 1100px;
       margin: 0 auto;
       padding: 0 16px;
     }
 
     header.logo-area {
       text-align: center;
-      padding: 28px 16px 8px;
+      padding: 30px 16px 10px;
     }
     header.logo-area a {
       display: inline-block;
@@ -91,7 +93,7 @@
     }
     header.logo-area img {
       display: block;
-      width: min(100%, 520px);
+      width: min(100%, 440px);
       height: auto;
       margin: 0 auto;
     }
@@ -100,14 +102,17 @@
 
     /* Sezione principale: diagnosi gratuita */
     .hero {
-      padding: 28px 0 24px;
-      text-align: center;
+      padding: 24px 0 28px;
+      display: grid;
+      gap: 28px;
+      align-items: center;
     }
+    .hero-copy { text-align: center; }
     .hero h1 {
       margin: 0 0 14px;
-      font-size: clamp(2rem, 6.5vw, 3.4rem);
-      line-height: 1.1;
-      letter-spacing: -0.02em;
+      font-size: clamp(2.1rem, 6.5vw, 3.5rem);
+      line-height: 1.08;
+      letter-spacing: -0.025em;
       font-weight: 800;
       color: var(--navy);
     }
@@ -118,9 +123,10 @@
       color: transparent;
     }
     .hero .lead {
-      max-width: 680px;
+      max-width: 620px;
       margin: 0 auto 26px;
-      font-size: clamp(1.05rem, 2.6vw, 1.25rem);
+      font-size: clamp(1.05rem, 2.6vw, 1.2rem);
+      font-weight: 500;
       color: var(--muted);
     }
 
@@ -139,7 +145,7 @@
       text-decoration: none;
       line-height: 1.2;
       cursor: pointer;
-      transition: transform .15s ease, box-shadow .15s ease, background-color .15s ease;
+      transition: transform .15s ease, box-shadow .15s ease, background-color .15s ease, border-color .15s ease;
     }
     .btn:focus-visible {
       outline: 3px solid var(--blue);
@@ -165,39 +171,88 @@
       box-shadow: var(--shadow-sm);
     }
     .btn-secondary:hover {
-      background: var(--navy);
-      color: #fff;
+      background: #eef3fb;
+      border-color: var(--blue);
+      color: var(--blue);
       transform: translateY(-2px);
     }
 
+    /* Tre argomenti della Diagnosi Vendita */
     .hero .tagline {
-      margin: 16px 0 0;
-      font-weight: 600;
-      color: var(--navy);
-      letter-spacing: .01em;
+      margin: 22px auto 0;
+      max-width: 520px;
     }
-    .hero .tagline::before {
-      content: "";
+    .hero .tagline-title {
       display: block;
-      width: 56px;
-      height: 4px;
-      margin: 0 auto 12px;
-      border-radius: 4px;
-      background: var(--brand-gradient);
+      font-weight: 700;
+      color: var(--navy);
+      font-size: .98rem;
+      margin-bottom: 12px;
+    }
+    .pillars {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+    }
+    .pillars li {
+      display: grid;
+      justify-items: center;
+      gap: 6px;
+      padding: 12px 6px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #fff;
+      box-shadow: var(--shadow-sm);
+      font-weight: 700;
+      font-size: .92rem;
+      color: var(--navy);
+    }
+    .pillars svg { width: 24px; height: 24px; }
+    .pillars li:nth-child(1) svg { color: var(--blue); }
+    .pillars li:nth-child(2) svg { color: var(--green); }
+    .pillars li:nth-child(3) svg { color: var(--orange); }
+
+    .hero-visual { margin: 0; }
+    .hero-visual img {
+      display: block;
+      width: min(100%, 520px);
+      height: auto;
+      margin: 0 auto;
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-md);
+      border: 1px solid var(--line);
+    }
+    .hero-visual figcaption {
+      margin-top: 12px;
+      text-align: center;
+      font-size: .95rem;
+      color: var(--muted);
+    }
+
+    @media (min-width: 900px) {
+      .hero {
+        grid-template-columns: 1.1fr .9fr;
+        gap: 48px;
+        padding: 32px 0 40px;
+      }
+      .hero-copy { text-align: left; }
+      .hero .lead { margin-left: 0; }
+      .hero .tagline { margin-left: 0; }
     }
 
     /* Sezione PDF */
-    .pdf {
-      padding: 12px 0 40px;
-    }
+    .pdf { padding: 8px 0 44px; }
     .card {
       background: #fff;
       border: 1px solid var(--line);
       border-radius: var(--radius);
       box-shadow: var(--shadow-md);
-      padding: 30px 22px;
+      padding: 30px 22px 28px;
       display: grid;
-      gap: 18px;
+      gap: 20px;
       align-items: center;
       position: relative;
       overflow: hidden;
@@ -209,22 +264,23 @@
       height: 5px;
       background: var(--brand-gradient);
     }
-    .card .icon {
-      width: 64px;
-      height: 64px;
-      border-radius: 16px;
-      display: grid;
-      place-items: center;
-      background: linear-gradient(135deg, rgba(232, 130, 26, .14), rgba(242, 195, 0, .18));
-      color: var(--orange);
+    .card .cover {
+      width: 118px;
+      margin: 4px auto 0;
+      border-radius: 8px;
+      box-shadow: 0 6px 18px rgba(27, 42, 74, .18);
+      border: 1px solid var(--line);
+      overflow: hidden;
+      background: #fff;
+      transform: rotate(-2deg);
     }
-    .card .icon svg { width: 34px; height: 34px; }
+    .card .cover img { display: block; width: 100%; height: auto; }
     .card h2 {
       margin: 0 0 8px;
-      font-size: clamp(1.35rem, 4.2vw, 1.8rem);
+      font-size: clamp(1.35rem, 4.2vw, 1.75rem);
       line-height: 1.2;
       color: var(--navy);
-      letter-spacing: -0.01em;
+      letter-spacing: -0.015em;
     }
     .card p { margin: 0; color: var(--muted); }
     .card .action { display: grid; gap: 10px; justify-items: start; }
@@ -245,38 +301,18 @@
     @media (min-width: 720px) {
       .card {
         grid-template-columns: auto 1fr auto;
-        padding: 34px 36px;
-        gap: 26px;
+        padding: 30px 36px;
+        gap: 30px;
       }
+      .card .cover { margin: 0; }
       .card .action { justify-items: center; }
       .btn-secondary { width: auto; min-width: 260px; }
     }
 
-    /* Immagine promozionale (locandina) */
-    .promo {
-      padding: 0 0 48px;
-      text-align: center;
-    }
-    .promo figure { margin: 0; }
-    .promo img {
-      display: block;
-      width: min(100%, 560px);
-      height: auto;
-      margin: 0 auto;
-      border-radius: var(--radius);
-      box-shadow: var(--shadow-md);
-      border: 1px solid var(--line);
-    }
-    .promo figcaption {
-      margin-top: 12px;
-      font-size: .95rem;
-      color: var(--muted);
-    }
-
     footer {
       border-top: 1px solid var(--line);
-      background: var(--bg-soft);
-      padding: 26px 16px 34px;
+      background: #fff;
+      padding: 26px 16px 0;
       text-align: center;
       color: var(--muted);
       font-size: .95rem;
@@ -295,6 +331,7 @@
       outline-offset: 3px;
       border-radius: 4px;
     }
+    footer .brand-line { margin-top: 24px; }
 
     @media (prefers-reduced-motion: reduce) {
       html { scroll-behavior: auto; }
@@ -315,19 +352,32 @@
 
   <main>
     <section class="hero container" id="diagnosi" aria-labelledby="titolo-diagnosi">
-      <h1 id="titolo-diagnosi">Vendi casa in <span>Abruzzo o nelle Marche?</span></h1>
-      <p class="lead">Verifica sul nostro portale se il tuo Comune è coperto, richiedi una valutazione gratuita e scopri come vendere con STIMA360 a zero provvigioni per il proprietario.</p>
-      <a class="btn btn-primary" href="https://www.stima360.it">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/><circle cx="12" cy="14" r="2.5"/><path d="m14 16 2.5 2.5"/></svg>
-        Verifica il tuo Comune e valuta casa
-      </a>
-      <p class="tagline">Diagnosi Vendita gratuita: valore, vendibilità e strategia.</p>
+      <div class="hero-copy">
+        <h1 id="titolo-diagnosi">Vendi casa in <span>Abruzzo o nelle Marche?</span></h1>
+        <p class="lead">Verifica sul nostro portale se il tuo Comune è coperto, richiedi una valutazione gratuita e scopri come vendere con STIMA360 a zero provvigioni per il proprietario.</p>
+        <a class="btn btn-primary" href="https://www.stima360.it">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"/><path d="M5 10v10h14V10"/><circle cx="12" cy="14" r="2.5"/><path d="m14 16 2.5 2.5"/></svg>
+          Verifica il tuo Comune e valuta casa
+        </a>
+        <div class="tagline">
+          <span class="tagline-title">Diagnosi Vendita gratuita:</span>
+          <ul class="pillars" aria-label="valore, vendibilità e strategia">
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v18"/><path d="M16.5 7.5a3.5 3 0 0 0-3.5-2h-2.5a3 3 0 0 0 0 6h3a3 3 0 0 1 0 6H11a3.5 3 0 0 1-3.5-2"/></svg>Valore</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l5-5 4 4 8-8"/><path d="M15 8h5v5"/></svg>Vendibilità</li>
+            <li><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.2"/></svg>Strategia</li>
+          </ul>
+        </div>
+      </div>
+      <figure class="hero-visual">
+        <img src="bonus-casa/locandina.webp" alt="Locandina STIMA360: quanto vale davvero casa tua? Scopri quanto vale casa tua, prenota un appuntamento, scopri come vendere a provvigione zero." width="2000" height="2000" decoding="async">
+        <figcaption>Il percorso STIMA360 in tre passi: valutazione, appuntamento, strategia di vendita.</figcaption>
+      </figure>
     </section>
 
     <section class="pdf container" aria-labelledby="titolo-pdf">
       <div class="card">
-        <div class="icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 11v6"/><path d="m9.5 14.5 2.5 2.5 2.5-2.5"/></svg>
+        <div class="cover" aria-hidden="true">
+          <img src="bonus-casa/guida-anteprima.jpg" alt="" width="596" height="842" decoding="async">
         </div>
         <div>
           <h2 id="titolo-pdf">Bonus Casa 2026: scarica la guida gratuita</h2>
@@ -342,18 +392,12 @@
         </div>
       </div>
     </section>
-
-    <section class="promo container" aria-label="Il percorso STIMA360">
-      <figure>
-        <img src="bonus-casa/locandina.webp" alt="Locandina STIMA360: quanto vale davvero casa tua? Scopri quanto vale casa tua, prenota un appuntamento, scopri come vendere a provvigione zero." width="2000" height="2000" loading="lazy" decoding="async">
-        <figcaption>Il percorso STIMA360 in tre passi: valutazione, appuntamento, strategia di vendita.</figcaption>
-      </figure>
-    </section>
   </main>
 
   <footer>
     <p><strong>STIMA360</strong> — Immobiliare di Nuova Generazione</p>
     <p><a href="https://www.stima360.it">www.stima360.it</a></p>
+    <div class="brand-line" aria-hidden="true"></div>
   </footer>
 </body>
 </html>

@@ -47,6 +47,7 @@ def test_il_percorso_senza_barra_finale_porta_alla_pagina(client):
 @pytest.mark.parametrize("nome, tipo", [
     ("logo.jpg", "image/jpeg"),
     ("locandina.webp", "image/webp"),
+    ("guida-anteprima.jpg", "image/jpeg"),
     ("bonus-casa-2026.pdf", "application/pdf"),
 ])
 def test_gli_asset_rispondono_con_i_byte_originali(client, nome, tipo):
@@ -59,7 +60,7 @@ def test_gli_asset_rispondono_con_i_byte_originali(client, nome, tipo):
 def test_ogni_percorso_relativo_dell_html_esiste_ed_e_servito(client):
     html = (LANDING / "index.html").read_text(encoding="utf-8")
     relativi = set(re.findall(r'(?:src|href)="(assets/[^"]+)"', html))
-    assert relativi == {"assets/logo.jpg", "assets/locandina.webp", "assets/bonus-casa-2026.pdf"}
+    assert relativi == {"assets/logo.jpg", "assets/locandina.webp", "assets/guida-anteprima.jpg", "assets/bonus-casa-2026.pdf"}
     for rel in relativi:
         assert client.get(f"/bonus-casa-2026/{rel}").status_code == 200
 
