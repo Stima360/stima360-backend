@@ -44,8 +44,28 @@ SIMULATED = "simulated"
 
 
 @dataclass(frozen=True)
+class SignerSpec:
+    """Un firmatario richiesto: `role` e' 'visitor' o 'agent'. L'indirizzo identifica il firmatario presso il
+    fornitore; con la distribuzione disattivata il fornitore NON gli scrive."""
+    role: str
+    name: str
+    email: str
+    order: int = 1
+
+
+@dataclass(frozen=True)
+class ProviderSigner:
+    """Un firmatario come creato dal fornitore: l'identificativo remoto e il collegamento di firma personale
+    (e' un segreto: chi lo apre firma al posto di quel firmatario)."""
+    role: str
+    recipient_id: str | None
+    signing_url: str | None
+
+
+@dataclass(frozen=True)
 class ProviderRequest:
     reference: str
+    signers: tuple[ProviderSigner, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -59,10 +79,19 @@ PROVIDER_STATUSES = ("pending", "signed", "declined", "expired", "cancelled")
 
 
 @dataclass(frozen=True)
+class SignerStatus:
+    recipient_id: str | None
+    email: str | None
+    status: str                         # 'pending' | 'signed' | 'declined'
+    signed_at: datetime | None = None
+
+
+@dataclass(frozen=True)
 class ProviderStatus:
     status: str                         # uno di PROVIDER_STATUSES
     signed_at: datetime | None = None
     signature_level: str | None = None  # 'ses' | 'aes' | 'qes', come dichiarato dal fornitore
+    signers: tuple[SignerStatus, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -70,6 +99,17 @@ class ProviderEvent:
     event_id: str
     event_type: str
     reference: str | None
+    #: l'identificativo che NOI abbiamo dato alla richiesta (la chiave di idempotenza), se il fornitore lo rimanda
+    external_id: str | None = None
+
+
+class ProviderError(Exception):
+    """Il fornitore ha rifiutato o non ha risposto. Mai segreti ne' corpi di risposta nel messaggio."""
+
+    def __init__(self, code: str, message: str, *, status: int | None = None):
+        super().__init__(message)
+        self.code = code
+        self.status = status
 
 
 class InvalidEventSignature(Exception):
@@ -80,9 +120,12 @@ class SignatureProvider(Protocol):
     name: str
     is_simulation: bool
     environment: str                    # 'simulation' | 'sandbox' | 'production'
+    #: True se il fornitore sa gestire piu' firmatari con collegamenti personali (`signers`, `layout`, `title`)
+    supports_signers: bool
 
     def create_request(self, *, document: bytes, document_sha256: str, signer_name: str, signer_contact: str,
-                       expires_at: datetime, idempotency_key: str) -> ProviderRequest: ...
+                       expires_at: datetime, idempotency_key: str, signers: tuple[SignerSpec, ...] | None = None,
+                       layout: dict | None = None, title: str | None = None) -> ProviderRequest: ...
 
     def cancel_request(self, reference: str) -> None: ...
 
@@ -112,6 +155,7 @@ class SimulatedProvider:
     name = SIMULATED
     is_simulation = True
     environment = "simulation"
+    supports_signers = False
 
     def fetch_status(self, reference: str) -> ProviderStatus:
         return ProviderStatus("pending")
@@ -124,7 +168,7 @@ class SimulatedProvider:
         raise InvalidEventSignature("simulation")
 
     def create_request(self, *, document, document_sha256, signer_name, signer_contact, expires_at,
-                       idempotency_key) -> ProviderRequest:
+                       idempotency_key, signers=None, layout=None, title=None) -> ProviderRequest:
         return ProviderRequest(reference=f"SIM-{uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key).hex[:16]}")
 
     def cancel_request(self, reference: str) -> None:
@@ -170,12 +214,24 @@ class ProviderNotConfigured(Exception):
 REAL_PROVIDERS: dict[str, type] = {}
 
 
+def _real(name: str):
+    """La classe dell'adattatore reale di quel nome. Documenso e' caricato SOLO quando serve (nessun import circolare,
+    nessun effetto se non e' scelto): `REAL_PROVIDERS` resta il punto per aggiungere altri adattatori (e per i test)."""
+    if name in REAL_PROVIDERS:
+        return REAL_PROVIDERS[name]
+    if name == "documenso":
+        from .documenso import DocumensoProvider
+        return DocumensoProvider
+    return None
+
+
 def current() -> SignatureProvider:
     value = (os.getenv(PROVIDER_ENV) or SIMULATED).strip()
     if value == SIMULATED:
         return SimulatedProvider()
-    if value in REAL_PROVIDERS:
-        return REAL_PROVIDERS[value]()
+    cls = _real(value)
+    if cls is not None:
+        return cls()
     raise ProviderNotConfigured(value)
 
 
@@ -184,6 +240,7 @@ def by_name(name: str) -> SignatureProvider:
     stato), anche se nel frattempo `ESIGN_PROVIDER` e' cambiato."""
     if name == SIMULATED:
         return SimulatedProvider()
-    if name in REAL_PROVIDERS:
-        return REAL_PROVIDERS[name]()
+    cls = _real(name)
+    if cls is not None:
+        return cls()
     raise ProviderNotConfigured(name)

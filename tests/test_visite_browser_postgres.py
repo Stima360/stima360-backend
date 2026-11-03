@@ -123,6 +123,7 @@ const [base, email, password, aid, giorno, shots, SEGRETO, TESTO] = process.argv
   await page.waitForSelector('[data-appointment-sheet] [data-visit-sheet-generate]', { timeout: 8000 });
   await page.click('[data-appointment-sheet] [data-visit-sheet-generate]');
   await page.waitForSelector('[data-appointment-sheet] .success-box', { timeout: 15000 });
+  await page.waitForSelector('[data-appointment-sheet] [data-visit-sheet-signature-state]', { timeout: 15000 });   // il foglio si ridisegna dopo l'avviso
   out.steps.foglioMessaggio = await testo('[data-appointment-sheet] .success-box');
   out.steps.foglioRiga = await testo('[data-appointment-sheet] .visit-sheet-line');
   out.steps.foglioFirma = await page.$eval('[data-visit-sheet-signature-state]', (n) => n.textContent.trim()).catch(() => null);

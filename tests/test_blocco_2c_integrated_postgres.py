@@ -82,7 +82,9 @@ NUOVE = ("115_agency_logos", "116_property_valuations", "117_property_valuation_
          "124_do_not_contact_and_link_revocation", "125_signature_provider_readiness",
          "126_whatsapp_inbound_reads",
          # SENTINELLA AGGIORNATA DAL PUNTO 2 della roadmap: la 127 (conferme degli appuntamenti) in coda.
-         "127_appointment_confirmations")
+         "127_appointment_confirmations",
+         # SENTINELLA AGGIORNATA DALL'INTEGRAZIONE DOCUMENSO: la 128 (firmatari delle richieste di firma).
+         "128_signature_request_signers")
 BASE = {"characteristics": "Trilocale sintetico al secondo piano.",
         "surface": {"value": "85", "kind": "commerciale", "source": "planimetria"},
         "rationale": "Motivazione sintetica: stato buono, zona servita.",

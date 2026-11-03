@@ -7,6 +7,10 @@ Oggi l'unico fornitore e' l'adattatore SIMULATO: nessuna firma valida.
     GET  /api/signature-requests?visit_sheet_id=          richieste di un foglio
     POST /api/signature-requests/{id}/cancel              annulla
     POST /api/signature-requests/{id}/simulate            esito simulato: completed | declined
+    POST /api/signature-requests/{id}/refresh             rilegge lo stato dal fornitore reale
+    GET  /api/signature-requests/{id}/signing-links       link PERSONALI di firma (segreti, no-store)
+    GET  /api/signature-requests/{id}/signing-links/{role}/qr.svg   il QR del link
+    GET  /api/signature-requests/config/provider          quale servizio e' attivo (nessun segreto)
     GET  /api/signature-requests/{id}/document            documento ricevuto (ricevuta di simulazione)
 """
 from __future__ import annotations
@@ -14,7 +18,8 @@ from __future__ import annotations
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
+from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from operator_auth.context import OperatorContext
@@ -89,8 +94,39 @@ def document(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(r
 @router.get("/{request_id}/audit-trail")
 def audit_trail(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
     out = _call(service.audit_trail, ctx, request_id)
-    return Response(content=out["data"], media_type="application/pdf", headers={
+    return Response(content=out["data"], media_type=out.get("media_type", "application/pdf"), headers={
         "Content-Disposition": f'attachment; filename="{out["filename"]}"', "Cache-Control": "no-store"})
+
+
+@router.post("/{request_id}/refresh")
+def refresh(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
+    """Rilegge lo stato dal fornitore (per quando i webhook non arrivano)."""
+    return JSONResponse(_call(service.refresh, ctx, request_id), headers={"Cache-Control": "no-store"})
+
+
+@router.get("/{request_id}/signing-links")
+def signing_links(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
+    """I collegamenti PERSONALI di firma: segreti, solo per la richiesta aperta, mai in cache."""
+    return JSONResponse(_call(service.signing_links, ctx, request_id), headers={"Cache-Control": "no-store"})
+
+
+@router.get("/{request_id}/signing-links/{role}/qr.svg")
+def signing_qr(request_id: int = Path(..., ge=1), role: Literal["visitor", "agent"] = Path(...),
+               ctx: OperatorContext = Depends(require_operator)):
+    svg = _call(service.signing_qr, ctx, request_id, role)
+    return Response(content=svg, media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
+
+
+@router.get("/config/provider")
+def provider_config(ctx: OperatorContext = Depends(require_operator)):
+    """Quale servizio di firma e' attivo (per mostrare il pulsante giusto). Nessun segreto."""
+    ctx.require_agency()
+    try:
+        provider = providers.current()
+    except providers.ProviderNotConfigured:
+        return {"configured": False, "provider": None, "simulation": False, "environment": None, "signers": False}
+    return {"configured": True, "provider": provider.name, "simulation": provider.is_simulation,
+            "environment": provider.environment, "signers": bool(getattr(provider, "supports_signers", False))}
 
 
 @public_router.post("/webhooks/{provider}")
@@ -102,3 +138,27 @@ async def provider_event(request: Request, provider: str = PROVIDER):
         return _call(service.handle_provider_event, provider, dict(request.headers), raw)
     except providers.InvalidEventSignature as exc:
         raise HTTPException(status_code=401, detail="Evento non autentico") from exc
+
+
+# ---------------------------------------------------------------------------
+# Riconciliazione periodica: stesso segreto di servizio e stesse agenzie consentite del cron delle comunicazioni.
+# Senza segreto configurato e' SPENTA (503); il segreto non apre nessun'altra rotta.
+# ---------------------------------------------------------------------------
+
+internal_router = APIRouter(prefix="/api/internal/esign", tags=["esign-internal"])
+
+
+class ReconcileRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agency_id: int = Field(..., gt=0)
+    limit: int = Field(50, ge=1, le=200)
+
+
+@internal_router.post("/reconcile")
+def reconcile(body: ReconcileRequest, token: str | None = Header(default=None, alias="X-Stima360-Cron-Token")):
+    from communication import cron_router
+    cron_router._autentica(token)
+    if body.agency_id not in cron_router.agenzie_consentite():
+        raise HTTPException(status_code=403, detail={"code": "agency_not_allowed"})
+    return _call(service.reconcile, body.agency_id, limit=body.limit)

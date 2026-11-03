@@ -65,7 +65,6 @@ ALTRI MODI: `preflight` (sola lettura) e `cleanup`.
 from __future__ import annotations
 
 import argparse
-import base64
 import hashlib
 import os
 import re
@@ -74,7 +73,6 @@ import shutil
 import subprocess
 import sys
 import uuid
-import zlib
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -141,120 +139,15 @@ class Registro:
 # Testo di un PDF (pdftotext se c'e', altrimenti un estrattore interno per i PDF di reportlab)
 # ---------------------------------------------------------------------------
 
-_STRINGA = re.compile(rb"\((?:\\.|[^\\()])*\)", re.S)
-_TOKEN = re.compile(rb"/([^\s/\[\]()<>]+)\s+[-\d.]+\s+Tf|<([0-9A-Fa-f\s]*)>|(\((?:\\.|[^\\()])*\))", re.S)
-
-
-def _decodifica_stringa(raw: bytes) -> bytes:
-    corpo = raw[1:-1]
-    out = bytearray()
-    i = 0
-    while i < len(corpo):
-        c = corpo[i]
-        if c == 0x5C and i + 1 < len(corpo):                       # backslash
-            n = corpo[i + 1]
-            if 0x30 <= n <= 0x37:                                  # \ddd ottale
-                j = i + 1
-                cifre = b""
-                while j < len(corpo) and len(cifre) < 3 and 0x30 <= corpo[j] <= 0x37:
-                    cifre += bytes([corpo[j]])
-                    j += 1
-                out.append(int(cifre, 8) & 0xFF)
-                i = j
-                continue
-            out.extend({0x6E: b"\n", 0x72: b"\r", 0x74: b"\t", 0x62: b"\b", 0x66: b"\f"}.get(n, bytes([n])))
-            i += 2
-            continue
-        out.append(c)
-        i += 1
-    return bytes(out)
-
-
-def _flussi(pdf: bytes) -> dict[int, tuple[bytes, bytes | None]]:
-    """numero oggetto -> (dizionario/corpo, dati decodificati del flusso o None)."""
-    oggetti: dict[int, tuple[bytes, bytes | None]] = {}
-    for m in re.finditer(rb"(\d+) 0 obj(.*?)endobj", pdf, re.S):
-        corpo = m.group(2)
-        dati = None
-        k = re.search(rb"stream\r?\n(.*?)endstream", corpo, re.S)
-        if k:
-            grezzo = k.group(1).strip()
-            try:
-                if grezzo.endswith(b"~>"):
-                    grezzo = base64.a85decode(grezzo[:-2], adobe=False)
-                dati = zlib.decompress(grezzo)
-            except Exception:
-                dati = None
-        oggetti[int(m.group(1))] = (corpo[:k.start()] if k else corpo, dati)
-    return oggetti
-
-
-def _cmap(testo: bytes) -> tuple[int, dict[int, str]]:
-    """Mappa ToUnicode: (byte per codice, codice -> testo)."""
-    larghezza = 1
-    cs = re.search(rb"begincodespacerange\s*<([0-9A-Fa-f]+)>", testo)
-    if cs:
-        larghezza = max(1, len(cs.group(1)) // 2)
-
-    def u(h: bytes) -> str:
-        return bytes.fromhex(h.decode()).decode("utf-16-be", errors="replace")
-
-    mappa: dict[int, str] = {}
-    for blocco in re.finditer(rb"beginbfchar(.*?)endbfchar", testo, re.S):
-        for src, dst in re.findall(rb"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", blocco.group(1)):
-            mappa[int(src, 16)] = u(dst)
-    for blocco in re.finditer(rb"beginbfrange(.*?)endbfrange", testo, re.S):
-        for lo, hi, dst in re.findall(rb"<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>\s*<([0-9A-Fa-f]+)>", blocco.group(1)):
-            base = u(dst)
-            for n, codice in enumerate(range(int(lo, 16), int(hi, 16) + 1)):
-                mappa[codice] = base[:-1] + chr(ord(base[-1]) + n) if base else ""
-    return larghezza, mappa
-
-
 def testo_pdf(pdf: bytes) -> str:
-    """Il testo del PDF, spazi normalizzati. Usa `pdftotext` quando e' installato; altrimenti legge
-    i PDF di reportlab: font standard (stringhe in chiaro) o TrueType incorporati (glifi + mappa
-    ToUnicode). Chi confronta il testo deve ignorare gli spazi (`contiene`)."""
+    """Il testo del PDF, spazi normalizzati. Usa `pdftotext` quando e' installato; altrimenti il lettore interno
+    (`esign.pdf_text`: font standard e TrueType incorporati con mappa ToUnicode). Chi confronta il testo deve
+    ignorare gli spazi (`contiene`)."""
     if shutil.which("pdftotext"):
         out = subprocess.run(["pdftotext", "-layout", "-", "-"], input=pdf, capture_output=True, check=True)
         return " ".join(out.stdout.decode("utf-8", errors="replace").split())
-    oggetti = _flussi(pdf)
-    cmap_per_font: dict[int, tuple[int, dict[int, str]]] = {}
-    for num, (corpo, _dati) in oggetti.items():
-        t = re.search(rb"/ToUnicode\s+(\d+) 0 R", corpo)
-        if t and int(t.group(1)) in oggetti and oggetti[int(t.group(1))][1] is not None:
-            cmap_per_font[num] = _cmap(oggetti[int(t.group(1))][1])
-    nome_font: dict[bytes, int] = {}
-    for corpo, _ in oggetti.values():
-        for regione in re.finditer(rb"/Font\s*(?:<<(.*?)>>|(\d+) 0 R)", corpo, re.S):
-            testo_regione = regione.group(1)
-            if testo_regione is None and int(regione.group(2)) in oggetti:
-                testo_regione = oggetti[int(regione.group(2))][0]
-            for nome, num in re.findall(rb"/([^\s/\[\]()<>]+)\s+(\d+) 0 R", testo_regione or b""):
-                nome_font[nome] = int(num)
-    pezzi: list[str] = []
-    for _num, (_corpo, dati) in sorted(oggetti.items()):
-        if not dati or b"BT" not in dati:
-            continue
-        for blocco in re.finditer(rb"BT(.*?)ET", dati, re.S):
-            cmap = None
-            for tok in _TOKEN.finditer(blocco.group(1)):
-                if tok.group(1) is not None:
-                    cmap = cmap_per_font.get(nome_font.get(tok.group(1), -1))
-                    continue
-                if tok.group(2) is not None:
-                    h = re.sub(rb"\s+", b"", tok.group(2))
-                    dati_str = bytes.fromhex((h + b"0" * (len(h) % 2)).decode())
-                else:
-                    dati_str = _decodifica_stringa(tok.group(3))
-                if cmap is None:
-                    pezzi.append(dati_str.decode("cp1252", errors="replace"))
-                else:
-                    larghezza, mappa = cmap
-                    pezzi.append("".join(mappa.get(int.from_bytes(dati_str[i:i + larghezza], "big"), "")
-                                         for i in range(0, len(dati_str), larghezza)))
-                pezzi.append(" ")
-    return " ".join("".join(pezzi).split())
+    from esign.pdf_text import extract_text
+    return extract_text(pdf)
 
 
 def contiene(testo: str, frase: str) -> bool:

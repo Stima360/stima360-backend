@@ -7,9 +7,13 @@
 // (esito registrato) e non è mai un documento firmato. Il download passa dal
 // client autenticato. Tutto via `textContent`.
 //
-// BLOCCO-6B: per ogni foglio, le richieste di firma. Oggi l'unico fornitore è
-// l'adattatore SIMULATO: ogni richiesta e ogni esito portano la scritta
-// «SIMULAZIONE — nessuna firma valida» e la visita non risulta mai firmata.
+// BLOCCO-6B: per ogni foglio, le richieste di firma. Con l'adattatore SIMULATO ogni
+// richiesta e ogni esito portano la scritta «SIMULAZIONE — nessuna firma valida».
+//
+// DOCUMENSO: con il servizio reale configurato la richiesta ha DUE firmatari (cliente e
+// agente). Il servizio NON scrive a nessuno: l'operatore apre i collegamenti personali o
+// mostra il QR al cliente, che firma dal telefono. Il livello è sempre «firma elettronica
+// semplice» e in ambiente di prova la firma non è utilizzabile. Tutto via `textContent`.
 
 import { apiGet, apiPost } from '../core/api-client.js';
 
@@ -74,15 +78,69 @@ export function signatureLine(r) {
   else if (r.provider_environment === 'sandbox') parts.unshift('AMBIENTE DI PROVA DEL FORNITORE — nessuna firma valida');
   // condizione tecnica, non giudizio legale
   if (r.status === 'signed') parts.push(r.valid_signature
-    ? `firmata nell'ambiente reale del fornitore (livello dichiarato: ${(r.signature_level || '').toUpperCase()})`
+    ? `firmata nell'ambiente reale del fornitore (${r.signature_level_label || `livello dichiarato: ${(r.signature_level || '').toUpperCase()}`})`
     : 'firma di prova, non utilizzabile');
   return parts.join(' · ');
 }
 
-async function mountSignatures(holder, sheet) {
+function safeHref(url) {
+  try {
+    const u = new URL(url);
+    return (u.protocol === 'https:' || u.protocol === 'http:') ? u.href : null;
+  } catch (e) { return null; }
+}
+
+function signersBlock(r) {
+  const list = el('ul', 'visit-sign-signers');
+  for (const s of r.signers || []) {
+    list.appendChild(el('li', null, `${s.role_label}: ${s.name} — ${s.status_label}`));
+  }
+  return list;
+}
+
+/** I collegamenti personali: segreti, caricati solo su richiesta e mai tenuti nella pagina oltre a questa vista. */
+async function showLinks(r, holder) {
+  holder.replaceChildren();
+  let data;
+  try { data = await apiGet(`${ESIGN}/${r.id}/signing-links`); } catch (error) {
+    holder.appendChild(el('div', 'error-box', errorText(error)));
+    return;
+  }
+  holder.appendChild(el('p', 'muted', 'Il servizio di firma non invia nulla. Apri il collegamento o fai inquadrare il QR al cliente: '
+    + 'chi lo apre firma al posto di quella persona, quindi non condividerlo.'));
+  for (const item of data.items) {
+    const row = el('div', 'visit-sign-link');
+    row.appendChild(el('strong', null, `${item.role_label}: ${item.name}`));
+    row.appendChild(el('span', 'badge badge-gray', item.status_label));
+    const href = item.url ? safeHref(item.url) : null;
+    if (href) {
+      const open = el('a', 'btn ghost', 'Apri per firmare');
+      open.href = href; open.target = '_blank'; open.rel = 'noopener noreferrer';
+      open.setAttribute('data-signature-open', item.role);
+      const copy = button('Copia collegamento', 'ghost', 'data-signature-copy');
+      copy.addEventListener('click', async () => {
+        try { await navigator.clipboard.writeText(href); copy.textContent = 'Copiato'; } catch (e) { copy.textContent = 'Copia non riuscita'; }
+      });
+      row.append(open, copy);
+      if (item.role === 'visitor') {
+        const qr = el('img', 'visit-sign-qr');
+        qr.alt = 'QR del collegamento di firma del cliente';
+        qr.width = 180; qr.height = 180;
+        qr.src = `${ESIGN}/${r.id}/signing-links/visitor/qr.svg`;
+        qr.setAttribute('data-signature-qr', '');
+        row.appendChild(qr);
+      }
+    }
+    holder.appendChild(row);
+  }
+}
+
+async function mountSignatures(holder, sheet, badge) {
   const box = el('div', 'visit-sign');
   box.setAttribute('data-signatures', String(sheet.id));
   holder.appendChild(box);
+  let config = { signers: false };
+  try { config = await apiGet(`${ESIGN}/config/provider`); } catch (error) { /* senza configurazione resta la simulazione */ }
   async function load() {
     box.replaceChildren();
     let data;
@@ -91,11 +149,35 @@ async function mountSignatures(holder, sheet) {
       box.appendChild(el('div', 'error-box', errorText(error)));
       return;
     }
+    if (badge) {                                                 // lo stato del foglio segue la richiesta REALE (mai la simulazione)
+      const real = data.items.filter((x) => !x.simulation);
+      const signed = real.find((x) => x.status === 'signed');
+      const waiting = real.find((x) => x.status === 'sent');
+      if (signed) {
+        badge.textContent = signed.valid_signature ? 'Firmato (firma elettronica semplice)' : 'Firmato in prova — non utilizzabile';
+        badge.setAttribute('data-visit-sheet-signature-state', signed.valid_signature ? 'signed' : 'signed_test');
+      } else if (waiting) {
+        badge.textContent = 'In attesa di firma';
+        badge.setAttribute('data-visit-sheet-signature-state', 'pending');
+      }
+    }
     for (const r of data.items) {
       const line = el('div', 'visit-sheet-line');
       line.setAttribute('data-signature', String(r.id));
       line.appendChild(el('span', r.simulation ? 'badge badge-gray' : null, signatureLine(r)));
+      if (r.signers && r.signers.length) line.appendChild(signersBlock(r));
+      const linksHolder = el('div', 'visit-sign-links');
       if (r.status === 'sent') {
+        if (!r.simulation && r.signers && r.signers.length) {
+          const links = button('Collegamenti di firma', 'primary', 'data-signature-links');
+          links.addEventListener('click', () => showLinks(r, linksHolder));
+          const refresh = button('Aggiorna stato', 'ghost', 'data-signature-refresh');
+          refresh.addEventListener('click', async () => {
+            refresh.disabled = true;
+            try { await apiPost(`${ESIGN}/${r.id}/refresh`, {}); await load(); } catch (error) { refresh.disabled = false; box.appendChild(el('div', 'error-box', errorText(error))); }
+          });
+          line.append(links, refresh);
+        }
         for (const [label, action, body] of [['Annulla', 'cancel', {}],
           ...(r.simulation ? [['Simula completata', 'simulate', { outcome: 'completed' }], ['Simula rifiutata', 'simulate', { outcome: 'declined' }]] : [])]) {
           const b = button(label, 'ghost', `data-signature-${action}`);
@@ -117,14 +199,20 @@ async function mountSignatures(holder, sheet) {
           `${r.simulation ? 'SIMULAZIONE-non-firmato' : 'documento'}-richiesta-${r.id}.pdf`, box));
         line.appendChild(d);
       }
+      line.appendChild(linksHolder);
       box.appendChild(line);
     }
-    const ask = button('Richiedi firma (simulazione)', 'ghost', 'data-signature-new');
+    const real = Boolean(config && config.signers);
+    const open = (data.items || []).some((r) => r.status === 'sent');
+    if (real && open) return;                                   // una sola richiesta aperta per foglio
+    if (!real && config && config.configured && !config.simulation) return;   // servizio reale senza firmatari multipli: non gestito qui
+    const ask = button(real ? 'Richiedi firma elettronica' : 'Richiedi firma (simulazione)', real ? 'primary' : 'ghost', 'data-signature-new');
     ask.addEventListener('click', () => {
       const form = el('div', 'visit-sign-form');
       const name = el('input', 'input'); name.placeholder = 'Nome del firmatario'; name.maxLength = 120;
-      const contact = el('input', 'input'); contact.placeholder = 'Email o telefono'; contact.maxLength = 200;
-      const send = button('Crea richiesta simulata', 'primary', 'data-signature-create');
+      const contact = el('input', 'input'); contact.placeholder = real ? 'Email del cliente' : 'Email o telefono'; contact.maxLength = 200;
+      if (real) contact.type = 'email';
+      const send = button(real ? 'Crea richiesta di firma' : 'Crea richiesta simulata', 'primary', 'data-signature-create');
       const key = newKey();
       send.addEventListener('click', async () => {
         send.disabled = true;
@@ -134,7 +222,11 @@ async function mountSignatures(holder, sheet) {
           await load();
         } catch (error) { send.disabled = false; form.appendChild(el('div', 'error-box', errorText(error))); }
       });
-      form.append(el('p', 'muted', 'Simulazione: nessun messaggio viene inviato e nessuna firma valida viene prodotta.'), name, contact, send);
+      form.append(el('p', 'muted', real
+        ? 'Firma elettronica SEMPLICE, con il cliente e l\u2019agente della visita. L\u2019email serve solo a identificare il cliente presso il '
+          + 'servizio di firma, che non gli scrive: nessun messaggio viene inviato. ' + (config.environment === 'production'
+          ? 'Ambiente reale.' : 'AMBIENTE DI PROVA: la firma non sar\u00e0 utilizzabile.')
+        : 'Simulazione: nessun messaggio viene inviato e nessuna firma valida viene prodotta.'), name, contact, send);
       ask.replaceWith(form);
     });
     box.appendChild(ask);
@@ -181,7 +273,7 @@ export function buildVisitItem(v, reload, { compact = false } = {}) {
     dl.addEventListener('click', () => downloadPdf(s, item));
     line.appendChild(dl);
     item.appendChild(line);
-    mountSignatures(item, s).catch(() => {});
+    mountSignatures(item, s, firma).catch(() => {});
   }
   if (v.can_generate) {
     const gen = button('Genera foglio visita', 'ghost', 'data-visit-sheet-generate');

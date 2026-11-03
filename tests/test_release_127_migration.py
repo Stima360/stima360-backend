@@ -27,7 +27,8 @@ def test_embedded_checksums_match_the_repository():
         assert _sha(ROOT / "migrations" / f"{v}.sql") == up, v
         assert _sha(ROOT / "migrations" / f"{v}_down.sql") == down, v
     g = rel.Gate()
-    rel.files_gate(g)
+    # SENTINELLA AGGIORNATA DALL'INTEGRAZIONE DOCUMENSO: la 128 e' ora nel deploy, dopo la 127 (come in `verify`).
+    rel.files_gate(g, allow_later=True)
     assert g.problems == []
 
 

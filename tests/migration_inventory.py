@@ -119,6 +119,8 @@ APPROVED_VERSIONS = (
     "125_signature_provider_readiness",
     "126_whatsapp_inbound_reads",
     "127_appointment_confirmations",
+    # SENTINELLA AGGIORNATA DALL'INTEGRAZIONE DOCUMENSO: la 128 (firmatari delle richieste di firma; additiva).
+    "128_signature_request_signers",
 )
 
 
