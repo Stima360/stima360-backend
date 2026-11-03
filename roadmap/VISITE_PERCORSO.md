@@ -78,3 +78,55 @@ Conferme e promemoria già collaudati (Punto 2) non sono stati modificati nella 
 4. «Genera foglio visita» → PDF con «Da firmare», presente nell'archivio.
 5. «Aggiornamento al proprietario»: bozza → anteprima → approvazione → visibile nel portale di un proprietario di prova.
 6. Controllare assenza di duplicati, isolamento tra agenzie e assenza di dati personali nel testo pubblicato.
+
+---
+
+## Collaudo reale su TEST — `scripts/collaudo_visite.py`
+
+Una sola visita sintetica, dall'inizio alla fine, sul database TEST, come **Render One-Off Job** del servizio TEST
+(stesse variabili d'ambiente del servizio). Importa l'applicazione vera e la pilota in-process: stesse rotte, stessi
+service, stesso database; non apre porte, non chiama il cron, non invia nulla.
+
+```bash
+python scripts/collaudo_visite.py avvia --expected-host <HOST_DB_TEST_VERIFICATO>
+```
+
+Prima si può lanciare la sola lettura: `python scripts/collaudo_visite.py preflight --expected-host <HOST>`.
+Se l'agenzia, l'attore o l'agente non si ricavano in modo univoco, lo script si ferma e chiede
+`--agency-id`, `--actor-user-id`, `--agent-user-id`.
+
+**Guardie (si ferma prima di toccare il database):** `DB_NAME` = `stima360_db_test`; `DB_HOST` = host indicato a mano;
+primario e non in recovery; nessuna variabile d'ambiente dichiara «production»; l'elenco
+`APPOINTMENT_NOTIFICATIONS_ALLOWED_RECIPIENTS` non è `*` e non contiene indirizzi sintetici;
+`PUBLIC_BOOKING_IP_PEPPER` presente; agenzia/attore/agente attivi; l'agente ha un orario di lavoro; tabelle
+della catena presenti. Non crea utenti, orari di lavoro, migrazioni.
+
+**Cosa scrive (tutto marcato `COLLAUDO VISITE <run>` / `COLLAUDO-VIS-<run>`, indirizzo `@example.invalid`):** immobile
+con incarico dal percorso ordinario (acquisizione → sopralluogo → incarico, nessun trigger disattivato), venditore,
+collegamento di prenotazione, acquirente (nato dalla prenotazione, con un numero sintetico verificato libero), visita,
+foglio visita, aggiornamento al proprietario, proprietario del portale sintetico (contatto, account, accesso, sessione
+di 2 ore). **Due soli ritocchi diretti**, su righe appena create e verificate dal codice immobile: l'orario del sopralluogo
+e quello della visita vengono spostati nel passato (l'Agenda completa solo ciò che è iniziato).
+
+**Cosa verifica (PASS/FAIL per ogni controllo, report per passo):**
+
+| Passo | Controlli |
+|---|---|
+| 1 Prenotazione → Agenda | orari liberi; doppio clic = una prenotazione; un solo appuntamento «buyer_visit/scheduled/booking_link»; immobile e agente giusti; cliente = contatto sintetico (nessun contatto reale agganciato); `property_visits` collegata; scheda e elenco Agenda; nessun messaggio al cliente |
+| 2 Esito | passato l'orario la visita non si chiude da sola; esito rifiutato prima della chiusura; «Visita effettuata»; interesse e feedback; `property_visits` e scheda Agenda |
+| 3 Schede | scheda immobile e scheda contatto mostrano la stessa visita e lo stesso esito |
+| 4 Foglio PDF | generazione; «Da firmare», nessuna firma simulata; PDF vero con SHA-256 uguale all'archiviato; testo del PDF (cliente, immobile, agenzia, agente, stato, firma) senza dati riservati; nessun duplicato; archiviazione `visit_sheets` collegata ad appuntamento e immobile |
+| 5 Proprietario | proposta di testo; bozza invisibile al portale; niente pubblicazione senza approvazione esplicita; approvazione; testo nel portale del proprietario sintetico; report del portale e relativo PDF (testo letto dal PDF) |
+| 6 Privacy e controlli | nessun dato dell'acquirente/nota interna/prezzo minimo al proprietario; testo con telefono bloccato; altro agente e altra agenzia: 404/403 su 8 operazioni ciascuno; portale: altro immobile e accesso anonimo neutri; una sola riga per fatto; nessun messaggio al cliente; **ritiro** della pubblicazione: sparisce dal portale e dal report, resta lo storico |
+
+Il testo dei PDF si legge con `pdftotext` se c'è, altrimenti con un estrattore interno (font standard e TrueType incorporati
+con mappa ToUnicode), confrontato con poppler sui PDF reali nei test.
+
+**Pulizia (automatica a fine collaudo; rilanciabile con `cleanup [--run-id <RUN>]`):** sessione e accesso del proprietario
+sintetico chiusi, collegamento disattivato, immobile archiviato. Le righe restano come storico, marcate.
+
+**Da sapere:** se l'agente ha un Google Calendar collegato, il cron esistente di sincronizzazione può riportarvi la visita
+sintetica come evento senza invitati (`sendUpdates=none`, nessun partecipante); non è rimovibile da qui.
+
+**Prova generale:** `tests/test_collaudo_visite_script_postgres.py` (7 test) esegue lo stesso script contro un PostgreSQL
+usa e getta, anche senza `pdftotext`, e le sue guardie (host diverso, ambiente «production», destinatari `*`).
