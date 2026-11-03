@@ -110,6 +110,10 @@ PUBLIC_BY_DESIGN = {
     # dedicata (non `Authorization`). Spenta senza segreto (503); solo le
     # agenzie consentite dal server; esegue solo tick, promemoria e dispatch.
     ("POST", "/api/internal/communication/cron/run"),
+    # SENTINELLA AGGIORNATA DALL'INTEGRAZIONE DOCUMENSO: la riconciliazione periodica delle firme. Stesso SEGRETO DI
+    # SERVIZIO e stesse agenzie consentite del cron delle comunicazioni (`communication.cron_router._autentica`), confronto
+    # a tempo costante; spenta senza segreto (503); non legge dati: restituisce solo conteggi.
+    ("POST", "/api/internal/esign/reconcile"),
     # A30-12: il booking pubblico a link singolo-agente. Autenticato dal
     # token opaco del link (SOLO il suo SHA-256 vive nel database), non da
     # una sessione: chi apre il link non e' un operatore. Le tre rotte
