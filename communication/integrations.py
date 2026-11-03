@@ -232,7 +232,7 @@ TASK_TYPE_RISPOSTA_V3 = "followup_v3_reply"
 TITOLO_RISPOSTA_V3 = "Controlla la risposta all'email 15 (A/B/C/D)"
 DESCRIZIONE_RISPOSTA_V3 = (
     "Il contatto ha ricevuto l'email 15 della sequenza «Follow-up proprietari 180 giorni» "
-    "(«Ti regalo una mini-diagnosi della tua situazione immobiliare») e puo' rispondere "
+    "(«A che punto sei con la vendita di casa?») e puo' rispondere "
     "A, B, C oppure D. Il CRM non legge le risposte: controlla la casella di risposta e "
     "registra l'esito nella scheda del contatto.\n"
     "A = proprietario indeciso\n"

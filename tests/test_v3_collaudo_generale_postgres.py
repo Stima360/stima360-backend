@@ -134,13 +134,15 @@ def test_01_collaudo_completo_180_giorni(reale):
     assert [p["oggetto"] for p in marketing] == [o for _, o in testi.CALENDARIO]
     for p in marketing:
         assert p["allegato"] is None
-        assert "Il team STIMA360" not in p["corpo_testo"]
+        # firma del testo approvato, poi la chiusura del CRM (agenzia, disiscrizione)
+        assert "Il team STIMA360\n\n" in p["corpo_testo"]
         assert "Se non vuoi piu' ricevere questi messaggi: " + BASE in p["corpo_testo"]
         assert p["intestazioni"]["List-Unsubscribe"].startswith("<" + BASE)
         assert 'href="' + BASE in p["html"]
     sesta = marketing[5]
     link = BASE + guida_pdf.PERCORSO
-    assert f"🎁 Puoi scaricarla gratuitamente qui: {link}" in sesta["corpo_testo"]
+    assert f"che puoi scaricare qui: {link}.\n" in sesta["corpo_testo"]
+    assert f'href="{link}" style="display:inline-block' in sesta["html"], "il pulsante giallo porta al PDF"
     assert f'<a href="{link}">' in sesta["html"]
     assert "allegat" not in sesta["corpo_testo"].lower()
     pdf = r["http"].get(guida_pdf.PERCORSO)

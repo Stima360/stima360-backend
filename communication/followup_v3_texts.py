@@ -16,8 +16,9 @@ FORMATO DI OGNI CORPO
   * `{{link_guida}}` (SOLO nella email 6) diventa il link di download della
     guida PDF ufficiale, servito dal CRM soltanto se il file e' presente e
     integro (`communication.guida`); senza, l'email 6 non parte;
-  * NON scrivere firma ne' link di disiscrizione: li aggiunge il sistema in
-    fondo a ogni email (agenzia, «su Stima360», link di disiscrizione).
+  * la firma «Il team STIMA360» fa parte del testo approvato; il link di
+    disiscrizione NON si scrive: lo aggiunge il sistema in fondo a ogni
+    email (agenzia, «su Stima360», link di disiscrizione).
 """
 from __future__ import annotations
 
@@ -26,22 +27,22 @@ import re
 #: (giorno, oggetto) - il calendario approvato. Il giorno e' contato dal
 #: momento iniziale della sequenza (data del consenso recente o ingresso).
 CALENDARIO: tuple[tuple[int, str], ...] = (
-    (4, "Quanto ti costa davvero vendere casa?"),
-    (8, "Ti regalo le 7 fotografie che possono fare la differenza 📸"),
-    (12, "Il tuo prezzo di vendita supera questo test?"),
-    (18, "Chi comprerebbe la tua casa? Facciamo un gioco"),
-    (25, "I documenti che conviene cercare prima di vendere"),
-    (33, "🎁 Un regalo per te: la guida completa per vendere casa"),
-    (42, "La tua casa ha un superpotere. Qual è?"),
-    (52, "Prima di spendere soldi per ristrutturare, guarda questo"),
-    (63, "Accetteresti 200.000 € oppure 195.000 €?"),
-    (75, "Il tuo annuncio non riceve chiamate? Prova questa diagnosi"),
-    (88, "La tua planimetria racconta tutta la verità?"),
-    (102, "Un trucco per confrontare i prezzi delle case vicine"),
-    (117, "Hai 15 minuti? Prepara la casa per una visita"),
-    (135, "Prima di dire SÌ a un acquirente, chiedi queste 5 cose"),
-    (157, "Ti regalo una mini-diagnosi della tua situazione immobiliare"),
-    (180, "Il tuo piano per vendere casa, in 30 giorni"),
+    (4, 'Vendi a 200.000 €: quanto ti rimane davvero?'),
+    (8, 'Le 7 foto da non dimenticare nel tuo annuncio'),
+    (12, 'Hai scelto il prezzo guardando le altre case in vendita?'),
+    (18, 'Quale acquirente potrebbe scegliere casa tua?'),
+    (25, 'Trovi l’acquirente. Ma i documenti sono pronti?'),
+    (33, 'La tua guida per preparare la vendita di casa'),
+    (42, '“Terrazzo di 40 m²”: cosa significa per chi compra?'),
+    (52, 'Fare lavori prima di vendere: ne vale la pena?'),
+    (63, 'Meglio un’offerta da 200.000 € o da 195.000 €?'),
+    (75, 'Il tuo annuncio è online, ma non arrivano chiamate?'),
+    (88, 'Hai spostato una parete? Controlla questo prima di vendere'),
+    (102, 'Stessa via, stessa metratura. Perché due prezzi diversi?'),
+    (117, 'Cinque cose da fare prima di una visita'),
+    (135, 'Prima di firmare una proposta, verifica questi 5 punti'),
+    (157, 'A che punto sei con la vendita di casa?'),
+    (180, 'I primi 30 giorni per mettere in vendita casa'),
 )
 
 #: L'email con la guida PDF, e quella a cui si risponde A/B/C/D.
@@ -52,302 +53,356 @@ SEGNAPOSTO_NOME = "{{nome}}"
 SEGNAPOSTO_GUIDA = "{{link_guida}}"
 _SEGNAPOSTO = re.compile(r"\{\{[^{}]*\}\}")
 
-#: I corpi approvati dal titolare (consegnati il 2026-10-26, «Edizione 1»),
-#: per numero di email. Parole, emoji ed elenchi come consegnati; le righe
-#: vuote separano i paragrafi. Adattamenti approvati dal titolare: i link
-#: «[www.stima360.it](https://www.stima360.it)» sono l'indirizzo
-#: https://www.stima360.it (cliccabile nel testo semplice); nessuna firma
-#: «Il team STIMA360» (firma e disiscrizione le aggiunge il CRM); l'email 6
-#: offre la guida con il link di download, non come allegato.
+#: I corpi approvati dal titolare, per numero di email: i TESTI DEFINITIVI
+#: consegnati il 2026-11-03 (copia fedele in
+#: `tests/data/followup_v3_testi_definitivi.txt`, confrontata dai test), con
+#: parole, punteggiatura, apostrofi, emoji, elenchi e firma «Il team STIMA360»
+#: come consegnati; le righe vuote separano i paragrafi.
+#: ADATTAMENTO APPROVATO DAL TITOLARE - EMAIL 6 (2026-11-03): il canale email
+#: spedisce la guida con il link di download (`guida_pdf`), non come allegato;
+#: «che trovi in allegato» diventa «che puoi scaricare qui: {{link_guida}}» e
+#: «Scarica l’allegato» diventa «Scarica la guida gratuita». Nient'altro cambia.
 TESTI: dict[int, str] = {
     1: """Ciao!
 
-Facciamo un piccolo esperimento.
+Quando pensi al prezzo di vendita della tua casa, probabilmente hai in mente la cifra che vorresti ottenere.
 
-Se vendessi casa a 200.000 € e dovessi pagare una provvigione del 3% più IVA, spenderesti 7.320 €.
+Ma prezzo di vendita e somma che ti rimane non sono sempre la stessa cosa.
 
-🎁 Il tuo regalo: una formula per fare i conti.
+Un esempio: su una vendita da 200.000 €, una provvigione del 3% più IVA al 22% equivale a 7.320 €.
 
-Prezzo di vendita × percentuale di provvigione × 1,22 (se soggetta a IVA ordinaria).
+È una voce da considerare quando fai i tuoi conti.
 
-Prova a inserire il prezzo che vorresti ottenere per la tua casa.
+Con STIMA360 il venditore non paga provvigioni di mediazione. Un vantaggio concreto da conoscere prima di scegliere a chi affidare la vendita.
 
-Con STIMA360 il venditore non paga provvigioni di mediazione.
+Vuoi capire come funziona?
 
-Scopri il nostro modello su https://www.stima360.it.""",
+Scopri il modello STIMA360 su www.stima360.it.
+
+Il team STIMA360""",
     2: """Ciao!
 
-Vuoi sapere se la tua casa è pronta per essere presentata online?
+Chi cerca casa online vede le fotografie prima ancora di leggere la descrizione.
 
-🎁 Ecco la nostra checklist fotografica gratuita:
+Le tue mostrano ciò che vorrebbe conoscere?
 
-1. Una foto luminosa del soggiorno.
-2. La cucina vista dall'angolazione migliore.
-3. La camera principale.
-4. Il bagno, ordinato e ben illuminato.
-5. Balconi, terrazzi o giardini.
-6. La vista e gli eventuali punti panoramici.
-7. Il dettaglio che rende speciale la tua casa.
+Ecco sette scatti da controllare:
 
-Piccolo trucco: per ogni stanza prova a fotografare sia dalla porta sia dall'angolo opposto.
+1. Soggiorno: una vista ampia, con luce naturale.
+2. Cucina: piano di lavoro libero e ambiente ordinato.
+3. Camera principale: un’inquadratura che faccia capire gli spazi.
+4. Bagno: luminoso, con pochi oggetti in vista.
+5. Balcone, terrazzo o giardino, se presenti.
+6. Vista dall’immobile, se rappresenta un punto di forza.
+7. Un dettaglio utile che distingue la casa dalle altre.
 
-Non alterare dimensioni o caratteristiche nelle fotografie.
+Prima di scattare, pulisci la lente, accendi le luci dove serve e tieni il telefono dritto. Evita filtri e inquadrature che deformano le dimensioni.
 
-Puoi usare questa lista già oggi, anche se non hai ancora deciso di vendere.""",
+Apri il tuo annuncio e confrontalo con questa lista: manca qualche immagine importante?
+
+Il team STIMA360""",
     3: """Ciao!
 
-A volte il prezzo che desideriamo ottenere non coincide con quello che il mercato è disposto a riconoscere.
+Hai cercato case simili nella tua zona e hai usato quei prezzi per decidere quanto chiedere?
 
-🎁 Ti regalo il test delle 3 domande:
+È un punto di partenza. Ma manca una domanda: quelle case stanno trovando acquirenti a quelle cifre?
 
-* Hai confrontato almeno tre immobili davvero simili al tuo?
-* Hai distinto i prezzi richiesti negli annunci da quelli delle vendite concluse?
-* Sai spiegare perché la tua casa dovrebbe valere più o meno delle altre?
+Un annuncio mostra quanto chiede il venditore. Da solo non dimostra quanto un compratore sia disposto a pagare.
 
-Se hai risposto NO anche a una sola domanda, forse vale la pena approfondire la valutazione.
+Prima di fissare il prezzo, controlla tre cose:
 
-Non significa che il tuo prezzo sia sbagliato. Significa che merita una verifica.
+- Gli immobili confrontati sono davvero simili per zona, superficie, piano e condizioni?
+- Sai da quanto tempo sono in vendita?
+- Quali caratteristiche giustificano un prezzo più alto o più basso per casa tua?
 
-Puoi richiedere una valutazione gratuita su https://www.stima360.it.""",
+Non serve indovinare la cifra perfetta: serve partire da elementi concreti.
+
+Vuoi verificare il prezzo della tua casa? Richiedi una valutazione gratuita su www.stima360.it.
+
+Il team STIMA360""",
     4: """Ciao!
 
-Immagina di essere tu l'acquirente.
+Una stanza in più può essere una cameretta per una famiglia oppure uno studio per chi lavora da casa.
 
-🎁 Ti regalo un piccolo esercizio di marketing immobiliare.
+La caratteristica è la stessa. Il motivo per comprarla cambia.
 
-Completa queste tre frasi:
+Per presentare bene il tuo immobile, prova a completare queste tre frasi:
 
-* La mia casa sarebbe perfetta per ______.
-* La caratteristica che potrebbe interessare di più è ______.
-* Il motivo per cui qualcuno dovrebbe sceglierla è ______.
+- La mia casa potrebbe essere adatta a…
+- A questa persona sarebbe utile soprattutto…
+- Rispetto alle alternative, potrebbe sceglierla perché…
 
-Una coppia giovane potrebbe avere esigenze diverse da una famiglia con bambini o da chi cerca una seconda casa.
+Per esempio: “Potrebbe interessare a chi lavora da casa, perché la terza stanza permette di avere uno studio separato dal soggiorno”.
 
-Non basta pubblicare un immobile: bisogna capire a chi raccontarlo.
+Questo esercizio aiuta a scegliere cosa mostrare nelle foto e cosa mettere in evidenza nell’annuncio.
 
-Se vuoi, rispondi a questa email con le tre frasi completate.""",
+Rispondi con le tre frasi completate: ci aiuteranno a capire come immagini il futuro acquirente della tua casa.
+
+Il team STIMA360""",
     5: """Ciao!
 
-Oggi ti regalo qualcosa di molto pratico.
+Un acquirente si interessa alla casa e vuole approfondire. È proprio in quel momento che cercare documenti mancanti può rallentare tutto.
 
-🎁 La checklist salva-tempo del venditore:
+Conviene iniziare prima.
 
-☐ Atto di provenienza dell'immobile
-☐ Visura catastale
-☐ Planimetria catastale
-☐ Titoli edilizi e pratiche comunali
-☐ Attestato di Prestazione Energetica (APE)
-☐ Informazioni su eventuale mutuo o ipoteca
-☐ Situazione delle spese condominiali
+Tra i documenti da recuperare e far verificare ci sono:
 
-Non tutti i documenti hanno lo stesso ruolo e alcuni controlli richiedono un tecnico o un notaio.
+☐ Atto di provenienza, per esempio l’atto di acquisto.
+☐ Visura e planimetria catastale.
+☐ Titoli edilizi e documentazione degli eventuali lavori.
+☐ Attestato di Prestazione Energetica, APE.
 
-Ma raccoglierli in anticipo può evitare tanti ritardi.
+Raccogli anche le informazioni su eventuali mutui, ipoteche e spese condominiali.
 
-Conserva questa email: potrebbe tornarti utile quando deciderai di vendere.""",
+L’elenco è un punto di partenza: i documenti e i controlli necessari dipendono dalla situazione dell’immobile. Per le verifiche tecniche e giuridiche servono i professionisti competenti.
+
+Da dove cominciare oggi? Cerca l’atto di acquisto e la planimetria, poi raccoglili nella stessa cartella.
+
+Il team STIMA360""",
     6: """Ciao!
 
-Questa volta non ti mandiamo soltanto un consiglio.
+Come scegliere il prezzo? Quali documenti recuperare? Cosa controllare quando arriva una proposta?
 
-Abbiamo preparato una guida completa per chi vuole vendere un immobile evitando errori e spese inutili.
+Abbiamo raccolto questi argomenti nella guida gratuita STIMA360 che puoi scaricare qui: {{link_guida}}.
 
-🎁 Puoi scaricarla gratuitamente qui: {{link_guida}}
+Puoi usarla in base al punto in cui ti trovi:
 
-VENDERE UN IMMOBILE SENZA ERRORI — EDIZIONE 2026
+- Se stai pensando di vendere, comincia dalle parti dedicate al prezzo e ai costi.
+- Se vuoi mettere casa sul mercato, passa a documenti e preparazione dell’immobile.
+- Se hai già un acquirente interessato, approfondisci proposte, caparre e passaggi successivi.
 
-All'interno trovi 28 capitoli e 2 checklist, con argomenti come:
+Non occorre leggerla tutta insieme. Tienila a portata di mano e consulta ciò che ti serve.
 
-* Come scegliere il prezzo.
-* Quali documenti servono.
-* Come preparare l'immobile.
-* Come gestire proposte e caparre.
-* Quali aspetti fiscali controllare.
-* Come evitare spese inutili.
+Scarica la guida gratuita e parti dall’argomento più utile per te oggi.
 
-È una guida da conservare e consultare quando ne hai bisogno.
+Buona lettura!
 
-Non devi acquistare nulla.
-
-Buona lettura!""",
+Il team STIMA360""",
     7: """Ciao!
 
-Oggi ti regalo una formula che usiamo per ragionare sulla presentazione degli immobili.
+“Appartamento con terrazzo di 40 m².”
 
-🎁 La formula del punto di forza:
+L’informazione è utile, ma chi legge deve ancora immaginare come potrebbe usarlo.
 
-Caratteristica + vantaggio concreto + persona interessata.
+Prova così:
 
-Esempio:
+“Un terrazzo di 40 m² dove organizzare una cena all’aperto e ricavare un angolo per rilassarsi.”
 
-«Terrazzo di 40 m²» è una caratteristica.
+La misura resta. In più, aiuti il lettore a immaginare una situazione concreta.
 
-«Uno spazio esterno dove pranzare con gli amici» è un vantaggio.
+Puoi applicare lo stesso metodo agli altri punti di forza:
 
-«Perfetto per chi ama vivere all'aperto» identifica il possibile pubblico.
+- Una stanza aggiuntiva: spazio per uno studio separato.
+- Un garage: comodità per parcheggiare e riporre oggetti.
+- Una cucina separata: un ambiente dedicato alla preparazione dei pasti.
 
-Adesso prova con la tua casa.
+Descrivi possibilità reali, coerenti con gli spazi della casa.
 
-Se vuoi, rispondimi con una caratteristica del tuo immobile.""",
+Scegli una caratteristica del tuo immobile e prova a spiegare quale vantaggio offre a chi lo abiterà.
+
+Il team STIMA360""",
     8: """Ciao!
 
-Stai pensando di fare lavori prima di vendere casa?
+Prima di rifare la cucina o cambiare i pavimenti per vendere meglio, fermati su una domanda:
 
-🎁 Ti regalo il semaforo delle ristrutturazioni.
+L’acquirente riconoscerà nel prezzo ciò che stai per spendere?
 
-🟢 Verde: pulizia, riordino, piccole riparazioni. Spesso sono un buon punto di partenza.
+Una cucina scelta secondo i tuoi gusti potrebbe non piacere a chi comprerà.
 
-🟡 Giallo: tinteggiatura, sostituzioni e interventi estetici. Prima confronta costi e benefici.
+Per orientarti, usa questo semaforo:
 
-🔴 Rosso: grandi lavori fatti soltanto nella speranza di aumentare il prezzo. Senza una valutazione economica rischi di non recuperare la spesa.
+🟢 Pulizia, riordino e piccole riparazioni: aiutano a presentare una casa curata.
 
-Attenzione: eventuali problemi di sicurezza o regolarità vanno valutati separatamente con professionisti abilitati.
+🟡 Tinteggiatura e interventi estetici: valuta lo stato attuale, il costo e l’effetto sulla presentazione.
 
-Il trucco non è spendere di più. È spendere dove serve.""",
+🔴 Ristrutturazioni importanti fatte solo per aumentare il prezzo: prima serve un’analisi economica, perché recuperare tutta la spesa non è garantito.
+
+I problemi di sicurezza e regolarità richiedono una valutazione separata da parte dei professionisti competenti.
+
+Stai pensando a un intervento prima della vendita? Rispondi indicando quale e con quale obiettivo.
+
+Il team STIMA360""",
     9: """Ciao!
 
-Ti propongo un piccolo quiz.
+Arrivano due offerte per casa tua.
 
-Un acquirente offre 200.000 €, ma deve ancora ottenere il mutuo.
+La prima è da 200.000 €, ma l’acquirente deve ancora ottenere il mutuo.
 
-Un altro offre 195.000 €, con disponibilità economica già documentata e tempi di acquisto compatibili.
+La seconda è da 195.000 €, con disponibilità economica documentata e tempi compatibili con le tue esigenze.
 
-Quale sceglieresti?
+Quale conviene?
 
-🎁 Ti regalo una scheda di confronto:
+Con queste sole informazioni non possiamo ancora deciderlo. Ma possiamo capire perché il prezzo, da solo, non basta.
 
-Per ogni proposta assegna un giudizio a:
+Per confrontare le offerte, metti una accanto all’altra queste voci:
 
-* Prezzo offerto.
-* Condizioni di finanziamento.
-* Caparra prevista.
-* Tempi per il rogito.
-* Condizioni particolari.
-* Compatibilità con le tue necessità.
+- Prezzo.
+- Condizioni legate al finanziamento.
+- Somme previste alla firma.
+- Tempi del rogito e della consegna.
+- Altre condizioni.
+- Compatibilità con il tuo prossimo acquisto o trasferimento.
 
-La proposta migliore non è sempre quella con il numero più alto.
+Anche un’offerta più bassa merita di essere esaminata. E un’offerta più alta merita di essere verificata con la stessa attenzione.
 
-Le condizioni vanno sempre esaminate con attenzione prima di firmare.""",
+Quando confronti due proposte, confronta l’intera operazione.
+
+Il team STIMA360""",
     10: """Ciao!
 
-Una casa può essere interessante e avere comunque un annuncio poco efficace.
+Apri il portale, controlli l’annuncio e aspetti. Ma le richieste non arrivano.
 
-🎁 Ecco la diagnosi STIMA360 in 60 secondi.
+Prima di cambiare il prezzo, prova a capire dove si interrompe il percorso.
 
-Controlla questi cinque elementi:
+Poche visualizzazioni?
+Controlla visibilità, fotografia principale e informazioni mostrate nell’anteprima.
 
-1. La prima fotografia colpisce?
-2. Il prezzo è motivato dal mercato?
-3. Sono indicate le caratteristiche decisive?
-4. Le fotografie mostrano gli ambienti in modo fedele?
-5. La descrizione risponde alle domande più comuni?
+Visualizzazioni ma pochi contatti?
+Rivedi prezzo, fotografie, descrizione e informazioni mancanti: cosa potrebbe far esitare chi legge?
 
-Se diversi elementi sono deboli, migliorare l'annuncio potrebbe essere più utile di un ribasso immediato.
+Contatti ma poche visite?
+Verifica quali domande fanno le persone e in quale momento perdono interesse.
 
-Hai già pubblicato casa tua? Puoi rispondere a questa email raccontandoci come sta andando.""",
+Sono indizi da leggere insieme: nessuno, da solo, identifica con certezza il problema.
+
+Se hai già pubblicato casa tua, rispondi indicando da quanto tempo è online, quanti contatti hai ricevuto e quante visite hai fatto.
+
+Sono tre dati utili per iniziare a ragionare sulla situazione.
+
+Il team STIMA360""",
     11: """Ciao!
 
-Oggi ti regalo un controllo preliminare che molti proprietari trascurano.
+Negli anni hai unito due stanze, spostato una porta oppure modificato la cucina?
 
-🎁 Il test delle quattro verifiche:
+Prima di vendere, conviene ricostruire quali lavori sono stati fatti e quali documenti li accompagnano.
 
-* La disposizione delle stanze corrisponde alla planimetria catastale?
-* Hai fatto modifiche interne nel corso degli anni?
-* Possiedi la documentazione edilizia delle modifiche?
-* Sai distinguere conformità catastale e regolarità urbanistica?
+Comincia da quattro domande:
 
-Se hai dubbi, non significa automaticamente che ci sia un abuso.
+- La disposizione attuale corrisponde alla planimetria catastale?
+- Quali modifiche sono state eseguite?
+- Hai conservato le pratiche relative ai lavori?
+- Un tecnico ha già verificato la situazione?
 
-Ma è il momento giusto per far verificare la documentazione a un tecnico.
+La corrispondenza con la planimetria catastale, da sola, non esaurisce i controlli sulla regolarità edilizia e urbanistica.
 
-Meglio scoprirlo prima di una proposta d'acquisto.""",
+Se manca un documento o qualcosa non coincide, evita conclusioni affrettate: fai verificare il caso a un tecnico.
+
+Recuperare queste informazioni prima di una trattativa ti permette di affrontarla con maggiore chiarezza.
+
+Il team STIMA360""",
     12: """Ciao!
 
-Due immobili nello stesso palazzo possono avere valori diversi.
+Immagina due appartamenti di circa 90 m² nella stessa via.
 
-🎁 Ti regalo il metodo delle cinque differenze.
+Il primo è ristrutturato, ha l’ascensore e un garage.
 
-Quando confronti casa tua con un altro immobile, annota:
+Il secondo necessita di lavori, è a un piano alto senza ascensore e non ha parcheggio.
 
-1. Metratura e criterio di superficie.
-2. Piano e presenza di ascensore.
-3. Stato di conservazione.
-4. Balconi, garage e altre pertinenze.
-5. Esposizione, luminosità e posizione.
+La metratura è simile. Il confronto, però, deve considerare molto altro.
 
-Ricorda che il prezzo di un annuncio non dimostra il prezzo effettivo di vendita.
+Quando guardi un annuncio vicino a casa tua, annota:
 
-Questo esercizio non sostituisce una valutazione professionale, ma aiuta a capire perché due case apparentemente simili possano valere cifre diverse.
+1. Quale superficie viene indicata e cosa comprende.
+2. Piano e presenza dell’ascensore.
+3. Condizioni dell’immobile.
+4. Spazi esterni, garage e altre pertinenze.
+5. Esposizione, luminosità e posizione precisa.
 
-Per una valutazione gratuita: https://www.stima360.it.""",
+Poi chiediti: quali differenze potrebbero contare per un acquirente?
+
+Ricorda anche che stai confrontando prezzi richiesti, che possono essere diversi da quelli effettivamente concordati.
+
+Vuoi capire come incidono le caratteristiche della tua casa? Richiedi una valutazione gratuita su www.stima360.it.
+
+Il team STIMA360""",
     13: """Ciao!
 
-Una buona impressione comincia prima ancora di parlare del prezzo.
+Tra poco arriva una persona a vedere casa. Cosa conviene controllare?
 
-🎁 Ti regalo la sfida dei 15 minuti.
+Ecco cinque cose semplici:
 
-* Minuti 1–3: apri tende e persiane.
-* Minuti 4–6: libera tavoli e superfici.
-* Minuti 7–9: sistema cucina e bagno.
-* Minuti 10–12: arieggia gli ambienti e controlla gli odori.
-* Minuti 13–15: prepara le informazioni principali e verifica che l'accesso sia agevole.
+1. Luce: apri tende e persiane e illumina gli ambienti dove serve.
+2. Ordine: libera tavoli e piani di lavoro per rendere leggibili gli spazi.
+3. Cucina e bagno: controlla pulizia e oggetti lasciati in vista.
+4. Aria: arieggia ed evita profumi troppo intensi.
+5. Informazioni: prepara i dati su spese, lavori eseguiti, pertinenze e disponibilità della casa.
 
-Naturalmente eventuali difetti importanti non devono essere nascosti.
+Se ci sono problemi conosciuti, preparati a descriverli con chiarezza.
 
-Sono piccoli gesti che aiutano a presentare meglio l'immobile.
+L’obiettivo è permettere a chi visita di capire gli ambienti e ottenere risposte utili.
 
-Salva questa email per la prossima visita.""",
+Conserva questa lista e rileggila prima del prossimo appuntamento.
+
+Il team STIMA360""",
     14: """Ciao!
 
-Quando arriva un'offerta interessante, è facile concentrarsi soltanto sul prezzo.
+Il prezzo ti convince e vorresti accettare.
 
-🎁 Ti regalo cinque domande da controllare prima di accettare:
+Prima di firmare, assicurati di aver compreso anche gli altri impegni contenuti nella proposta.
 
-1. Come verrà pagato il prezzo?
-2. L'acquisto dipende dall'ottenimento di un mutuo?
-3. Quali somme sono previste alla firma e con quale qualificazione?
-4. Quando avverrà il rogito?
-5. Ci sono condizioni sospensive o altri impegni particolari?
+Verifica questi cinque punti:
 
-Una proposta accettata può creare obblighi importanti.
+1. Come e quando verrà pagato il prezzo.
+2. Se l’acquisto dipende dall’ottenimento di un mutuo o da altre condizioni.
+3. Quali somme vengono versate, quando e come sono definite nel documento.
+4. Quali date sono previste per rogito e consegna.
+5. Quali altri obblighi assumi, compresi eventuali lavori o arredi inclusi.
 
-La fretta non deve sostituire la verifica.""",
+Se una frase è poco chiara, chiedi che venga spiegata prima di decidere.
+
+L’accettazione di una proposta può comportare impegni vincolanti: fai esaminare il documento dal professionista che ti assiste.
+
+Una cifra interessante merita una lettura attenta di tutte le condizioni.
+
+Il team STIMA360""",
     15: """Ciao!
 
-Magari stai ancora valutando se vendere. Magari hai già messo casa sul mercato.
+Da quando abbiamo iniziato a scriverti, la tua situazione potrebbe essere cambiata.
 
-🎁 Ecco il tuo percorso personalizzato: scegli una risposta.
+Quale di queste descrizioni ti rappresenta oggi?
 
-A — Non ho ancora deciso.
-Il primo passo è capire quanto potresti ricavare e quanto tempo hai a disposizione.
+A — Sto ancora decidendo se vendere.
+Vuoi capire quanto potresti ricavare e se il momento è adatto alle tue esigenze.
 
-B — Ho pubblicato ma non ricevo richieste.
-Il primo controllo riguarda prezzo, fotografie, descrizione e visibilità.
+B — La casa è in vendita, ma arrivano poche richieste.
+Ti serve capire cosa controllare tra prezzo, presentazione e visibilità.
 
-C — Ricevo visite ma nessuna proposta.
-Conviene analizzare i commenti ricorrenti degli acquirenti.
+C — Ricevo visite, ma nessuna proposta.
+Vuoi capire cosa frena le persone dopo l’appuntamento.
 
-D — Ho già venduto.
-Complimenti! Non ha senso continuare a proporti consigli per vendere lo stesso immobile.
+D — Ho già venduto oppure non intendo più vendere.
+Il tuo progetto si è concluso o è cambiato.
 
-Puoi rispondere semplicemente con A, B, C oppure D.""",
+Rispondi semplicemente con A, B, C oppure D.
+
+Ci aiuterai a capire la tua situazione attuale.
+
+Il team STIMA360""",
     16: """Ciao!
 
-Per chiudere questo percorso, vogliamo lasciarti un ultimo strumento.
+Vuoi vendere, ma hai tante cose da fare e non sai da dove cominciare?
 
-🎁 Il piano STIMA360 dei primi 30 giorni:
+Ecco una traccia per organizzare il primo mese.
 
-Settimana 1: chiarisci obiettivo, tempi, costi e documenti disponibili.
-Settimana 2: verifica la situazione tecnica con i professionisti e definisci il prezzo sulla base del mercato.
-Settimana 3: prepara la casa, le fotografie e l'annuncio.
-Settimana 4: valuta le richieste ricevute e correggi la strategia, se necessario.
+Settimana 1 — Metti a fuoco il tuo obiettivo.
+Chiarisci tempi, somma che vorresti ricavare e necessità legate a un eventuale trasferimento. Inizia a raccogliere i documenti.
 
-Non è una promessa di vendita in 30 giorni: è un modo per organizzare bene la partenza.
+Settimana 2 — Avvia le verifiche.
+Fai esaminare la situazione tecnica ai professionisti competenti e confronta il tuo obiettivo di prezzo con gli elementi di mercato.
 
-Se vuoi un supporto professionale, STIMA360 è a disposizione.
+Settimana 3 — Prepara la presentazione.
+Dopo le verifiche necessarie, organizza casa, fotografie e informazioni per l’annuncio.
 
-Puoi richiedere una valutazione gratuita su https://www.stima360.it.
+Settimana 4 — Leggi i primi riscontri.
+Se l’immobile è già online, osserva richieste, visite e domande degli interessati per capire se correggere qualcosa.
 
-Un saluto,""",
+I tempi sono indicativi: alcune verifiche possono richiedere più di una settimana. Questa traccia serve a organizzare la partenza, senza promettere una vendita in 30 giorni.
+
+Vuoi capire da dove iniziare nel tuo caso?
+
+Richiedi una valutazione gratuita su www.stima360.it.
+
+Il team STIMA360""",
 }
 
 

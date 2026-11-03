@@ -228,7 +228,7 @@ def test_05_guida_pdf_email_6(v3, monkeypatch, tmp_path):
     sesta = next(x for x in _messaggi(m, e["id"]) if x["step_no"] == 6)
     link = "https://crm-test.example.invalid" + guida_pdf.PERCORSO
     assert link in sesta["rendered_body"] and sesta["status"] == "sent"
-    assert sesta["subject_snapshot"] == "🎁 Un regalo per te: la guida completa per vendere casa"
+    assert sesta["subject_snapshot"] == "La tua guida per preparare la vendita di casa"
     app = FastAPI()
     app.include_router(public_router.router)
     risposta = TestClient(app).get(guida_pdf.PERCORSO)
@@ -303,7 +303,7 @@ def test_08_quadro_amministratore(v3, monkeypatch):
     assert v3j["status"] == "active" and v3j["steps"] == 16
     assert v3j["enrollments"] == {"active": 1} and v3j["messages"] == {"sent": 2}
     assert v3j["next_action"]["step_no"] == 3 and v3j["next_action"]["day"] == 12
-    assert v3j["next_action"]["subject"] == "Il tuo prezzo di vendita supera questo test?"
+    assert v3j["next_action"]["subject"] == "Hai scelto il prezzo guardando le altre case in vendita?"
     assert quadro["followup_v3"]["guide_available"] is True and quadro["followup_v3"]["texts_total"] == 16
     assert quadro["test_recipients_limit"] == {"active": False, "allowed_count": None}
     assert "quadro@example.it" not in str(quadro)

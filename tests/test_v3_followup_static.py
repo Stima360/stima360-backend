@@ -2,9 +2,10 @@
 
   01  il calendario e gli oggetti sono ESATTAMENTE quelli approvati: 16 email,
       giorno 4 -> 180, sequenza lineare (nessuna ripartenza).
-  02  i 16 corpi approvati sono nel codice e nel registro: senza firma (la
-      mette il CRM), l'email 6 con il link della guida e nessun allegato
-      promesso; un corpo entra solo se valido ({{link_guida}} solo nella 6).
+  02  i 16 corpi approvati sono nel codice e nel registro: i testi definitivi
+      del 2026-11-03 con la firma «Il team STIMA360»; l'email 6 con il link
+      della guida e nessun allegato promesso (adattamento approvato); un corpo
+      entra solo se valido ({{link_guida}} solo nella 6).
   03  ogni email v3 e' marketing, chiede il link di disiscrizione e lo stampa
       in fondo; l'email 6 chiede anche il link della guida.
   04  il limite dei destinatari TEST: assente = nessun limite; presente =
@@ -24,22 +25,22 @@ import pytest
 ROOT = Path(__file__).resolve().parents[1]
 
 APPROVATO = [
-    (4, "Quanto ti costa davvero vendere casa?"),
-    (8, "Ti regalo le 7 fotografie che possono fare la differenza 📸"),
-    (12, "Il tuo prezzo di vendita supera questo test?"),
-    (18, "Chi comprerebbe la tua casa? Facciamo un gioco"),
-    (25, "I documenti che conviene cercare prima di vendere"),
-    (33, "🎁 Un regalo per te: la guida completa per vendere casa"),
-    (42, "La tua casa ha un superpotere. Qual è?"),
-    (52, "Prima di spendere soldi per ristrutturare, guarda questo"),
-    (63, "Accetteresti 200.000 € oppure 195.000 €?"),
-    (75, "Il tuo annuncio non riceve chiamate? Prova questa diagnosi"),
-    (88, "La tua planimetria racconta tutta la verità?"),
-    (102, "Un trucco per confrontare i prezzi delle case vicine"),
-    (117, "Hai 15 minuti? Prepara la casa per una visita"),
-    (135, "Prima di dire SÌ a un acquirente, chiedi queste 5 cose"),
-    (157, "Ti regalo una mini-diagnosi della tua situazione immobiliare"),
-    (180, "Il tuo piano per vendere casa, in 30 giorni"),
+    (4, 'Vendi a 200.000 €: quanto ti rimane davvero?'),
+    (8, 'Le 7 foto da non dimenticare nel tuo annuncio'),
+    (12, 'Hai scelto il prezzo guardando le altre case in vendita?'),
+    (18, 'Quale acquirente potrebbe scegliere casa tua?'),
+    (25, 'Trovi l’acquirente. Ma i documenti sono pronti?'),
+    (33, 'La tua guida per preparare la vendita di casa'),
+    (42, '“Terrazzo di 40 m²”: cosa significa per chi compra?'),
+    (52, 'Fare lavori prima di vendere: ne vale la pena?'),
+    (63, 'Meglio un’offerta da 200.000 € o da 195.000 €?'),
+    (75, 'Il tuo annuncio è online, ma non arrivano chiamate?'),
+    (88, 'Hai spostato una parete? Controlla questo prima di vendere'),
+    (102, 'Stessa via, stessa metratura. Perché due prezzi diversi?'),
+    (117, 'Cinque cose da fare prima di una visita'),
+    (135, 'Prima di firmare una proposta, verifica questi 5 punti'),
+    (157, 'A che punto sei con la vendita di casa?'),
+    (180, 'I primi 30 giorni per mettere in vendita casa'),
 ]
 
 
@@ -65,17 +66,18 @@ def test_02_nessun_testo_inventato_e_regole_dei_testi():
     for n in t.TESTI:
         assert templates.get(f"followup_v3_m{n}", 3).subject({}) == t.CALENDARIO[n - 1][1]
     assert all(t.TESTI[n].startswith("Ciao!") for n in t.TESTI)
-    # decisioni del titolare: nessuna firma nei corpi (la mette il CRM), niente
-    # sintassi markdown, la guida e' un link e non un allegato
-    assert not [n for n in t.TESTI if "Il team STIMA360" in t.TESTI[n]]
+    # decisioni del titolare: la firma «Il team STIMA360» chiude ogni testo
+    # definitivo (la disiscrizione la mette il CRM), niente sintassi markdown;
+    # l'email 6: la guida e' un link e non un allegato
+    assert [n for n in t.TESTI if t.TESTI[n].endswith("\n\nIl team STIMA360")] == list(range(1, 17))
     assert all("[" not in t.TESTI[n] and "](" not in t.TESTI[n] for n in t.TESTI)
-    assert "🎁 Puoi scaricarla gratuitamente qui: {{link_guida}}" in t.TESTI[6]
+    assert "che puoi scaricare qui: {{link_guida}}.\n" in t.TESTI[6]
     assert not [n for n in t.TESTI if "allegat" in t.TESTI[n].lower()]
     reale = templates.get("followup_v3_m6", 3).body(
         {"contact_first_name": "Anna", "agency_name": "Agenzia Prova",
          "unsubscribe_url": "https://crm.example.invalid/u?t=x",
          "guide_url": "https://crm.example.invalid/api/public/communication/guida-vendere-casa-2026.pdf"})
-    assert "qui: https://crm.example.invalid/api/public/communication/guida-vendere-casa-2026.pdf\n" in reale
+    assert "qui: https://crm.example.invalid/api/public/communication/guida-vendere-casa-2026.pdf.\n" in reale
     assert reale.rstrip().endswith("Se non vuoi piu' ricevere questi messaggi: https://crm.example.invalid/u?t=x")
     assert "\nAgenzia Prova\nsu Stima360\n" in reale
     assert t.problemi(1, "") == ["testo mancante"]

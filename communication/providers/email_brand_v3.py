@@ -49,8 +49,8 @@ CTA = {
     4: ("Rispondi a questa email", "risposta"),
     5: ("Visita www.stima360.it", "sito"),
     6: ("Scarica la guida gratuita", "guida"),
-    7: ("Rispondi a questa email", "risposta"),
-    8: ("Visita www.stima360.it", "sito"),
+    7: ("Visita www.stima360.it", "sito"),
+    8: ("Rispondi a questa email", "risposta"),
     9: ("Visita www.stima360.it", "sito"),
     10: ("Rispondi a questa email", "risposta"),
     11: ("Visita www.stima360.it", "sito"),
@@ -124,6 +124,9 @@ def _cta(n: int, testo: str, metadata: Mapping[str, Any] | None) -> tuple[str, s
     etichetta, dove = CTA.get(n, ("Visita www.stima360.it", "sito"))
     if dove == "guida":
         link = next((u for u in _URL.findall(testo) if "guida" in u.lower()), None)
+        # il link puo' chiudere una frase («...qui: <link>.»): la punteggiatura
+        # finale non fa parte dell'indirizzo (come in `email_format._riga`)
+        link = link.rstrip(email_format._PUNTEGGIATURA_FINALE) if link else None
         if link:
             return etichetta, link
     if dove == "risposta":
