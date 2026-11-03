@@ -39,6 +39,20 @@ COSA SCRIVE (tutto identificabile: «COLLAUDO VISITE <run>» nel nome, codice im
   del sopralluogo e della visita viene spostato nel passato (l'Agenda completa solo cio' che e'
   iniziato; non si aspetta l'orario vero).
 
+AGENTE DI PROVA (`--agente-di-prova`): se sul TEST nessun agente ha un orario di lavoro (la tabella
+`agent_working_hours` e' vuota) il collegamento di prenotazione non puo' esistere. Con l'opzione lo
+script predispone UN agente sintetico con le regole applicative esistenti, mai con SQL:
+  * l'account nasce dalla rotta di piattaforma `POST /api/platform/agencies/{id}/operators` (solo il
+    Super Admin designato da `STIMA360_SUPER_ADMIN_USER_ID`, con il suo registro di audit), con una
+    password casuale che non viene mai stampata ne' salvata: nessuno potra' accedere;
+  * gli orari li scrive l'owner dell'agenzia con `PUT /api/appointments/agents/{id}/working-hours`
+    (7 giorni, 09:00-19:00: cosi' un orario libero c'e' sempre);
+  * a fine collaudo, in quest'ordine: orari svuotati, membership revocata, account disabilitato ed
+    eliminato (eliminazione LOGICA, con audit). Nessuna riga viene cancellata.
+  Con l'opzione l'agente reale NON viene usato ne' toccato: orari, appuntamenti e calendari degli
+  agenti reali restano come sono (lo script confronta l'impronta dei loro orari prima e dopo).
+  `--agente-di-prova` e `--agent-user-id` sono incompatibili.
+
 COSA NON TOCCA: conferme e promemoria (nessuna configurazione, nessun cron), clienti e immobili
 reali, pubblicazioni di proprietari reali, `main`, le migrazioni.
 
@@ -81,6 +95,9 @@ ATTORE_HEADER = "x-collaudo-attore"
 PUB = "/api/public/visit-booking"
 OWNER_PORTAL = "/api/owner/portal/properties"
 OWNER_COOKIE = "stima360_owner_session"
+AGENT_EMAIL_PREFIX = "collaudo.agente."
+AGENT_EMAIL_DOMAIN = "@example.invalid"
+ORARIO_PROVA = {"inizio": 540, "fine": 1140}                       # 09:00-19:00, tutti i giorni
 SEGRETO = "NOTA-INTERNA-COLLAUDO-VISITE"
 NOTA_IMMOBILE = "NOTA-RISERVATA-COLLAUDO"
 PREZZO_MINIMO = "99999"
@@ -273,7 +290,7 @@ def gate_configurazione(g) -> dict:
     return {"conferme": settings.confirmations_enabled(), "destinatari": len(elenco)}
 
 
-def gate_database(g, cur, agency_id: int, actor: int, agent: int) -> None:
+def gate_database(g, cur, agency_id: int, actor: int, agent: int | None, *, agente_di_prova: bool = False) -> None:
     cur.execute("SELECT current_database() AS db, pg_is_in_recovery() AS rec")
     r = cur.fetchone()
     g.need(r["db"] == EXPECTED_DB and r["rec"] is False, "database TEST primario")
@@ -290,19 +307,55 @@ def gate_database(g, cur, agency_id: int, actor: int, agent: int) -> None:
     att = cur.fetchone()
     g.need(att is not None and att["status"] == "active" and att["role"] in ("agency_owner", "agency_admin"),
            "l'attore e' owner/admin attivo dell'agenzia")
+    if agente_di_prova:
+        gate_agente_di_prova(g, cur, agency_id)
+        return
     cur.execute("SELECT role, status FROM agency_memberships WHERE agency_id = %s AND operator_user_id = %s", (agency_id, agent))
     agt = cur.fetchone()
     g.need(agt is not None and agt["status"] == "active", "l'agente e' attivo nell'agenzia")
     cur.execute("SELECT count(*) AS n FROM agent_working_hours WHERE agency_id = %s AND user_id = %s", (agency_id, agent))
-    g.need(cur.fetchone()["n"] > 0, "l'agente ha un orario di lavoro (serve al collegamento di prenotazione)")
+    g.need(cur.fetchone()["n"] > 0, "l'agente ha un orario di lavoro (serve al collegamento di prenotazione); "
+           "se nessun agente ne ha uno, rilanciare con --agente-di-prova")
 
 
-def gate_ruoli(cur, agency_id: int, agent: int) -> dict:
-    """Ruolo dell'agente e (se esistono) un altro agente e un'altra agenzia REALI per le prove di isolamento."""
-    cur.execute("SELECT role FROM agency_memberships WHERE agency_id = %s AND operator_user_id = %s", (agency_id, agent))
-    ruolo = cur.fetchone()["role"]
-    cur.execute("SELECT operator_user_id AS id FROM agency_memberships WHERE agency_id = %s AND status = 'active' "
-                "AND role = 'agent' AND operator_user_id <> %s ORDER BY operator_user_id LIMIT 1", (agency_id, agent))
+def gate_agente_di_prova(g, cur, agency_id: int) -> None:
+    """Le condizioni per predisporre un agente sintetico con le regole esistenti."""
+    from operator_auth.designation import designated_super_admin_id
+    from platform_admin import operators_repository
+    designato = designated_super_admin_id()
+    g.need(designato is not None, "STIMA360_SUPER_ADMIN_USER_ID configurato (solo il Super Admin crea operatori)")
+    if designato is not None:
+        cur.execute("SELECT is_platform_admin, status FROM operator_users WHERE id = %s", (designato,))
+        sa = cur.fetchone()
+        g.need(sa is not None and sa["is_platform_admin"] is True and sa["status"] == "active",
+               "il Super Admin designato e' un amministratore di piattaforma attivo")
+    g.need(operators_repository.elimination_mark_supported(cur),
+           "l'eliminazione logica degli operatori e' disponibile (migrazione 113): la pulizia e' garantita")
+    cur.execute("SELECT to_regclass('agent_working_hours') AS t")
+    g.need(cur.fetchone()["t"] is not None, "tabella agent_working_hours presente")
+    cur.execute("SELECT count(*) AS n FROM agent_working_hours WHERE agency_id = %s", (agency_id,))
+    print(f"INFO  orari di lavoro oggi nell'agenzia: {cur.fetchone()['n']} righe (non verranno modificate)", flush=True)
+    cur.execute("SELECT count(*) AS n FROM operator_users u JOIN agency_memberships m ON m.operator_user_id = u.id "
+                "WHERE m.agency_id = %s AND u.email_normalized LIKE %s AND u.deleted_at IS NULL",
+                (agency_id, f"{AGENT_EMAIL_PREFIX}%{AGENT_EMAIL_DOMAIN}"))
+    residui = cur.fetchone()["n"]
+    print(f"INFO  agenti di prova rimasti da collaudi precedenti: {residui}"
+          f"{' (si chiudono con `cleanup`)' if residui else ''}", flush=True)
+    print("INFO  con --agente-di-prova verra' creato UN account sintetico, senza password nota e senza accesso; "
+          "l'agente reale non viene usato ne' modificato", flush=True)
+
+
+def gate_ruoli(cur, agency_id: int, agent: int | None) -> dict:
+    """Ruolo dell'agente e (se esistono) un altro agente e un'altra agenzia REALI per le prove di isolamento.
+    Gli agenti di prova di collaudi precedenti non contano come «altro agente»."""
+    ruolo = "agent"
+    if agent is not None:
+        cur.execute("SELECT role FROM agency_memberships WHERE agency_id = %s AND operator_user_id = %s", (agency_id, agent))
+        ruolo = cur.fetchone()["role"]
+    cur.execute("SELECT m.operator_user_id AS id FROM agency_memberships m JOIN operator_users u ON u.id = m.operator_user_id "
+                "WHERE m.agency_id = %s AND m.status = 'active' AND m.role = 'agent' AND u.status = 'active' "
+                "AND m.operator_user_id <> %s AND u.email_normalized NOT LIKE %s ORDER BY m.operator_user_id LIMIT 1",
+                (agency_id, agent or 0, f"{AGENT_EMAIL_PREFIX}%"))
     altro = cur.fetchone()
     cur.execute("SELECT id FROM agencies WHERE id <> %s ORDER BY id LIMIT 1", (agency_id,))
     altra = cur.fetchone()
@@ -381,6 +434,12 @@ def contesti(agency_id: int, actor: int, agent: int, ruoli: dict) -> dict:
         # un'altra agenzia (vera se c'e', altrimenti inesistente): non deve vedere ne' scrivere nulla
         "altra_agenzia": _p2.operatore(ruoli["altra_agenzia"] or 2_000_000_000, 2_000_000_001, "agency_owner"),
     }
+    from operator_auth.designation import designated_super_admin_id
+    from operator_auth.context import OperatorContext
+    super_id = designated_super_admin_id()
+    if super_id is not None:                                     # solo per creare e chiudere l'agente di prova
+        ctx["super"] = OperatorContext(user_id=super_id, agency_id=None, role=None, is_platform_admin=True,
+                                       session_id=None, auth_channel="session")
     return ctx
 
 
@@ -500,6 +559,158 @@ def telefono_libero(agency_id: int) -> str:
                 (agency_id, f"%{numero}", f"%{numero}")) is None:
             return numero
     raise RuntimeError("nessun numero sintetico libero")
+
+
+# ---------------------------------------------------------------------------
+# Agente di prova e orari di disponibilita' (regole applicative esistenti, mai SQL)
+# ---------------------------------------------------------------------------
+
+def impronta_orari(agency_id: int, escludi_utente: int | None = None) -> tuple[int, str]:
+    """(righe, impronta) degli orari di lavoro dell'agenzia, esclusi quelli dell'agente di prova."""
+    riga = _uno("SELECT count(*) AS n, COALESCE(md5(string_agg(id::text || ':' || user_id::text || ':' || day_of_week::text || ':' || "
+                "start_minute::text || ':' || end_minute::text, ',' ORDER BY id)), '') AS h FROM agent_working_hours "
+                "WHERE agency_id = %s AND user_id <> %s", (agency_id, escludi_utente or 0))
+    return riga["n"], riga["h"]
+
+
+def _esito_sicuro(r) -> str:
+    """Stato e, per un rifiuto di validazione, SOLO campo e messaggio: mai il corpo inviato (c'e' la password)."""
+    try:
+        det = r.json().get("detail")
+    except Exception:
+        return str(r.status_code)
+    if isinstance(det, list):
+        return f"{r.status_code} " + "; ".join(f"{'.'.join(str(x) for x in d.get('loc', [])[1:])}: {d.get('msg')}" for d in det)
+    return f"{r.status_code} {str(det)[:160]}"
+
+
+def _orari_corpo() -> dict:
+    return {"slots": [{"day_of_week": d, "start_minute": ORARIO_PROVA["inizio"], "end_minute": ORARIO_PROVA["fine"]}
+                      for d in range(1, 8)]}
+
+
+def crea_agente_di_prova(R: Registro, cl: Client, ids: dict, run_id: str, contesti_vivi: dict) -> int | None:
+    """Un agente sintetico con i suoi orari; ritorna il suo id (o None se qualcosa non va)."""
+    agency = ids["agency"]
+    if "super" not in contesti_vivi:
+        R.controllo("A", "Super Admin designato disponibile", False, "STIMA360_SUPER_ADMIN_USER_ID non configurato")
+        return None
+    super_, owner = cl.attore("super"), cl.attore("owner")
+    righe_prima, hash_prima = impronta_orari(agency)
+    email = f"{AGENT_EMAIL_PREFIX}{run_id.lower()}{AGENT_EMAIL_DOMAIN}"
+    # password casuale, mai stampata, mai salvata: l'account non e' utilizzabile da nessuno
+    r = super_.post(f"/api/platform/agencies/{agency}/operators", json={
+        "email": email, "password": secrets.token_urlsafe(24), "first_name": NAME_PREFIX, "last_name": f"{run_id} Agente",
+        "role": "agent", "status": "active"})
+    corpo = r.json() if r.status_code == 201 else {}
+    uid = (corpo.get("operator") or {}).get("id")
+    R.controllo("A", "agente di prova creato dalla rotta di piattaforma (Super Admin), con membership «agent» attiva",
+                r.status_code == 201 and uid is not None and (corpo.get("membership") or {}).get("role") == "agent"
+                and (corpo.get("membership") or {}).get("status") == "active", _esito_sicuro(r))
+    if uid is None:
+        return None
+    contesti_vivi["agente"] = _p2.operatore(agency, uid, "agent")
+    ids["agent"] = uid
+    ids["agente_di_prova"] = uid
+    R.controllo("A", "nome e e-mail dell'agente sono marcati come collaudo (@example.invalid)",
+                (_uno("SELECT email_normalized AS e FROM operator_users WHERE id = %s", (uid,)) or {}).get("e") == email)
+    ora = _uno("SELECT count(*) AS n FROM agent_working_hours WHERE agency_id = %s AND user_id = %s", (agency, uid))["n"]
+    R.controllo("A", "l'agente nasce senza orari (nulla ereditato)", ora == 0, f"{ora}")
+
+    # permessi PRIMA di scrivere gli orari: chi non puo' non deve riuscire
+    estraneo_a = cl.attore("altro_agente")
+    estranea = cl.attore("altra_agenzia")
+    agente = cl.attore("agente")
+    percorso_ore = f"/api/appointments/agents/{uid}/working-hours"
+    no = {
+        "altro agente": estraneo_a.put(percorso_ore, json=_orari_corpo()).status_code,
+        "altra agenzia": estranea.put(percorso_ore, json=_orari_corpo()).status_code,
+    }
+    scritti = _uno("SELECT count(*) AS n FROM agent_working_hours WHERE agency_id = %s AND user_id = %s", (agency, uid))["n"]
+    R.controllo("A", "permessi: un altro agente o un'altra agenzia NON possono scrivere gli orari dell'agente di prova "
+                "(rifiutati, nessuna riga scritta)", all(c in (403, 404, 422) for c in no.values()) and scritti == 0,
+                f"{no}, {scritti} righe")
+    sa = agente.put(f"/api/appointments/agents/{ids['actor']}/working-hours", json=_orari_corpo()).status_code
+    altrui = _uno("SELECT count(*) AS n FROM agent_working_hours WHERE agency_id = %s AND user_id = %s", (agency, ids["actor"]))["n"]
+    R.controllo("A", "permessi: l'agente di prova non puo' scrivere gli orari di un altro operatore (rifiutato, nulla scritto)",
+                sa in (403, 404) and altrui == 0, f"{sa}, {altrui} righe")
+    nuovi = agente.post(f"/api/platform/agencies/{agency}/operators", json={
+        "email": f"{AGENT_EMAIL_PREFIX}x{run_id.lower()}{AGENT_EMAIL_DOMAIN}", "password": secrets.token_urlsafe(24),
+        "role": "agent", "status": "active"}).status_code
+    nuovi_o = owner.post(f"/api/platform/agencies/{agency}/operators", json={
+        "email": f"{AGENT_EMAIL_PREFIX}y{run_id.lower()}{AGENT_EMAIL_DOMAIN}", "password": secrets.token_urlsafe(24),
+        "role": "agent", "status": "active"}).status_code
+    R.controllo("A", "permessi: ne' l'agente ne' l'owner dell'agenzia possono creare operatori (solo il Super Admin)",
+                nuovi in (401, 403) and nuovi_o in (401, 403), f"{nuovi}/{nuovi_o}")
+    creati_per_errore = _uno("SELECT count(*) AS n FROM operator_users WHERE email_normalized IN (%s, %s)",
+                             (f"{AGENT_EMAIL_PREFIX}x{run_id.lower()}{AGENT_EMAIL_DOMAIN}",
+                              f"{AGENT_EMAIL_PREFIX}y{run_id.lower()}{AGENT_EMAIL_DOMAIN}"))["n"]
+    R.controllo("A", "i tentativi non autorizzati non hanno creato alcun account", creati_per_errore == 0, f"{creati_per_errore}")
+
+    # gli orari: li scrive l'owner dell'agenzia con la rotta esistente
+    w = owner.put(percorso_ore, json=_orari_corpo())
+    R.controllo("A", "orari di disponibilita' scritti dall'owner con la rotta esistente (7 giorni, 09:00-19:00)",
+                w.status_code == 200 and len(w.json().get("items", [])) == 7, f"{_esito_sicuro(w)}")
+    letti = agente.get(percorso_ore)
+    R.controllo("A", "l'agente di prova legge i propri orari", letti.status_code == 200 and len(letti.json().get("items", [])) == 7,
+                f"{letti.status_code}")
+    sovrapposto = owner.put(percorso_ore, json={"slots": [
+        {"day_of_week": 1, "start_minute": 540, "end_minute": 800}, {"day_of_week": 1, "start_minute": 700, "end_minute": 900}]})
+    R.controllo("A", "le regole esistenti rifiutano fasce sovrapposte (e gli orari restano quelli giusti)",
+                sovrapposto.status_code in (400, 409, 422)
+                and _uno("SELECT count(*) AS n FROM agent_working_hours WHERE agency_id = %s AND user_id = %s", (agency, uid))["n"] == 7,
+                f"{sovrapposto.status_code}")
+    righe_dopo, hash_dopo = impronta_orari(agency, uid)
+    R.controllo("A", "gli orari di lavoro degli altri agenti non sono stati toccati", (righe_dopo, hash_dopo) == (righe_prima, hash_prima),
+                f"{righe_prima}->{righe_dopo}")
+    ids["_impronta_orari"] = (righe_prima, hash_prima)
+    return uid
+
+
+def pulizia_agente(R: Registro | None, cl: Client, ids: dict, run_id: str | None) -> None:
+    """Chiude gli agenti di prova (di questo collaudo, o tutti): orari svuotati, membership revocata,
+    account disabilitato ed eliminato in modo logico. Nessuna riga cancellata."""
+    agency = ids["agency"]
+    filtro = f"{AGENT_EMAIL_PREFIX}{run_id.lower()}{AGENT_EMAIL_DOMAIN}" if run_id else f"{AGENT_EMAIL_PREFIX}%{AGENT_EMAIL_DOMAIN}"
+    agenti = _q("SELECT u.id FROM operator_users u JOIN agency_memberships m ON m.operator_user_id = u.id AND m.agency_id = %s "
+                "WHERE u.email_normalized LIKE %s AND u.deleted_at IS NULL ORDER BY u.id", (agency, filtro))
+    if not agenti:
+        print(f"INFO  pulizia agenti di prova: nessuno da chiudere ({filtro.replace('%', '*')})", flush=True)
+        return
+
+    def controllo(passo, testo, ok, det=""):
+        if R is not None:
+            R.controllo(passo, testo, ok, det)
+        else:
+            print(f"{OK if ok else KO:4} {passo:<3} {testo}{'' if ok else '  [' + det + ']'}", flush=True)
+
+    super_, owner = cl.attore("super"), cl.attore("owner")
+    for ag in agenti:
+        uid = ag["id"]
+        svuota = owner.put(f"/api/appointments/agents/{uid}/working-hours", json={"slots": []})
+        residui = _uno("SELECT count(*) AS n FROM agent_working_hours WHERE agency_id = %s AND user_id = %s", (agency, uid))["n"]
+        controllo("Z", "orari dell'agente di prova rimossi", residui == 0, f"{_esito_sicuro(svuota)}; {residui} righe residue")
+        m = super_.patch(f"/api/platform/agencies/{agency}/operators/{uid}/membership", json={"status": "revoked"})
+        controllo("Z", "membership dell'agente di prova revocata", m.status_code == 200, _esito_sicuro(m))
+        d = super_.patch(f"/api/platform/operators/{uid}", json={"status": "disabled"})
+        controllo("Z", "account dell'agente di prova disabilitato", d.status_code == 200, _esito_sicuro(d))
+        e = super_.post(f"/api/platform/operators/{uid}/delete")
+        controllo("Z", "account dell'agente di prova eliminato in modo logico", e.status_code == 200, _esito_sicuro(e))
+        stato = _uno("SELECT u.status, u.deleted_at IS NOT NULL AS eliminato, "
+                     "(SELECT count(*) FROM operator_sessions s WHERE s.operator_user_id = u.id AND s.revoked_at IS NULL "
+                     " AND s.expires_at > NOW()) AS sessioni FROM operator_users u WHERE u.id = %s", (uid,))
+        controllo("Z", "agente di prova: disabilitato, eliminato, nessuna sessione attiva",
+                  stato is not None and stato["status"] == "disabled" and stato["eliminato"] and stato["sessioni"] == 0, f"{stato}")
+    if run_id:
+        elenco = [a["id"] for a in agenti]
+        altrui = _uno("SELECT count(*) AS n FROM appointments a JOIN properties p ON p.id = a.property_id AND p.agency_id = a.agency_id "
+                      "WHERE a.agency_id = %s AND p.code LIKE %s AND NOT (a.assigned_user_id = ANY(%s))",
+                      (agency, f"{CODE_PREFIX}{run_id}%", elenco))["n"]
+        controllo("Z", "nessun appuntamento del collaudo e' assegnato a un agente reale", altrui == 0, f"{altrui}")
+    if "_impronta_orari" in ids:
+        prima = ids["_impronta_orari"]
+        dopo = impronta_orari(agency)
+        controllo("Z", "alla fine gli orari di lavoro degli altri agenti sono identici a prima", dopo == prima, f"{prima[0]}->{dopo[0]}")
 
 
 # ---------------------------------------------------------------------------
@@ -755,15 +966,43 @@ def pulizia(cl: Client, ids: dict, run_id: str | None) -> None:
 # Comandi
 # ---------------------------------------------------------------------------
 
+def _controlla_argomenti(args) -> None:
+    if args.agente_di_prova and args.agent_user_id:
+        print("STOP --agente-di-prova e --agent-user-id sono incompatibili: o l'agente reale, o quello di prova", flush=True)
+        raise SystemExit(2)
+
+
+def risolvi_senza_agente(args) -> None:
+    """Agenzia e attore come negli altri collaudi; l'agente reale NON viene cercato ne' usato."""
+    import contextlib
+    import io
+    args.agent_user_id = -1                                        # segnaposto: evita che si cerchi un agente reale
+    buffer = io.StringIO()
+    uscita = None
+    try:
+        with contextlib.redirect_stdout(buffer):
+            _p2.risolvi_ids(args)
+    except SystemExit as exc:                                      # agenzia o attore ambigui: il messaggio va mostrato
+        uscita = exc
+    finally:
+        args.agent_user_id = None
+    testo = buffer.getvalue().replace(", agente -1", "").replace("agente -1", "")
+    if testo.strip():
+        print(testo.rstrip().replace("(ricavati dal servizio)", "(ricavati dal servizio; agente: di prova)"), flush=True)
+    if uscita is not None:
+        raise uscita
+
+
 def _preflight(args) -> tuple:
+    _controlla_argomenti(args)
     g = _p2.Gate()
     gate_ambiente(g, args)
-    _p2.risolvi_ids(args)
+    risolvi_senza_agente(args) if args.agente_di_prova else _p2.risolvi_ids(args)
     gate_configurazione(g)
     conn = _p2._connect(True)
     try:
         cur = conn.cursor()
-        gate_database(g, cur, args.agency_id, args.actor_user_id, args.agent_user_id)
+        gate_database(g, cur, args.agency_id, args.actor_user_id, args.agent_user_id, agente_di_prova=args.agente_di_prova)
         ruoli = gate_ruoli(cur, args.agency_id, args.agent_user_id) if not g.problems else {}
         conn.rollback()
     finally:
@@ -778,15 +1017,16 @@ def cmd_preflight(args) -> int:
     return 0 if not g.problems else 1
 
 
-def stampa_report(R: Registro, run_id: str) -> None:
-    titoli = {"0": "Preparazione dei dati sintetici", "1": "1. Prenotazione -> Agenda", "2": "2. Esito e feedback",
+def stampa_report(R: Registro, run_id: str, con_agente: bool = False) -> None:
+    titoli = {"A": "A. Agente di prova, orari e permessi", "Z": "Z. Pulizia della configurazione di prova",
+              "0": "Preparazione dei dati sintetici", "1": "1. Prenotazione -> Agenda", "2": "2. Esito e feedback",
               "3": "3. Schede immobile e contatto", "4": "4. Foglio visita PDF e archivio",
               "5": "5. Aggiornamento al proprietario e portale", "6": "6. Privacy, permessi, duplicati, ritiro"}
     print(f"\n==== REPORT COLLAUDO VISITE {run_id} ====", flush=True)
     for passo, stati in sorted(R.per_passo().items()):
         esito = "FAIL" if KO in stati else ("PASS" if stati and all(s in (OK, NA) for s in stati) else "SKIP")
         print(f"{esito:4}  {titoli.get(passo, passo):<46} {stati.count(OK)} pass, {stati.count(KO)} fail, {stati.count(NA)} skip", flush=True)
-    attesi = {"1", "2", "3", "4", "5", "6"}
+    attesi = {"1", "2", "3", "4", "5", "6"} | ({"A", "Z"} if con_agente else set())
     mancanti = sorted(attesi - set(R.per_passo()))
     for m in mancanti:
         print(f"FAIL  {titoli[m]:<46} NON ESEGUITO", flush=True)
@@ -810,13 +1050,18 @@ def cmd_avvia(args) -> int:
         return 1
     ids = {"agency": args.agency_id, "actor": args.actor_user_id, "agent": args.agent_user_id}
     run_id = args.run_id or datetime.now(ROMA).strftime("CV%y%m%d%H%M%S")
-    print(f"\nINFO  collaudo {run_id}: agenzia {ids['agency']}, attore {ids['actor']}, agente {ids['agent']} "
+    print(f"\nINFO  collaudo {run_id}: agenzia {ids['agency']}, attore {ids['actor']}, agente "
+          f"{'di prova (da creare)' if args.agente_di_prova else ids['agent']} "
           f"(altro agente {'reale' if ruoli['altro_agente'] else 'sintetico'}, altra agenzia "
           f"{'reale' if ruoli['altra_agenzia'] else 'sintetica'})\n", flush=True)
     R = Registro()
-    cl = Client(contesti(ids["agency"], ids["actor"], ids["agent"], ruoli))
+    vivi = contesti(ids["agency"], ids["actor"], ids["agent"] or 0, ruoli)
+    cl = Client(vivi)
     try:
         try:
+            if args.agente_di_prova:
+                if crea_agente_di_prova(R, cl, ids, run_id, vivi) is None:
+                    raise RuntimeError("agente di prova non predisposto")
             dati = prepara(R, cl, ids, run_id)
             if dati is not None:
                 percorso(R, cl, ids, run_id, dati)
@@ -827,16 +1072,25 @@ def cmd_avvia(args) -> int:
                 pulizia(cl, ids, run_id)
             except Exception as exc:
                 print(f"WARN  pulizia incompleta: {type(exc).__name__}; rilanciare `cleanup`", flush=True)
+            if args.agente_di_prova:
+                try:
+                    pulizia_agente(R, cl, ids, run_id)
+                except Exception as exc:
+                    R.controllo("Z", "pulizia dell'agente di prova", False, f"{type(exc).__name__}: {str(exc)[:200]}")
     finally:
         cl.chiudi()
-    stampa_report(R, run_id)
-    return 0 if R.fallite() == 0 and not (set("123456") - set(R.per_passo())) else 1
+    stampa_report(R, run_id, con_agente=args.agente_di_prova)
+    attesi = set("123456") | ({"A", "Z"} if args.agente_di_prova else set())
+    return 0 if R.fallite() == 0 and not (attesi - set(R.per_passo())) else 1
 
 
 def cmd_cleanup(args) -> int:
+    _controlla_argomenti(args)
     g = _p2.Gate()
     gate_ambiente(g, args)
-    _p2.risolvi_ids(args)
+    g.need(not _sembra_produzione(), "nessuna variabile d'ambiente dichiara «production»")
+    g.stop_if_failed("ambiente non verificato")
+    risolvi_senza_agente(args) if args.agente_di_prova else _p2.risolvi_ids(args)
     ids = {"agency": args.agency_id, "actor": args.actor_user_id, "agent": args.agent_user_id}
     conn = _p2._connect(True)
     try:
@@ -844,9 +1098,10 @@ def cmd_cleanup(args) -> int:
         conn.rollback()
     finally:
         conn.close()
-    cl = Client(contesti(ids["agency"], ids["actor"], ids["agent"], ruoli))
+    cl = Client(contesti(ids["agency"], ids["actor"], ids["agent"] or 0, ruoli))
     try:
         pulizia(cl, ids, args.run_id)
+        pulizia_agente(None, cl, ids, args.run_id)                 # chiude anche gli agenti di prova rimasti
     finally:
         cl.chiudi()
     return 0
@@ -859,6 +1114,9 @@ def main(argv=None) -> int:
     p.add_argument("--agency-id", type=int, help="se manca: l'unica agenzia servita dal cron")
     p.add_argument("--actor-user-id", type=int, help="se manca: l'unico owner attivo dell'agenzia")
     p.add_argument("--agent-user-id", type=int, help="se manca: l'unico agente attivo, altrimenti l'attore")
+    p.add_argument("--agente-di-prova", action="store_true",
+                   help="crea (e a fine collaudo chiude) un agente sintetico con orari di disponibilita': serve quando "
+                        "nessun agente reale ha un orario. Incompatibile con --agent-user-id")
     p.add_argument("--run-id")
     args = p.parse_args(argv)
     return {"avvia": cmd_avvia, "preflight": cmd_preflight, "cleanup": cmd_cleanup}[args.mode](args)

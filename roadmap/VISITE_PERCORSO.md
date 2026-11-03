@@ -130,3 +130,32 @@ sintetica come evento senza invitati (`sendUpdates=none`, nessun partecipante); 
 
 **Prova generale:** `tests/test_collaudo_visite_script_postgres.py` (7 test) esegue lo stesso script contro un PostgreSQL
 usa e getta, anche senza `pdftotext`, e le sue guardie (host diverso, ambiente «production», destinatari `*`).
+
+
+### Agente di prova (`--agente-di-prova`)
+
+Sul TEST `agent_working_hours` è vuota: senza un orario di lavoro non può esistere il collegamento di prenotazione.
+Lo script non inventa orari agli agenti reali e non scrive con SQL: con `--agente-di-prova` usa le regole esistenti.
+
+```bash
+python scripts/collaudo_visite.py preflight --expected-host <HOST_DB_TEST_VERIFICATO> --agente-di-prova
+python scripts/collaudo_visite.py avvia --expected-host <HOST_DB_TEST_VERIFICATO> --agente-di-prova
+```
+
+- **Creazione:** `POST /api/platform/agencies/{id}/operators` come Super Admin designato
+  (`STIMA360_SUPER_ADMIN_USER_ID`, riletto nel database; con il registro `platform_audit_log`), ruolo `agent`,
+  e-mail `collaudo.agente.<run>@example.invalid`, password casuale mai stampata né salvata: nessuno potrà accedere.
+- **Orari:** `PUT /api/appointments/agents/{id}/working-hours` come owner dell'agenzia (7 giorni, 09:00–19:00).
+  Le fasce sovrapposte sono rifiutate dalle regole esistenti (provato).
+- **Permessi verificati (passo A):** un altro agente e un'altra agenzia non scrivono gli orari dell'agente di prova;
+  l'agente di prova non scrive gli orari altrui; né l'agente né l'owner creano operatori; i tentativi non scrivono nulla.
+- **Pulizia (passo Z), in quest'ordine:** orari svuotati → membership revocata → account disabilitato → eliminazione
+  logica (con audit); nessuna sessione attiva; nessuna riga cancellata. Rilanciabile: `cleanup --agente-di-prova`
+  chiude anche gli agenti di prova rimasti da un collaudo interrotto.
+- **Agenti reali:** non usati e non toccati. Lo script confronta l'impronta dei loro orari prima e dopo e verifica che
+  nessun appuntamento del collaudo sia assegnato a un agente reale.
+- **Guardie in più:** Super Admin configurato e attivo; eliminazione logica disponibile (migrazione 113);
+  `--agente-di-prova` e `--agent-user-id` sono incompatibili; restano `DB_NAME`, host atteso, nessun «production»,
+  destinatari ≠ `*`.
+- **Effetto visibile:** per la durata del collaudo (pochi minuti) l'agente di prova compare tra gli agenti attivi
+  dell'agenzia; poi è disabilitato ed eliminato in modo logico.
