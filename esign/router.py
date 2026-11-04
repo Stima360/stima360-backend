@@ -1,24 +1,25 @@
-"""BLOCCO-6B - `/api/signature-requests`: richieste di firma dei fogli visita.
+"""BLOCCO-6B / FIRMA OTP - `/api/signature-requests`: richieste di firma dei fogli visita (operatore).
 
 Montato in main.py con `require_authenticated_operator`; scope da `require_operator`.
-Oggi l'unico fornitore e' l'adattatore SIMULATO: nessuna firma valida.
 
-    POST /api/signature-requests                          crea (idempotente sulla chiave)
-    GET  /api/signature-requests?visit_sheet_id=          richieste di un foglio
-    POST /api/signature-requests/{id}/cancel              annulla
-    POST /api/signature-requests/{id}/simulate            esito simulato: completed | declined
-    POST /api/signature-requests/{id}/refresh             rilegge lo stato dal fornitore reale
-    GET  /api/signature-requests/{id}/signing-links       link PERSONALI di firma (segreti, no-store)
-    GET  /api/signature-requests/{id}/signing-links/{role}/qr.svg   il QR del link
-    GET  /api/signature-requests/config/provider          quale servizio e' attivo (nessun segreto)
-    GET  /api/signature-requests/{id}/document            documento ricevuto (ricevuta di simulazione)
+    POST /api/signature-requests                          crea (idempotente sulla chiave): simulazione o firma OTP
+    GET  /api/signature-requests?visit_sheet_id=          richieste di un foglio, con stato operativo dal server
+    GET  /api/signature-requests/config/provider          quale modo e' attivo (nessun segreto)
+    POST /api/signature-requests/{id}/cancel              revoca
+    POST /api/signature-requests/{id}/simulate            esito simulato: completed | declined (solo simulazione)
+    POST /api/signature-requests/{id}/links               nuovo collegamento del cliente: {send: true} email, false = URL una volta
+    POST /api/signature-requests/{id}/sign-as-agent       la firma dell'agente assegnato (password + dichiarazione)
+    GET  /api/signature-requests/{id}/document            documento sottoscritto (o ricevuta di simulazione)
+    GET  /api/signature-requests/{id}/audit-trail         rapporto delle prove (PDF)
+    GET  /api/signature-requests/{id}/events              cronologia delle prove e verifica della catena
+    GET  /api/signature-requests/{id}/verify              verifica di integrita' (catena, sigilli, impronte)
 """
 from __future__ import annotations
 
 from typing import Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Path, Query, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -26,15 +27,10 @@ from operator_auth.context import OperatorContext
 from operator_auth.dependencies import require_operator
 from operator_auth.exceptions import PlatformAdminAgencyRequired
 
-from . import providers, service
+from . import otp_service, providers, service
 
 router = APIRouter(prefix="/api/signature-requests", tags=["signature-requests"])
-#: BLOCCO-5: gli eventi di un fornitore reale. Pubblico (lo chiama il
-#: fornitore), autenticato dalla firma del corpo; nessun fornitore e'
-#: configurato, quindi oggi risponde sempre 404 neutro.
-public_router = APIRouter(prefix="/api/public/esign", tags=["esign-public"])
-PROVIDER = Path(..., pattern=r"^[a-z][a-z0-9_]{1,29}$")
-MAX_EVENT_BYTES = 256 * 1024
+NO_STORE = {"Cache-Control": "no-store"}
 
 
 class CreateRequest(BaseModel):
@@ -45,12 +41,27 @@ class CreateRequest(BaseModel):
     signer_contact: str = Field(..., min_length=3, max_length=200)
     expires_in_days: int = Field(7, ge=1, le=30)
     idempotency_key: UUID
+    include_agent: bool = True
 
 
 class OutcomeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     outcome: Literal["completed", "declined"]
+
+
+class LinkRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    send: bool = True
+
+
+class AgentSignRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(..., min_length=1, max_length=200)
+    consent_accepted: bool
+    consent_version: str = Field(..., min_length=1, max_length=60)
 
 
 def _call(fn, *args, **kwargs):
@@ -62,16 +73,41 @@ def _call(fn, *args, **kwargs):
         raise HTTPException(status_code=exc.status, detail={"code": exc.code, "message": str(exc)}) from exc
 
 
+def _client(request: Request) -> tuple[str | None, str | None]:
+    return (request.client.host if request.client else None), request.headers.get("user-agent")
+
+
 @router.post("")
 def create(body: CreateRequest, ctx: OperatorContext = Depends(require_operator)):
     return _call(service.create, ctx, visit_sheet_id=body.visit_sheet_id, signer_name=body.signer_name.strip(),
                  signer_contact=body.signer_contact.strip(), expires_in_days=body.expires_in_days,
-                 idempotency_key=str(body.idempotency_key))
+                 idempotency_key=str(body.idempotency_key), include_agent=body.include_agent)
 
 
 @router.get("")
 def list_requests(visit_sheet_id: int = Query(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
     return _call(service.list_for_sheet, ctx, visit_sheet_id)
+
+
+@router.get("/config/provider")
+def provider_config(ctx: OperatorContext = Depends(require_operator)):
+    """Quale modo di firma e' attivo (per mostrare il riquadro giusto). Nessun segreto, nessun indirizzo."""
+    ctx.require_agency()
+    try:
+        modo = providers.mode()
+    except providers.ProviderNotConfigured:
+        return {"configured": False, "provider": None, "simulation": False, "otp": False}
+    out = {"configured": True, "provider": modo, "simulation": modo == providers.SIMULATED, "otp": modo == providers.OTP_PROVIDER}
+    if out["otp"]:
+        from . import otp_security
+        try:
+            otp_security.require_configuration()
+            out["otp_ready"] = True
+        except otp_security.NotConfigured as exc:
+            out["otp_ready"] = False
+            out["otp_problem"] = str(exc)
+        out["recipients_restricted"] = otp_security.allowed_recipients() is not None
+    return out
 
 
 @router.post("/{request_id}/cancel")
@@ -84,81 +120,40 @@ def simulate(body: OutcomeRequest, request_id: int = Path(..., ge=1), ctx: Opera
     return _call(service.simulate_outcome, ctx, request_id, body.outcome)
 
 
+@router.post("/{request_id}/links")
+def links(body: LinkRequest, request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
+    """`send: true` reinvia l'email con un collegamento nuovo; `false` restituisce il collegamento UNA volta (mai in cache)."""
+    return JSONResponse(_call(otp_service.issue_link, ctx, request_id, send=body.send), headers=NO_STORE)
+
+
+@router.post("/{request_id}/sign-as-agent")
+def sign_as_agent(body: AgentSignRequest, request: Request, request_id: int = Path(..., ge=1),
+                  ctx: OperatorContext = Depends(require_operator)):
+    ip, ua = _client(request)
+    return JSONResponse(_call(otp_service.sign_as_agent, ctx, request_id, password=body.password,
+                              consent_accepted=body.consent_accepted, consent_version=body.consent_version, ip=ip, user_agent=ua),
+                        headers=NO_STORE)
+
+
 @router.get("/{request_id}/document")
 def document(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
     out = _call(service.document, ctx, request_id)
-    return Response(content=out["data"], media_type="application/pdf", headers={
-        "Content-Disposition": f'attachment; filename="{out["filename"]}"', "Cache-Control": "no-store"})
+    return Response(content=out["data"], media_type=out["media_type"], headers={
+        "Content-Disposition": f'attachment; filename="{out["filename"]}"', **NO_STORE})
 
 
 @router.get("/{request_id}/audit-trail")
 def audit_trail(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
     out = _call(service.audit_trail, ctx, request_id)
-    return Response(content=out["data"], media_type=out.get("media_type", "application/pdf"), headers={
-        "Content-Disposition": f'attachment; filename="{out["filename"]}"', "Cache-Control": "no-store"})
+    return Response(content=out["data"], media_type=out["media_type"], headers={
+        "Content-Disposition": f'attachment; filename="{out["filename"]}"', **NO_STORE})
 
 
-@router.post("/{request_id}/refresh")
-def refresh(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
-    """Rilegge lo stato dal fornitore (per quando i webhook non arrivano)."""
-    return JSONResponse(_call(service.refresh, ctx, request_id), headers={"Cache-Control": "no-store"})
+@router.get("/{request_id}/events")
+def events(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
+    return JSONResponse(_call(otp_service.events, ctx, request_id), headers=NO_STORE)
 
 
-@router.get("/{request_id}/signing-links")
-def signing_links(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
-    """I collegamenti PERSONALI di firma: segreti, solo per la richiesta aperta, mai in cache."""
-    return JSONResponse(_call(service.signing_links, ctx, request_id), headers={"Cache-Control": "no-store"})
-
-
-@router.get("/{request_id}/signing-links/{role}/qr.svg")
-def signing_qr(request_id: int = Path(..., ge=1), role: Literal["visitor", "agent"] = Path(...),
-               ctx: OperatorContext = Depends(require_operator)):
-    svg = _call(service.signing_qr, ctx, request_id, role)
-    return Response(content=svg, media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
-
-
-@router.get("/config/provider")
-def provider_config(ctx: OperatorContext = Depends(require_operator)):
-    """Quale servizio di firma e' attivo (per mostrare il pulsante giusto). Nessun segreto."""
-    ctx.require_agency()
-    try:
-        provider = providers.current()
-    except providers.ProviderNotConfigured:
-        return {"configured": False, "provider": None, "simulation": False, "environment": None, "signers": False}
-    return {"configured": True, "provider": provider.name, "simulation": provider.is_simulation,
-            "environment": provider.environment, "signers": bool(getattr(provider, "supports_signers", False))}
-
-
-@public_router.post("/webhooks/{provider}")
-async def provider_event(request: Request, provider: str = PROVIDER):
-    raw = await request.body()
-    if len(raw) > MAX_EVENT_BYTES:
-        raise HTTPException(status_code=413, detail="Evento troppo grande")
-    try:
-        return _call(service.handle_provider_event, provider, dict(request.headers), raw)
-    except providers.InvalidEventSignature as exc:
-        raise HTTPException(status_code=401, detail="Evento non autentico") from exc
-
-
-# ---------------------------------------------------------------------------
-# Riconciliazione periodica: stesso segreto di servizio e stesse agenzie consentite del cron delle comunicazioni.
-# Senza segreto configurato e' SPENTA (503); il segreto non apre nessun'altra rotta.
-# ---------------------------------------------------------------------------
-
-internal_router = APIRouter(prefix="/api/internal/esign", tags=["esign-internal"])
-
-
-class ReconcileRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    agency_id: int = Field(..., gt=0)
-    limit: int = Field(50, ge=1, le=200)
-
-
-@internal_router.post("/reconcile")
-def reconcile(body: ReconcileRequest, token: str | None = Header(default=None, alias="X-Stima360-Cron-Token")):
-    from communication import cron_router
-    cron_router._autentica(token)
-    if body.agency_id not in cron_router.agenzie_consentite():
-        raise HTTPException(status_code=403, detail={"code": "agency_not_allowed"})
-    return _call(service.reconcile, body.agency_id, limit=body.limit)
+@router.get("/{request_id}/verify")
+def verify(request_id: int = Path(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
+    return JSONResponse(_call(otp_service.verify_integrity, ctx, request_id), headers=NO_STORE)

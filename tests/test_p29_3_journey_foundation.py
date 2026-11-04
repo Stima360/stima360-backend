@@ -166,7 +166,8 @@ def test_01_la_071_e_valida_e_in_coda():
     # SENTINELLA AGGIORNATA dall'integrazione WhatsApp: 126_whatsapp_inbound_reads (additiva).
     # SENTINELLA AGGIORNATA DAL PUNTO 2 della roadmap: 127_appointment_confirmations (additiva).
     # SENTINELLA AGGIORNATA DALL'INTEGRAZIONE DOCUMENSO: 128_signature_request_signers (additiva).
-    assert numeri[numeri.index(76):] == list(range(76, 129))
+    # SENTINELLA AGGIORNATA DALLA FIRMA OTP: 129_signature_otp (additiva).
+    assert numeri[numeri.index(76):] == list(range(76, 130))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))
@@ -344,7 +345,9 @@ def test_12_public_unsubscribe_e_un_origin_ammesso_e_l_insieme_resta_chiuso():
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
         "public_booking", "appointment_reminder", "public_consent",
         # SENTINELLA AGGIORNATA DA BLOCCO-4B: lo STOP WhatsApp ricevuto da un'agenzia.
-        "whatsapp_inbound")
+        "whatsapp_inbound",
+        # SENTINELLA AGGIORNATA DALLA FIRMA OTP: in coda `public_esign` (pagina di firma del foglio visita, token personale).
+        "public_esign")
     ctx = context.SystemAgencyContext(agency_id=3, origin="public_unsubscribe")
     assert ctx.require_agency() == 3 and ctx.user_id is None
     with pytest.raises(ValueError):

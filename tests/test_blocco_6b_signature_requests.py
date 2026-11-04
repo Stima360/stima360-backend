@@ -16,10 +16,15 @@ def test_only_the_simulated_provider_exists(monkeypatch):
     monkeypatch.delenv(providers.PROVIDER_ENV, raising=False)
     p = providers.current()
     assert p.name == "simulated" and p.is_simulation is True
-    for value in ("real", "qualified", "signed", "SIMULATED"):
+    for value in ("real", "qualified", "signed", "SIMULATED", "documenso"):
         monkeypatch.setenv(providers.PROVIDER_ENV, value)
         with pytest.raises(providers.ProviderNotConfigured):
             providers.current()
+    # SENTINELLA AGGIORNATA DALLA FIRMA OTP: l'unico altro modo e' la firma OTP proprietaria, che non e' un adattatore.
+    monkeypatch.setenv(providers.PROVIDER_ENV, "stima360_otp")
+    assert providers.mode() == "stima360_otp" and providers.otp_enabled() is True
+    with pytest.raises(providers.ProviderNotConfigured):
+        providers.current()
 
 
 def test_the_simulated_adapter_is_local_and_recognizable():
@@ -49,4 +54,5 @@ def test_ui_marks_every_request_as_a_simulation():
     js = (ROOT / "static" / "os_shell" / "assets" / "components" / "visit-sheets.js").read_text(encoding="utf-8")
     assert "SIMULAZIONE — nessuna firma valida" in js and "Richiedi firma (simulazione)" in js
     assert "nessuna firma valida viene prodotta" in js and "innerHTML" not in js
-    assert re.search(r"r\.simulation \? \[\[", js)                                # esiti simulati solo se simulata
+    # SENTINELLA AGGIORNATA DALLA FIRMA OTP: gli esiti simulati restano SOLO per una richiesta simulata.
+    assert "if (r.simulation) {" in js and "data-signature-simulate" in js

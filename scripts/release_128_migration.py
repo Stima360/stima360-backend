@@ -87,11 +87,10 @@ def files_gate(g: Gate, *, allow_later: bool = False) -> None:
     for v, (up, down) in NEW.items():
         g.need(_sha(mig / f"{v}.sql") == up and _sha(mig / f"{v}_down.sql") == down,
                f"{v} (up + down) nel deploy con checksum attesi")
+    # Le migrazioni SUCCESSIVE alla 128 possono gia' essere nel deploy (ognuna ha il suo script di rilascio, che richiede
+    # questa gia' registrata): si elencano e non fermano nessun modo.
     extra = sorted(p.name for p in mig.glob("*.sql") if p.name[:3].isdigit() and int(p.name[:3]) > 128)
-    if allow_later:
-        print("     file successivi alla 128 nel deploy: " + (", ".join(extra) or "nessuno"), flush=True)
-    else:
-        g.need(extra == [], "nessun file di migrazione oltre la 128 nel deploy")
+    print("     file successivi alla 128 nel deploy: " + (", ".join(extra) or "nessuno"), flush=True)
 
 
 def _connect():
@@ -123,7 +122,8 @@ def database_gate(g: Gate, expected_host: str, mode: str) -> None:
         for v, s in PRE.items():
             row = ledger.get(v)
             g.need(row is not None and row[1].strip() == s and row[6] is None, f"{v} applicata con checksum atteso")
-        others = sorted(v for v in ledger if v not in PRE and v not in NEW)
+        # una migrazione successiva gia' registrata (rilasciata con il suo script) non e' "estranea"
+        others = sorted(v for v in ledger if v not in PRE and v not in NEW and v[:3] <= "128")
         g.need(others == [], "nessuna migrazione estranea registrata oltre la 127")
         cur.execute("SELECT to_regclass('public.signature_request_signers') IS NOT NULL")
         ha_tabella = cur.fetchone()[0]

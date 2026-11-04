@@ -62,6 +62,9 @@ ETICHETTE_MOTIVO = {
     "consent_confirmation": "Conferma consenso email",
     # BLOCCO-4D (123): la risposta del motore delle risposte automatiche WhatsApp.
     "auto_reply": "Risposta automatica WhatsApp",
+    # FIRMA OTP (129): le due email del procedimento di firma del foglio visita.
+    "signature_link": "Collegamento per la firma del foglio visita",
+    "signature_otp": "Codice OTP per la firma del foglio visita",
     # 108 (Fase B): il calendario a 180 giorni usa fino a m17, il CHECK arriva a m20.
     **{f"m{i}": f"M{i}" for i in range(11, 21)},
 }

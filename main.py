@@ -97,8 +97,7 @@ from auto_replies.router import router as auto_replies_router
 # BLOCCO-6A: fogli visita (`/api/visit-sheets`).
 from visit_sheets.router import router as visit_sheets_router
 # BLOCCO-6B: richieste di firma (`/api/signature-requests`), oggi solo adattatore simulato.
-from esign.router import internal_router as esign_internal_router
-from esign.router import public_router as esign_public_router
+from esign.public_router import router as esign_public_router
 from esign.router import router as esign_router
 from platform_admin.dependencies import require_platform_admin
 from platform_admin.router import router as platform_router
@@ -241,9 +240,8 @@ app.include_router(visit_sheets_router, dependencies=[Depends(require_authentica
 # BLOCCO-6B: stesso montaggio; nessuna firma valida finche' non si integra un fornitore reale.
 app.include_router(esign_router, dependencies=[Depends(require_authenticated_operator)])
 # BLOCCO-5: eventi di un fornitore di firma (pubblici, autenticati dalla firma del corpo)
+# FIRMA OTP: la pagina del firmatario (token personale) e la sua API pubblica; spente senza ESIGN_PROVIDER=stima360_otp.
 app.include_router(esign_public_router)
-# DOCUMENSO: riconciliazione periodica delle firme, con il segreto di servizio del cron (vedi esign/router.py).
-app.include_router(esign_internal_router)
 # P29-3B.0: la disiscrizione dal marketing. PUBBLICA per natura - chi clicca
 # e' l'interessato, non un operatore - e autorizzata dalla firma del token,
 # non da una sessione. Nessuna dipendenza qui, di proposito.
@@ -463,6 +461,8 @@ app.mount("/visita-gestione", PublicBookingPage(Path(__file__).resolve().parent 
           name="visit-booking-manage-page")
 app.mount("/visita", PublicBookingPage(Path(__file__).resolve().parent / "static" / "visit_booking"),
           name="visit-booking-page")
+# FIRMA OTP: la pagina pubblica di firma del foglio visita (`/firma/<token>`), stessa classe delle pagine a token.
+app.mount("/firma", PublicBookingPage(Path(__file__).resolve().parent / "static" / "esign_sign"), name="esign-sign-page")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[

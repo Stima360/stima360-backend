@@ -31,3 +31,6 @@ segno==1.6.6
 # salvataggio. Era gia' installato come dipendenza di reportlab (pillow>=9.0.0):
 # qui diventa dichiarato, fissato alla versione gia' risolta (nessun aggiornamento).
 pillow==13.0.0
+
+# FIRMA OTP: il documento sottoscritto = pagine originali copiate + attestazione (puro Python).
+pypdf==6.21.4

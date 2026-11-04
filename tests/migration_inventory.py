@@ -121,6 +121,8 @@ APPROVED_VERSIONS = (
     "127_appointment_confirmations",
     # SENTINELLA AGGIORNATA DALL'INTEGRAZIONE DOCUMENSO: la 128 (firmatari delle richieste di firma; additiva).
     "128_signature_request_signers",
+    # SENTINELLA AGGIORNATA DALLA FIRMA OTP: la 129 (sfide OTP e registro probatorio; additiva).
+    "129_signature_otp",
 )
 
 

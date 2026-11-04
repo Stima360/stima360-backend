@@ -93,7 +93,9 @@ SYSTEM_CONTEXT_ORIGINS = ("public_stima", "communication_dispatch", "owner_login
                           # BLOCCO-4B: uno STOP ricevuto sul numero WhatsApp di UNA
                           # agenzia revoca il consenso marketing WhatsApp di quel
                           # contatto, solo in quell'agenzia (inbound_messages.service).
-                          "whatsapp_inbound")
+                          "whatsapp_inbound",
+                          # FIRMA OTP: la pagina pubblica di firma del foglio visita (token personale del firmatario)
+                          "public_esign")
 
 
 @runtime_checkable

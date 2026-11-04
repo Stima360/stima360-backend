@@ -318,7 +318,9 @@ def test_c2_l_insieme_degli_origin_resta_chiuso():
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
         "public_booking", "appointment_reminder", "public_consent",
         # SENTINELLA AGGIORNATA DA BLOCCO-4B: lo STOP WhatsApp ricevuto da un'agenzia.
-        "whatsapp_inbound")
+        "whatsapp_inbound",
+        # SENTINELLA AGGIORNATA DALLA FIRMA OTP: in coda `public_esign` (pagina di firma del foglio visita, token personale).
+        "public_esign")
     with pytest.raises(ValueError):
         SystemAgencyContext(agency_id=1, origin="owner_portal")
     with pytest.raises(ValueError):

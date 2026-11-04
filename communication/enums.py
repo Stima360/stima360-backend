@@ -155,6 +155,9 @@ REASON_AUTO_REPLY = "auto_reply"
 #: fissato, inviata al cliente dal CRM (flusso delle notifiche degli appuntamenti).
 #: Di servizio, come il promemoria.
 REASON_APPOINTMENT_CONFIRMATION = "appointment_confirmation"
+#: FIRMA OTP (129): l'email con il collegamento di firma e quella con il codice. Email di SERVIZIO.
+REASON_SIGNATURE_LINK = "signature_link"
+REASON_SIGNATURE_OTP = "signature_otp"
 REASON_CODES = frozenset({
     REASON_STIMA_PDF, REASON_OPERATOR_MANUAL, REASON_OPERATOR_REPLY,
     REASON_M1, REASON_M2, REASON_M3, REASON_M4, REASON_M5,
@@ -163,6 +166,7 @@ REASON_CODES = frozenset({
     REASON_CONSENT_CONFIRMATION,
     REASON_AUTO_REPLY,
     REASON_APPOINTMENT_CONFIRMATION,
+    REASON_SIGNATURE_LINK, REASON_SIGNATURE_OTP,
 } | {f"m{i}" for i in range(6, 21)})  # 108: fino a m20 (il calendario a 180 giorni ne usa 17)
 
 # --------------------------------------------------------------------------

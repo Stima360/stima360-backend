@@ -597,7 +597,9 @@ def test_system_context_origin_set_is_closed_and_declared():
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
         "public_booking", "appointment_reminder", "public_consent",
         # SENTINELLA AGGIORNATA DA BLOCCO-4B: lo STOP WhatsApp ricevuto da un'agenzia.
-        "whatsapp_inbound")
+        "whatsapp_inbound",
+        # SENTINELLA AGGIORNATA DALLA FIRMA OTP: in coda `public_esign` (pagina di firma del foglio visita, token personale).
+        "public_esign")
 
 
 def test_system_context_rejects_an_unapproved_origin():

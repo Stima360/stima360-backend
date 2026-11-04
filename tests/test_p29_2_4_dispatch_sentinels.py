@@ -141,7 +141,9 @@ def test_D1_linsieme_degli_origin_e_chiuso_e_contiene_il_dispatcher():
         "public_stima", "communication_dispatch", "owner_login", "public_unsubscribe",
         "public_booking", "appointment_reminder", "public_consent",
         # SENTINELLA AGGIORNATA DA BLOCCO-4B: lo STOP WhatsApp ricevuto da un'agenzia.
-        "whatsapp_inbound")
+        "whatsapp_inbound",
+        # SENTINELLA AGGIORNATA DALLA FIRMA OTP: in coda `public_esign` (pagina di firma del foglio visita, token personale).
+        "public_esign")
     assert dispatcher.DISPATCH_ORIGIN == "communication_dispatch"
 
 

@@ -110,10 +110,6 @@ PUBLIC_BY_DESIGN = {
     # dedicata (non `Authorization`). Spenta senza segreto (503); solo le
     # agenzie consentite dal server; esegue solo tick, promemoria e dispatch.
     ("POST", "/api/internal/communication/cron/run"),
-    # SENTINELLA AGGIORNATA DALL'INTEGRAZIONE DOCUMENSO: la riconciliazione periodica delle firme. Stesso SEGRETO DI
-    # SERVIZIO e stesse agenzie consentite del cron delle comunicazioni (`communication.cron_router._autentica`), confronto
-    # a tempo costante; spenta senza segreto (503); non legge dati: restituisce solo conteggi.
-    ("POST", "/api/internal/esign/reconcile"),
     # A30-12: il booking pubblico a link singolo-agente. Autenticato dal
     # token opaco del link (SOLO il suo SHA-256 vive nel database), non da
     # una sessione: chi apre il link non e' un operatore. Le tre rotte
@@ -134,12 +130,18 @@ PUBLIC_BY_DESIGN = {
     ("GET", "/api/public/visit-booking/manage/{key}/slots"),
     ("POST", "/api/public/visit-booking/manage/{key}/cancel"),
     ("POST", "/api/public/visit-booking/manage/{key}/reschedule"),
-    # SENTINELLA AGGIORNATA DA BLOCCO-5: gli eventi (webhook) di un fornitore di
-    # firma. Nessuna sessione: li chiama il fornitore; autenticati dall'adattatore
-    # con la firma del corpo grezzo (HMAC, confronto a tempo costante), una sola
-    # applicazione per id evento, stato sempre riletto dal fornitore. Nessun
-    # fornitore reale e' configurato: oggi risponde sempre 404.
-    ("POST", "/api/public/esign/webhooks/{provider}"),
+    # SENTINELLA AGGIORNATA DALLA FIRMA OTP: la pagina del firmatario. Nessuna sessione: la
+    # credenziale e' il token personale (256 bit, nel database solo la sua impronta), nel
+    # percorso; POST in JSON senza cookie; ogni risposta `no-store`; 404 neutro per un token
+    # sconosciuto; codici OTP con tentativi e scadenza persistiti. L'intera superficie e'
+    # spenta (404) senza `ESIGN_PROVIDER=stima360_otp`. (Il webhook Documenso e la
+    # riconciliazione interna non esistono piu'.)
+    ("GET", "/api/public/esign/sign/{token}"),
+    ("GET", "/api/public/esign/sign/{token}/pdf"),
+    ("POST", "/api/public/esign/sign/{token}/otp"),
+    ("POST", "/api/public/esign/sign/{token}/confirm"),
+    ("POST", "/api/public/esign/sign/{token}/decline"),
+    ("GET", "/api/public/esign/sign/{token}/signed.pdf"),
     # SENTINELLA AGGIORNATA DA STIMA-CRM-AGENDA-1 (F04/F07, `public_submissions`,
     # `stima_pdf`). Le ricevute degli invii pubblici: autenticate dall'identita'
     # dell'invio (UUID) piu' la prova `X-Receipt-Key`, di cui nel database vive

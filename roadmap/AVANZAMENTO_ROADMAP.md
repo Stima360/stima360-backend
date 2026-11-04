@@ -148,6 +148,6 @@ le variabili del servizio serve anche una chiave API Render tra i segreti dell'a
 ## 5. Parti ancora simulate o spente
 
 - **Risposte automatiche:** spente. In TEST, al massimo in simulazione; l'invio reale richiede due variabili, il modo `send` dell'agenzia e il trasporto Meta del 4B acceso.
-- **Firma:** solo l'adattatore simulato; firme reali impossibili (nessun adattatore).
+- **Firma:** FIRMA OTP STIMA360 (firma elettronica semplice, sistema proprietario, `roadmap/FIRMA_OTP.md`): attiva solo con `ESIGN_PROVIDER=stima360_otp` e le sue chiavi; sul TEST le email partono solo verso `ESIGN_ALLOWED_RECIPIENTS`. Il webhook e la riconciliazione dei fornitori esterni descritti sopra (punto 5) non esistono più; l'integrazione Documenso è stata rimossa.
 - **Invio manuale WhatsApp (4B):** spento su TEST (`WHATSAPP_OUTBOUND_MODE` assente).
 - **Collegamento del numero operativo:** solo pianificato.

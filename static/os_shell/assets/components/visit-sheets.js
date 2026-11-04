@@ -10,10 +10,11 @@
 // BLOCCO-6B: per ogni foglio, le richieste di firma. Con l'adattatore SIMULATO ogni
 // richiesta e ogni esito portano la scritta «SIMULAZIONE — nessuna firma valida».
 //
-// DOCUMENSO: con il servizio reale configurato la richiesta ha DUE firmatari (cliente e
-// agente). Il servizio NON scrive a nessuno: l'operatore apre i collegamenti personali o
-// mostra il QR al cliente, che firma dal telefono. Il livello è sempre «firma elettronica
-// semplice» e in ambiente di prova la firma non è utilizzabile. Tutto via `textContent`.
+// FIRMA OTP STIMA360: il riquadro «Firma elettronica OTP» (FES). L'agente invia la richiesta
+// (email con il collegamento personale al cliente), vede lo stato dal server, reinvia o copia
+// il collegamento, revoca, firma come agente (password + dichiarazione), scarica documento e
+// rapporto delle prove, verifica l'integrità. Il livello è sempre «firma elettronica semplice».
+// Tutto via `textContent`.
 
 import { apiGet, apiPost } from '../core/api-client.js';
 
@@ -72,74 +73,85 @@ async function downloadFrom(url, filename, holder) {
 }
 
 export function signatureLine(r) {
+  if (r.otp) {
+    const parts = [r.state_label || r.status_label, `procedimento ${r.procedure || r.provider_reference || ''}`];
+    if (r.status === 'signed') parts.push(r.signature_level_label || 'Firma elettronica semplice (FES)');
+    return parts.join(' · ');
+  }
   const parts = [r.status_label, `firmatario indicato: ${r.signer_name}`];
   if (r.simulation) parts.unshift('SIMULAZIONE — nessuna firma valida');
-  // BLOCCO-5: una firma dell'ambiente di prova del fornitore non e' valida
-  else if (r.provider_environment === 'sandbox') parts.unshift('AMBIENTE DI PROVA DEL FORNITORE — nessuna firma valida');
-  // condizione tecnica, non giudizio legale
+  else if (r.provider_environment === 'sandbox') parts.unshift('AMBIENTE DI PROVA — nessuna firma valida');
   if (r.status === 'signed') parts.push(r.valid_signature
-    ? `firmata nell'ambiente reale del fornitore (${r.signature_level_label || `livello dichiarato: ${(r.signature_level || '').toUpperCase()}`})`
+    ? (r.signature_level_label || 'firmata')
     : 'firma di prova, non utilizzabile');
   return parts.join(' · ');
-}
-
-function safeHref(url) {
-  try {
-    const u = new URL(url);
-    return (u.protocol === 'https:' || u.protocol === 'http:') ? u.href : null;
-  } catch (e) { return null; }
 }
 
 function signersBlock(r) {
   const list = el('ul', 'visit-sign-signers');
   for (const s of r.signers || []) {
-    list.appendChild(el('li', null, `${s.role_label}: ${s.name} — ${s.status_label}`));
+    const parts = [`${s.role_label}: ${s.name} — ${s.status_label}`];
+    if (s.signed_at) parts.push(when(s.signed_at));
+    list.appendChild(el('li', null, parts.join(' · ')));
   }
   return list;
 }
 
-/** I collegamenti personali: segreti, caricati solo su richiesta e mai tenuti nella pagina oltre a questa vista. */
-async function showLinks(r, holder) {
+const EMAIL_STATUS = { queued: 'in coda', sending: 'in invio', sent: 'accettata dal server di posta', failed: 'invio fallito',
+  indeterminate: 'esito incerto', suppressed: 'soppressa', cancelled: 'annullata' };
+
+function linkBlock(r) {
+  if (!r.link) return el('p', 'muted', 'Nessun collegamento ancora inviato al cliente.');
+  const mail = r.link.email;
+  const testo = [`Collegamento del ${when(r.link.issued_at)}`, r.link.valid ? 'valido' : 'non più valido',
+    mail ? `email ${EMAIL_STATUS[mail.status] || mail.status}${mail.error_code ? ` (${mail.error_code})` : ''}` : 'nessuna email'];
+  return el('p', 'muted', testo.join(' · '));
+}
+
+async function showEvents(r, holder) {
   holder.replaceChildren();
   let data;
-  try { data = await apiGet(`${ESIGN}/${r.id}/signing-links`); } catch (error) {
-    holder.appendChild(el('div', 'error-box', errorText(error)));
-    return;
+  try { data = await apiGet(`${ESIGN}/${r.id}/events`); } catch (error) { holder.appendChild(el('div', 'error-box', errorText(error))); return; }
+  const list = el('ol', 'visit-sign-events');
+  for (const e of data.items) {
+    const det = Object.entries(e.details || {}).filter(([k, v]) => v !== null && v !== '' && !/hash|sha256/.test(k)).map(([k, v]) => `${k}: ${v}`).join(', ');
+    list.appendChild(el('li', null, `${when(e.occurred_at)} — ${e.event_type} (${e.actor_kind})${det ? ` — ${det}` : ''}`));
   }
-  holder.appendChild(el('p', 'muted', 'Il servizio di firma non invia nulla. Apri il collegamento o fai inquadrare il QR al cliente: '
-    + 'chi lo apre firma al posto di quella persona, quindi non condividerlo.'));
-  for (const item of data.items) {
-    const row = el('div', 'visit-sign-link');
-    row.appendChild(el('strong', null, `${item.role_label}: ${item.name}`));
-    row.appendChild(el('span', 'badge badge-gray', item.status_label));
-    const href = item.url ? safeHref(item.url) : null;
-    if (href) {
-      const open = el('a', 'btn ghost', 'Apri per firmare');
-      open.href = href; open.target = '_blank'; open.rel = 'noopener noreferrer';
-      open.setAttribute('data-signature-open', item.role);
-      const copy = button('Copia collegamento', 'ghost', 'data-signature-copy');
-      copy.addEventListener('click', async () => {
-        try { await navigator.clipboard.writeText(href); copy.textContent = 'Copiato'; } catch (e) { copy.textContent = 'Copia non riuscita'; }
-      });
-      row.append(open, copy);
-      if (item.role === 'visitor') {
-        const qr = el('img', 'visit-sign-qr');
-        qr.alt = 'QR del collegamento di firma del cliente';
-        qr.width = 180; qr.height = 180;
-        qr.src = `${ESIGN}/${r.id}/signing-links/visitor/qr.svg`;
-        qr.setAttribute('data-signature-qr', '');
-        row.appendChild(qr);
-      }
-    }
-    holder.appendChild(row);
-  }
+  holder.appendChild(list);
+  holder.appendChild(el('p', data.integrity.ok ? 'success-box' : 'error-box',
+    data.integrity.ok ? `Catena delle prove integra: ${data.integrity.count} voci.` : `Catena delle prove NON integra: ${data.integrity.problems.join('; ')}`));
+}
+
+function agentSignForm(r, box, load) {
+  const form = el('div', 'visit-sign-form');
+  form.setAttribute('data-agent-sign-form', '');
+  form.appendChild(el('p', 'muted', 'Firmi come agente assegnato alla visita, con la tua sessione: conferma la password e accetta la dichiarazione. '
+    + 'La tua firma è separata da quella del cliente e ha le sue prove.'));
+  const consent = el('label', 'muted');
+  const check = el('input'); check.type = 'checkbox'; check.setAttribute('data-agent-consent', '');
+  consent.append(check, el('span', null, ' Dichiaro di aver letto il foglio visita in questa versione e di volerlo sottoscrivere con firma elettronica semplice.'));
+  const pwd = el('input', 'input'); pwd.type = 'password'; pwd.placeholder = 'La tua password'; pwd.autocomplete = 'current-password';
+  pwd.setAttribute('data-agent-password', '');
+  const go = button('Firma come agente', 'primary', 'data-agent-sign');
+  go.disabled = true;
+  const update = () => { go.disabled = !(check.checked && pwd.value.length > 0); };
+  check.addEventListener('change', update); pwd.addEventListener('input', update);
+  go.addEventListener('click', async () => {
+    go.disabled = true;
+    try {
+      await apiPost(`${ESIGN}/${r.id}/sign-as-agent`, { password: pwd.value, consent_accepted: check.checked === true, consent_version: 'dichiarazione_firma_otp_v1' });
+      await load();
+    } catch (error) { update(); form.appendChild(el('div', 'error-box', errorText(error))); }
+  });
+  form.append(consent, pwd, go);
+  return form;
 }
 
 async function mountSignatures(holder, sheet, badge) {
   const box = el('div', 'visit-sign');
   box.setAttribute('data-signatures', String(sheet.id));
   holder.appendChild(box);
-  let config = { signers: false };
+  let config = { otp: false, simulation: true };
   try { config = await apiGet(`${ESIGN}/config/provider`); } catch (error) { /* senza configurazione resta la simulazione */ }
   async function load() {
     box.replaceChildren();
@@ -154,78 +166,127 @@ async function mountSignatures(holder, sheet, badge) {
       const signed = real.find((x) => x.status === 'signed');
       const waiting = real.find((x) => x.status === 'sent');
       if (signed) {
-        badge.textContent = signed.valid_signature ? 'Firmato (firma elettronica semplice)' : 'Firmato in prova — non utilizzabile';
-        badge.setAttribute('data-visit-sheet-signature-state', signed.valid_signature ? 'signed' : 'signed_test');
+        badge.textContent = 'Sottoscritto (firma elettronica semplice)';
+        badge.setAttribute('data-visit-sheet-signature-state', 'signed');
       } else if (waiting) {
-        badge.textContent = 'In attesa di firma';
+        badge.textContent = waiting.state_label || 'In attesa di firma';
         badge.setAttribute('data-visit-sheet-signature-state', 'pending');
       }
     }
+    if (config.otp) box.appendChild(el('h4', 'visit-sign-title', 'Firma elettronica OTP'));
     for (const r of data.items) {
       const line = el('div', 'visit-sheet-line');
       line.setAttribute('data-signature', String(r.id));
-      line.appendChild(el('span', r.simulation ? 'badge badge-gray' : null, signatureLine(r)));
+      line.setAttribute('data-signature-state', r.state || r.status);
+      line.appendChild(el('span', r.simulation ? 'badge badge-gray' : 'badge', signatureLine(r)));
       if (r.signers && r.signers.length) line.appendChild(signersBlock(r));
-      const linksHolder = el('div', 'visit-sign-links');
+      if (r.otp) line.appendChild(linkBlock(r));
+      const extra = el('div', 'visit-sign-extra');
       if (r.status === 'sent') {
-        if (!r.simulation && r.signers && r.signers.length) {
-          const links = button('Collegamenti di firma', 'primary', 'data-signature-links');
-          links.addEventListener('click', () => showLinks(r, linksHolder));
-          const refresh = button('Aggiorna stato', 'ghost', 'data-signature-refresh');
-          refresh.addEventListener('click', async () => {
-            refresh.disabled = true;
-            try { await apiPost(`${ESIGN}/${r.id}/refresh`, {}); await load(); } catch (error) { refresh.disabled = false; box.appendChild(el('div', 'error-box', errorText(error))); }
-          });
-          line.append(links, refresh);
+        if (r.otp) {
+          if (r.can_resend) {
+            const resend = button('Reinvia link', 'ghost', 'data-signature-resend');
+            resend.addEventListener('click', async () => {
+              resend.disabled = true;
+              try { await apiPost(`${ESIGN}/${r.id}/links`, { send: true }); await load(); } catch (error) { resend.disabled = false; box.appendChild(el('div', 'error-box', errorText(error))); }
+            });
+            const copy = button('Copia link', 'ghost', 'data-signature-copy');
+            copy.addEventListener('click', async () => {
+              copy.disabled = true;
+              try {
+                const out = await apiPost(`${ESIGN}/${r.id}/links`, { send: false });
+                try { await navigator.clipboard.writeText(out.url); copy.textContent = 'Link copiato (il precedente non vale più)'; }
+                catch (e) { extra.appendChild(el('p', 'muted', `Collegamento: ${out.url}`)); copy.textContent = 'Link generato'; }
+                await showStateOnly();
+              } catch (error) { copy.disabled = false; box.appendChild(el('div', 'error-box', errorText(error))); }
+            });
+            line.append(resend, copy);
+          }
+          if (r.can_agent_sign) {
+            const agent = button('Firma come agente', 'primary', 'data-signature-agent');
+            agent.addEventListener('click', () => { extra.replaceChildren(agentSignForm(r, box, load)); });
+            line.appendChild(agent);
+          }
+          const refresh = button('Verifica stato', 'ghost', 'data-signature-refresh');
+          refresh.addEventListener('click', load);
+          line.appendChild(refresh);
         }
-        for (const [label, action, body] of [['Annulla', 'cancel', {}],
-          ...(r.simulation ? [['Simula completata', 'simulate', { outcome: 'completed' }], ['Simula rifiutata', 'simulate', { outcome: 'declined' }]] : [])]) {
-          const b = button(label, 'ghost', `data-signature-${action}`);
-          b.addEventListener('click', async () => {
-            b.disabled = true;
-            try { await apiPost(`${ESIGN}/${r.id}/${action}`, body); await load(); } catch (error) { box.appendChild(el('div', 'error-box', errorText(error))); }
-          });
-          line.appendChild(b);
+        const cancel = button(r.otp ? 'Revoca richiesta' : 'Annulla', 'ghost', 'data-signature-cancel');
+        cancel.addEventListener('click', async () => {
+          cancel.disabled = true;
+          try { await apiPost(`${ESIGN}/${r.id}/cancel`, {}); await load(); } catch (error) { box.appendChild(el('div', 'error-box', errorText(error))); }
+        });
+        line.appendChild(cancel);
+        if (r.simulation) {
+          for (const [label, body] of [['Simula completata', { outcome: 'completed' }], ['Simula rifiutata', { outcome: 'declined' }]]) {
+            const b = button(label, 'ghost', 'data-signature-simulate');
+            b.addEventListener('click', async () => {
+              b.disabled = true;
+              try { await apiPost(`${ESIGN}/${r.id}/simulate`, body); await load(); } catch (error) { box.appendChild(el('div', 'error-box', errorText(error))); }
+            });
+            line.appendChild(b);
+          }
         }
-      }
-      if (r.audit_trail_sha256) {
-        const t = button('Scarica rapporto del fornitore', 'ghost', 'data-signature-audit');
-        t.addEventListener('click', () => downloadFrom(`${ESIGN}/${r.id}/audit-trail`, `rapporto-firma-richiesta-${r.id}.pdf`, box));
-        line.appendChild(t);
       }
       if (r.has_document) {
-        const d = button(r.simulation ? 'Scarica ricevuta di simulazione' : 'Scarica documento', 'ghost', 'data-signature-document');
+        const d = button(r.simulation ? 'Scarica ricevuta di simulazione' : 'Scarica documento sottoscritto', 'ghost', 'data-signature-document');
         d.addEventListener('click', () => downloadFrom(`${ESIGN}/${r.id}/document`,
-          `${r.simulation ? 'SIMULAZIONE-non-firmato' : 'documento'}-richiesta-${r.id}.pdf`, box));
+          r.simulation ? `SIMULAZIONE-non-firmato-richiesta-${r.id}.pdf` : `foglio-visita-sottoscritto-${r.procedure || r.id}.pdf`, box));
         line.appendChild(d);
       }
-      line.appendChild(linksHolder);
+      if (r.has_audit_trail) {
+        const t = button('Scarica rapporto delle prove', 'ghost', 'data-signature-audit');
+        t.addEventListener('click', () => downloadFrom(`${ESIGN}/${r.id}/audit-trail`, `rapporto-prove-${r.procedure || r.id}.pdf`, box));
+        line.appendChild(t);
+      }
+      if (r.otp) {
+        const ev = button('Prove', 'ghost', 'data-signature-events');
+        const evHolder = el('div', 'visit-sign-events-holder');
+        ev.addEventListener('click', () => showEvents(r, evHolder));
+        const verify = button('Verifica integrità', 'ghost', 'data-signature-verify');
+        verify.addEventListener('click', async () => {
+          verify.disabled = true;
+          try {
+            const out = await apiGet(`${ESIGN}/${r.id}/verify`);
+            evHolder.replaceChildren(el('p', out.ok ? 'success-box' : 'error-box',
+              out.checks.map((c) => `${c.name}: ${c.ok ? 'OK' : 'NON VALIDO'}`).join(' · ')));
+          } catch (error) { evHolder.replaceChildren(el('div', 'error-box', errorText(error))); }
+          verify.disabled = false;
+        });
+        line.append(ev, verify, evHolder);
+      }
+      line.appendChild(extra);
       box.appendChild(line);
     }
-    const real = Boolean(config && config.signers);
+    async function showStateOnly() { /* il link copiato resta visibile: non si ridisegna subito */ }
     const open = (data.items || []).some((r) => r.status === 'sent');
-    if (real && open) return;                                   // una sola richiesta aperta per foglio
-    if (!real && config && config.configured && !config.simulation) return;   // servizio reale senza firmatari multipli: non gestito qui
-    const ask = button(real ? 'Richiedi firma elettronica' : 'Richiedi firma (simulazione)', real ? 'primary' : 'ghost', 'data-signature-new');
+    if (config.otp && open) return;                             // una sola richiesta aperta per foglio
+    if (config.otp && config.otp_ready === false) {
+      box.appendChild(el('div', 'error-box', `Firma OTP non configurata su questo servizio: ${config.otp_problem || ''}`));
+      return;
+    }
+    if (config.configured === false) return;
+    const ask = button(config.otp ? 'Invia per firma OTP' : 'Richiedi firma (simulazione)', config.otp ? 'primary' : 'ghost', 'data-signature-new');
     ask.addEventListener('click', () => {
       const form = el('div', 'visit-sign-form');
-      const name = el('input', 'input'); name.placeholder = 'Nome del firmatario'; name.maxLength = 120;
-      const contact = el('input', 'input'); contact.placeholder = real ? 'Email del cliente' : 'Email o telefono'; contact.maxLength = 200;
-      if (real) contact.type = 'email';
-      const send = button(real ? 'Crea richiesta di firma' : 'Crea richiesta simulata', 'primary', 'data-signature-create');
+      const name = el('input', 'input'); name.placeholder = 'Nome e cognome del cliente'; name.maxLength = 120; name.setAttribute('data-signature-name', '');
+      const contact = el('input', 'input'); contact.placeholder = config.otp ? 'Email del cliente' : 'Email o telefono'; contact.maxLength = 200;
+      contact.setAttribute('data-signature-contact', '');
+      if (config.otp) contact.type = 'email';
+      const send = button(config.otp ? 'Invia la richiesta di firma' : 'Crea richiesta simulata', 'primary', 'data-signature-create');
       const key = newKey();
       send.addEventListener('click', async () => {
         send.disabled = true;
         try {
           await apiPost(ESIGN, { visit_sheet_id: sheet.id, signer_name: name.value, signer_contact: contact.value,
-            expires_in_days: 7, idempotency_key: key });
+            expires_in_days: 7, idempotency_key: key, include_agent: true });
           await load();
         } catch (error) { send.disabled = false; form.appendChild(el('div', 'error-box', errorText(error))); }
       });
-      form.append(el('p', 'muted', real
-        ? 'Firma elettronica SEMPLICE, con il cliente e l\u2019agente della visita. L\u2019email serve solo a identificare il cliente presso il '
-          + 'servizio di firma, che non gli scrive: nessun messaggio viene inviato. ' + (config.environment === 'production'
-          ? 'Ambiente reale.' : 'AMBIENTE DI PROVA: la firma non sar\u00e0 utilizzabile.')
+      form.append(el('p', 'muted', config.otp
+        ? 'Firma elettronica SEMPLICE (FES). Il documento viene congelato in questa versione; il cliente riceve per email un '
+          + 'collegamento personale, legge il PDF, accetta la dichiarazione e conferma con un codice OTP via email. Tu firmi come '
+          + 'agente dal CRM. ' + (config.recipients_restricted ? 'Su questo ambiente le email partono solo verso i destinatari autorizzati.' : '')
         : 'Simulazione: nessun messaggio viene inviato e nessuna firma valida viene prodotta.'), name, contact, send);
       ask.replaceWith(form);
     });

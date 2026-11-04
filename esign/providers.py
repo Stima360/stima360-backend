@@ -1,37 +1,22 @@
-"""BLOCCO-6B - l'interfaccia verso un servizio di firma e l'adattatore SIMULATO.
+"""BLOCCO-6B / FIRMA OTP - come si firma un foglio visita: la SIMULAZIONE locale o la FIRMA OTP STIMA360.
 
-`SignatureProvider` e' il contratto che un futuro fornitore reale dovra'
-rispettare (nessun fornitore e' scelto ne' integrato). L'unico adattatore
-presente e' `SimulatedProvider`, locale: non contatta nessuno, non produce
-firme, e il documento che «riceve» e' una ricevuta di simulazione che dice
-in chiaro di NON essere un documento firmato.
+`ESIGN_PROVIDER` sceglie il modo (variabile d'ambiente, mai dal browser):
 
-Scelta del fornitore: variabile `ESIGN_PROVIDER`. Assente o `simulated` ->
-l'adattatore simulato; ogni altro valore -> nessun fornitore (il servizio
-risponde «non configurato»). Non esiste un valore che attivi una firma reale:
-`REAL_PROVIDERS` e' vuoto finche' un fornitore non e' scelto e il suo
-adattatore scritto sulla sua documentazione ufficiale.
+    assente | simulated   l'adattatore SIMULATO: locale, nessuna rete, nessuna firma. Il suo «documento ricevuto»
+                          e' una ricevuta che dichiara «SIMULAZIONE — NESSUNA FIRMA VALIDA».
+    stima360_otp          la FIRMA ELETTRONICA SEMPLICE (FES) proprietaria: il cliente riceve un collegamento personale
+                          via email, legge il PDF, dichiara di voler firmare e conferma con un codice OTP ricevuto
+                          per email; l'agente firma dal CRM, autenticato, con la stessa dichiarazione. Tutto il
+                          procedimento vive in `esign.otp_service`; qui solo la scelta del modo.
+    altro                 nessun servizio: il CRM risponde «non configurato». Nessun valore attiva un fornitore
+                          esterno: non ne esiste alcuno nel codice.
 
-BLOCCO-5: IL CONTRATTO DI UN FORNITORE REALE (indipendente dal fornitore)
-
-    environment       'sandbox' o 'production' (dichiarato dall'adattatore,
-                      registrato sulla richiesta; firma valida solo in
-                      'production')
-    create_request    IDEMPOTENTE sulla chiave: richiamata con la stessa chiave
-                      restituisce la stessa richiesta remota (nessun orfano se
-                      il nostro INSERT fallisce dopo la chiamata)
-    fetch_status      lo stato ATTUALE letto dal fornitore: un evento webhook
-                      non basta mai da solo, lo stato si rilegge
-    fetch_document    il documento firmato; `fetch_audit_trail` il rapporto
-                      di completamento
-    verify_event      autenticita' dell'evento ricevuto (firma del corpo
-                      grezzo; vedi `verify_hmac_sha256`) e suo id univoco;
-                      solleva `InvalidEventSignature`
+`SignatureProvider` resta il contratto minimo che il servizio usa per l'adattatore simulato (creazione, annullamento,
+documento ricevuto). La firma OTP non e' un «fornitore»: e' il CRM stesso, e il suo nome nel database
+(`provider = 'stima360_otp'`) serve a distinguere le richieste nate da questo procedimento.
 """
 from __future__ import annotations
 
-import hashlib
-import hmac
 import io
 import os
 import uuid
@@ -41,31 +26,14 @@ from typing import Protocol
 
 PROVIDER_ENV = "ESIGN_PROVIDER"
 SIMULATED = "simulated"
-
-
-@dataclass(frozen=True)
-class SignerSpec:
-    """Un firmatario richiesto: `role` e' 'visitor' o 'agent'. L'indirizzo identifica il firmatario presso il
-    fornitore; con la distribuzione disattivata il fornitore NON gli scrive."""
-    role: str
-    name: str
-    email: str
-    order: int = 1
-
-
-@dataclass(frozen=True)
-class ProviderSigner:
-    """Un firmatario come creato dal fornitore: l'identificativo remoto e il collegamento di firma personale
-    (e' un segreto: chi lo apre firma al posto di quel firmatario)."""
-    role: str
-    recipient_id: str | None
-    signing_url: str | None
+#: La firma OTP proprietaria: il valore di `ESIGN_PROVIDER` che la attiva e il nome scritto sulle richieste.
+OTP_PROVIDER = "stima360_otp"
+MODES = (SIMULATED, OTP_PROVIDER)
 
 
 @dataclass(frozen=True)
 class ProviderRequest:
     reference: str
-    signers: tuple[ProviderSigner, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -74,37 +42,8 @@ class ProviderDocument:
     media_type: str
 
 
-#: Gli stati che un fornitore puo' riportare, tradotti nei nostri.
-PROVIDER_STATUSES = ("pending", "signed", "declined", "expired", "cancelled")
-
-
-@dataclass(frozen=True)
-class SignerStatus:
-    recipient_id: str | None
-    email: str | None
-    status: str                         # 'pending' | 'signed' | 'declined'
-    signed_at: datetime | None = None
-
-
-@dataclass(frozen=True)
-class ProviderStatus:
-    status: str                         # uno di PROVIDER_STATUSES
-    signed_at: datetime | None = None
-    signature_level: str | None = None  # 'ses' | 'aes' | 'qes', come dichiarato dal fornitore
-    signers: tuple[SignerStatus, ...] = ()
-
-
-@dataclass(frozen=True)
-class ProviderEvent:
-    event_id: str
-    event_type: str
-    reference: str | None
-    #: l'identificativo che NOI abbiamo dato alla richiesta (la chiave di idempotenza), se il fornitore lo rimanda
-    external_id: str | None = None
-
-
 class ProviderError(Exception):
-    """Il fornitore ha rifiutato o non ha risposto. Mai segreti ne' corpi di risposta nel messaggio."""
+    """Un passo del procedimento non e' riuscito. Mai segreti nel messaggio."""
 
     def __init__(self, code: str, message: str, *, status: int | None = None):
         super().__init__(message)
@@ -112,41 +51,17 @@ class ProviderError(Exception):
         self.status = status
 
 
-class InvalidEventSignature(Exception):
-    """L'evento non e' autentico (firma assente, sbagliata, corpo alterato)."""
-
-
 class SignatureProvider(Protocol):
     name: str
     is_simulation: bool
     environment: str                    # 'simulation' | 'sandbox' | 'production'
-    #: True se il fornitore sa gestire piu' firmatari con collegamenti personali (`signers`, `layout`, `title`)
-    supports_signers: bool
 
     def create_request(self, *, document: bytes, document_sha256: str, signer_name: str, signer_contact: str,
-                       expires_at: datetime, idempotency_key: str, signers: tuple[SignerSpec, ...] | None = None,
-                       layout: dict | None = None, title: str | None = None) -> ProviderRequest: ...
+                       expires_at: datetime, idempotency_key: str) -> ProviderRequest: ...
 
     def cancel_request(self, reference: str) -> None: ...
 
-    def fetch_status(self, reference: str) -> ProviderStatus: ...
-
     def fetch_document(self, reference: str, *, document_sha256: str, signer_name: str) -> ProviderDocument: ...
-
-    def fetch_audit_trail(self, reference: str) -> ProviderDocument | None: ...
-
-    def verify_event(self, headers: dict, raw_body: bytes) -> ProviderEvent: ...
-
-
-def verify_hmac_sha256(secret: str, raw_body: bytes, received: str | None, *, prefix: str = "sha256=") -> None:
-    """Verifica una firma HMAC-SHA256 del corpo GREZZO (mai del JSON
-    ricostruito), confronto a tempo costante. Solleva `InvalidEventSignature`.
-    Il formato (header, prefisso) e' quello documentato dal fornitore scelto."""
-    if not secret or not received or not received.startswith(prefix):
-        raise InvalidEventSignature("missing")
-    expected = prefix + hmac.new(secret.encode("utf-8"), raw_body, hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, received.strip()):
-        raise InvalidEventSignature("mismatch")
 
 
 class SimulatedProvider:
@@ -155,20 +70,9 @@ class SimulatedProvider:
     name = SIMULATED
     is_simulation = True
     environment = "simulation"
-    supports_signers = False
-
-    def fetch_status(self, reference: str) -> ProviderStatus:
-        return ProviderStatus("pending")
-
-    def fetch_audit_trail(self, reference: str) -> ProviderDocument | None:
-        return None
-
-    def verify_event(self, headers: dict, raw_body: bytes) -> ProviderEvent:
-        # la simulazione non riceve eventi: nessun webhook la tocca
-        raise InvalidEventSignature("simulation")
 
     def create_request(self, *, document, document_sha256, signer_name, signer_contact, expires_at,
-                       idempotency_key, signers=None, layout=None, title=None) -> ProviderRequest:
+                       idempotency_key) -> ProviderRequest:
         return ProviderRequest(reference=f"SIM-{uuid.uuid5(uuid.NAMESPACE_URL, idempotency_key).hex[:16]}")
 
     def cancel_request(self, reference: str) -> None:
@@ -208,39 +112,31 @@ class ProviderNotConfigured(Exception):
     pass
 
 
-#: Gli adattatori REALI disponibili, per nome. Vuoto: nessun fornitore e'
-#: scelto (vedi roadmap/BLOCCO-5_FIRMA_FORNITORI.md). Un adattatore si
-#: aggiunge qui solo scritto sulla documentazione ufficiale del fornitore.
-REAL_PROVIDERS: dict[str, type] = {}
-
-
-def _real(name: str):
-    """La classe dell'adattatore reale di quel nome. Documenso e' caricato SOLO quando serve (nessun import circolare,
-    nessun effetto se non e' scelto): `REAL_PROVIDERS` resta il punto per aggiungere altri adattatori (e per i test)."""
-    if name in REAL_PROVIDERS:
-        return REAL_PROVIDERS[name]
-    if name == "documenso":
-        from .documenso import DocumensoProvider
-        return DocumensoProvider
-    return None
-
-
-def current() -> SignatureProvider:
+def mode() -> str:
+    """Il modo configurato: `simulated` (default) o `stima360_otp`. Altro -> `ProviderNotConfigured`."""
     value = (os.getenv(PROVIDER_ENV) or SIMULATED).strip()
-    if value == SIMULATED:
-        return SimulatedProvider()
-    cls = _real(value)
-    if cls is not None:
-        return cls()
+    if value in MODES:
+        return value
     raise ProviderNotConfigured(value)
 
 
+def otp_enabled() -> bool:
+    try:
+        return mode() == OTP_PROVIDER
+    except ProviderNotConfigured:
+        return False
+
+
+def current() -> SignatureProvider:
+    """L'adattatore simulato, quando il modo e' la simulazione. Per la firma OTP non c'e' un adattatore:
+    il servizio passa da `esign.otp_service`."""
+    if mode() == SIMULATED:
+        return SimulatedProvider()
+    raise ProviderNotConfigured(OTP_PROVIDER)
+
+
 def by_name(name: str) -> SignatureProvider:
-    """L'adattatore che ha creato una richiesta (per annullarla o leggerne lo
-    stato), anche se nel frattempo `ESIGN_PROVIDER` e' cambiato."""
+    """L'adattatore che ha creato una richiesta simulata (per annullarla), anche se `ESIGN_PROVIDER` e' cambiato."""
     if name == SIMULATED:
         return SimulatedProvider()
-    cls = _real(name)
-    if cls is not None:
-        return cls()
     raise ProviderNotConfigured(name)

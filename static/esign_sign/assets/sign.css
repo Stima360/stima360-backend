@@ -1,0 +1,31 @@
+/* FIRMA OTP: la pagina del firmatario. Base: /prenota/assets/booking.css (stessa palette). Sfondo bianco, pulsanti grandi. */
+html, body { background: #ffffff; }
+.sign-shell { width: min(100%, 720px); overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
+.sign-shell .panel { min-width: 0; max-width: 100%; }
+.sign-doc { margin: 0 0 12px; min-width: 0; }
+.sign-doc dl { display: grid; grid-template-columns: minmax(96px, max-content) minmax(0, 1fr); gap: 6px 12px; margin: 0; min-width: 0; }
+.sign-doc dt { color: var(--muted); font-size: 0.9rem; }
+.sign-doc dd { margin: 0; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
+.sign-pdf { width: 100%; height: min(70vh, 640px); border: 1px solid var(--line); border-radius: 10px; background: #fff; }
+.sign-pdf-links { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 0; }
+.sign-pdf-links a.primary-link { background: var(--brand); color: #fff; border-color: var(--brand); width: 100%; text-align: center; }
+.sign-pdf-links a { display: inline-block; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px;
+  color: var(--brand); text-decoration: none; font-weight: 600; }
+.sign-consent { background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin: 12px 0; }
+.sign-consent p { margin: 0 0 10px; font-size: 0.95rem; line-height: 1.55; }
+.sign-consent .privacy { color: var(--muted); font-size: 0.85rem; }
+.sign-consent label { display: flex; gap: 12px; align-items: flex-start; font-weight: 600; cursor: pointer; }
+.sign-consent input[type="checkbox"] { width: 24px; height: 24px; flex: 0 0 auto; margin-top: 1px; }
+.sign-otp input { font-size: 1.8rem; letter-spacing: 0.4em; text-align: center; width: 100%; padding: 12px; border: 1px solid var(--line);
+  border-radius: 12px; }
+.sign-actions { display: grid; gap: 10px; margin-top: 12px; }
+.sign-actions button { width: 100%; padding: 16px; font-size: 1.05rem; border-radius: 12px; border: 0; cursor: pointer; }
+.sign-actions .primary { background: var(--brand); color: #fff; font-weight: 700; }
+.sign-actions .primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.sign-actions .ghost { background: #fff; border: 1px solid var(--line); color: var(--ink); }
+.sign-actions .danger { background: #fff; border: 1px solid var(--danger); color: var(--danger); }
+.sign-notice { background: var(--ok-bg); border-radius: 12px; padding: 14px; }
+.sign-error { background: var(--danger-bg); color: var(--danger); border-radius: 12px; padding: 12px; margin-top: 10px; }
+.sign-hint { color: var(--muted); font-size: 0.9rem; margin: 8px 0 0; }
+.sign-level { font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; margin-top: 14px; }
+.sign-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; overflow-wrap: anywhere; font-size: 0.85rem; }
