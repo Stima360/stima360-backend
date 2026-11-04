@@ -106,7 +106,6 @@ def provider_config(ctx: OperatorContext = Depends(require_operator)):
         except otp_security.NotConfigured as exc:
             out["otp_ready"] = False
             out["otp_problem"] = str(exc)
-        out["recipients_restricted"] = otp_security.allowed_recipients() is not None
     return out
 
 

@@ -286,7 +286,7 @@ async function mountSignatures(holder, sheet, badge) {
       form.append(el('p', 'muted', config.otp
         ? 'Firma elettronica SEMPLICE (FES). Il documento viene congelato in questa versione; il cliente riceve per email un '
           + 'collegamento personale, legge il PDF, accetta la dichiarazione e conferma con un codice OTP via email. Tu firmi come '
-          + 'agente dal CRM. ' + (config.recipients_restricted ? 'Su questo ambiente le email partono solo verso i destinatari autorizzati.' : '')
+          + 'agente dal CRM.'
         : 'Simulazione: nessun messaggio viene inviato e nessuna firma valida viene prodotta.'), name, contact, send);
       ask.replaceWith(form);
     });

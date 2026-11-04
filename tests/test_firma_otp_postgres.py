@@ -283,22 +283,46 @@ def test_n_collegamento_scaduto_sconosciuto_e_cliente_diverso(otp):
     assert s2["document"]["sha256"] == sheet2["sha256"] != sheet["sha256"]                 # ogni token vede SOLO il proprio documento
 
 
-def test_n_senza_configurazione_o_con_destinatario_non_autorizzato_non_parte_nulla(otp, monkeypatch):
+# SENTINELLA AGGIORNATA (correzione urgente FIRMA OTP): la whitelist dei destinatari non esiste piu'; restano il rifiuto
+# di un indirizzo non valido e il blocco quando la firma OTP non e' configurata.
+def test_n_senza_configurazione_o_con_indirizzo_non_valido_non_parte_nulla(otp, monkeypatch):
     o, b = otp, otp["app"]
     sheet = foglio(b)
     prima = _q(b, "SELECT count(*) FROM signature_requests")
-    assert crea(o["owner"], sheet["id"], email="estraneo@esempio.invalid").status_code == 403
     assert crea(o["owner"], sheet["id"], email="3331234567").status_code == 400
+    assert crea(o["owner"], sheet["id"], email="non-una-email").status_code == 400
     assert crea(o["owner"], sheet["id"], email="").status_code == 422
-    monkeypatch.delenv("ESIGN_ALLOWED_RECIPIENTS")
-    assert crea(o["owner"], sheet["id"]).status_code == 403                                 # chiuso per difetto
-    monkeypatch.setenv("ESIGN_ALLOWED_RECIPIENTS", CLIENTE)
     monkeypatch.delenv("ESIGN_OTP_PEPPER")
     r = crea(o["owner"], sheet["id"])
     assert r.status_code == 503 and r.json()["detail"]["code"] == "OTP_NOT_CONFIGURED"
     assert _q(b, "SELECT count(*) FROM signature_requests") == prima and not o["posta"].messaggi
     cfg = o["owner"].get(f"{API}/config/provider").json()
     assert cfg["otp"] is True and cfg["otp_ready"] is False and "ESIGN_OTP_PEPPER" in cfg["otp_problem"]
+    assert "recipients_restricted" not in cfg
+
+
+def test_f_un_indirizzo_mai_autorizzato_riceve_link_e_codice_e_firma(otp, monkeypatch):
+    """Correzione urgente: nessuna whitelist. Un indirizzo mai elencato riceve il collegamento e il codice e firma,
+    anche se sull'ambiente e' rimasta impostata la vecchia variabile con altri indirizzi (ora ignorata)."""
+    o, b, posta = otp, otp["app"], otp["posta"]
+    monkeypatch.setenv("ESIGN_ALLOWED_RECIPIENTS", "solo.questo@esempio.invalid")       # residuo: non deve contare
+    nuovo = f"cliente.nuovo.{uuid.uuid4().hex[:8]}@dominio-mai-visto.example"
+    sheet, req, token = _avvia(o, email=nuovo)
+    assert req["status"] == "sent" and req["link"]["email"]["status"] == "sent"
+    assert [s["email"] for s in req["signers"] if s["role"] == "visitor"] == [nuovo]
+    link = posta.per("signature_link", nuovo)
+    assert len(link) == 1 and link[0]["destination_snapshot"] == nuovo
+    assert o["public"].get(f"{PUB}/{token}").json()["state"] == "ready"
+    r = o["public"].post(f"{PUB}/{token}/otp")
+    assert r.status_code == 200, r.text
+    otp_mail = posta.per("signature_otp", nuovo)
+    assert len(otp_mail) == 1
+    ok = _conferma(o, token, codice_da(otp_mail[0]))
+    assert ok.status_code == 200 and ok.json()["state"] == "signed", ok.text
+    assert _q(b, "SELECT status FROM signature_request_signers WHERE request_id = %s AND role = 'visitor'", (req["id"],)) == [("signed",)]
+    assert not posta.per("signature_link", "solo.questo@esempio.invalid")
+    eventi = [e["event_type"] for e in o["owner"].get(f"{API}/{req['id']}/events").json()["items"]]
+    assert "signer_signed" in eventi
 
 
 def test_n_smtp_guasto_resta_tracciato_e_si_puo_reinviare(otp):

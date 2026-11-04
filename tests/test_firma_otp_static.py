@@ -25,7 +25,6 @@ KEY = "chiave-prove-di-prova-molto-lunga-0123456789"
 def configurato(monkeypatch):
     monkeypatch.setenv(otp_security.PEPPER_ENV, PEPPER)
     monkeypatch.setenv(otp_security.EVIDENCE_KEY_ENV, KEY)
-    monkeypatch.setenv(otp_security.RECIPIENTS_ENV, "cliente@esempio.invalid, altro@esempio.invalid")
     for name in otp_security.DEFAULTS:
         monkeypatch.delenv(name, raising=False)
 
@@ -88,15 +87,19 @@ def test_con_un_pepe_diverso_lo_stesso_codice_non_verifica(monkeypatch, configur
     assert not otp_security.verify_otp("654321", challenge_salt=salt, stored=stored)
 
 
-def test_destinatari_chiusi_per_difetto(monkeypatch):
-    monkeypatch.delenv(otp_security.RECIPIENTS_ENV, raising=False)
-    assert otp_security.allowed_recipients() == frozenset() and not otp_security.recipient_allowed("a@b.it")
-    monkeypatch.setenv(otp_security.RECIPIENTS_ENV, "")
-    assert not otp_security.recipient_allowed("a@b.it")
-    monkeypatch.setenv(otp_security.RECIPIENTS_ENV, "A@B.it; c@d.it")
-    assert otp_security.recipient_allowed("a@b.it") and not otp_security.recipient_allowed("x@b.it")
-    monkeypatch.setenv(otp_security.RECIPIENTS_ENV, "*")
-    assert otp_security.allowed_recipients() is None and otp_security.recipient_allowed("chiunque@b.it")
+# SENTINELLA AGGIORNATA (correzione urgente FIRMA OTP): la whitelist `ESIGN_ALLOWED_RECIPIENTS` e' stata rimossa per
+# decisione del titolare. L'agente invia il foglio e il codice a qualsiasi email valida del cliente; restano la
+# validazione dell'indirizzo, i limiti di frequenza, i tentativi, l'autenticazione e l'isolamento per agenzia.
+def test_nessuna_whitelist_dei_destinatari_della_firma():
+    assert not hasattr(otp_security, "allowed_recipients") and not hasattr(otp_security, "recipient_allowed")
+    for path in list((ROOT / "esign").glob("*.py")) + [ROOT / "static" / "os_shell" / "assets" / "components" / "visit-sheets.js"]:
+        text = path.read_text(encoding="utf-8")
+        assert "ESIGN_ALLOWED_RECIPIENTS" not in text and "RECIPIENT_NOT_ALLOWED" not in text, path.name
+        assert "recipients_restricted" not in text and "destinatari autorizzati" not in text, path.name
+    # la validazione dell'indirizzo resta: un'email valida qualsiasi si', un telefono o un testo no
+    assert otp_security.is_valid_email("chiunque.mai.visto@dominio-nuovo.it")
+    assert not otp_security.is_valid_email("3331234567") and not otp_security.is_valid_email("") \
+        and not otp_security.is_valid_email(" a@b.it")
 
 
 def test_ip_e_user_agent_minimizzati(configurato):

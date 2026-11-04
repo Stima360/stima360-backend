@@ -139,8 +139,6 @@ def _issue_link(cur, row: dict, signer: dict, *, actor_kind: str, actor_ref: str
 
 
 def _send_link(cur, row: dict, sheet: dict, signer: dict, challenge: dict, raw_token: str, *, actor_kind, actor_ref) -> int:
-    if not otp_security.recipient_allowed(signer["email"]):
-        raise _s.Forbidden("RECIPIENT_NOT_ALLOWED", "L'indirizzo non è fra i destinatari autorizzati su questo ambiente.")
     subject, body = emails.link_email(signer_name=signer["name"], agency_name=_agency_name(cur, row["agency_id"]),
                                       title=_title(sheet), url=emails.sign_url(raw_token), expires_at=row["expires_at"])
     contact_id = sheet.get("contact_id") or sheet_contact(cur, sheet)
@@ -243,8 +241,6 @@ def create(ctx, *, visit_sheet_id: int, signer_name: str, signer_email: str, exp
         raise _s.SignatureError("SIGNER_NAME_REQUIRED", "Indica il nome del cliente che firma.")
     if not otp_security.is_valid_email(signer_email):
         raise _s.SignatureError("SIGNER_EMAIL_REQUIRED", "Serve l'indirizzo email del cliente: riceverà il collegamento e il codice.")
-    if not otp_security.recipient_allowed(signer_email):
-        raise _s.Forbidden("RECIPIENT_NOT_ALLOWED", "L'indirizzo non è fra i destinatari autorizzati su questo ambiente.")
     with core_cursor(commit=True) as (_, cur):
         _require_ready(cur)
         existing = _s._by_key(cur, agency_id, idempotency_key)
@@ -638,8 +634,6 @@ def public_request_otp(token: str, *, ip: str | None = None, user_agent: str | N
     with core_cursor(commit=True) as (_, cur):
         _require_ready(cur)
         challenge, row, me, sheet = _open_for_signer(cur, token)
-        if not otp_security.recipient_allowed(me["email"]):
-            raise _s.Forbidden("RECIPIENT_NOT_ALLOWED", "Indirizzo non autorizzato su questo ambiente.")
         ctx = _context(ip, user_agent)
         cur.execute("SELECT created_at FROM signature_challenges WHERE signer_id = %s AND kind = 'otp' ORDER BY created_at DESC LIMIT 1",
                     (me["id"],))

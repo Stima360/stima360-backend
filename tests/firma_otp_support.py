@@ -34,11 +34,10 @@ class Posta:
         return [m for m in self.messaggi if m["reason_code"] == reason_code and (destinatario is None or m["destination_snapshot"] == destinatario)]
 
 
-def configura(monkeypatch, posta: Posta, *, destinatari: str = CLIENTE):
+def configura(monkeypatch, posta: Posta):
     monkeypatch.setenv("ESIGN_PROVIDER", "stima360_otp")
     monkeypatch.setenv(otp_security.PEPPER_ENV, PEPPER)
     monkeypatch.setenv(otp_security.EVIDENCE_KEY_ENV, KEY)
-    monkeypatch.setenv(otp_security.RECIPIENTS_ENV, destinatari)
     monkeypatch.setenv("PUBLIC_BASE_URL", "https://test.invalid")
     monkeypatch.delenv("ESIGN_DISPATCH_IMMEDIATE", raising=False)
     for name in otp_security.DEFAULTS:

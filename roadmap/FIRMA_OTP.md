@@ -91,8 +91,9 @@ Pubblico (`/api/public/esign/sign/{token}`, nessuna sessione, 404 senza `ESIGN_P
 10. **Isolamento**: agenzia e ruolo come per i fogli visita; firma dell'agente solo per `operator_user_id` del firmatario; trigger di agenzia su sfide e prove.
 11. **Replay/concorrenza**: lock di riga sulla richiesta e sulla sfida; sfida consumata una volta; doppia conferma = 409; lock sul foglio alla creazione.
 12. **CSRF**: API pubblica senza cookie, POST JSON; API operatore con la sessione del CRM come le altre.
-13. **Abuso email**: `ESIGN_ALLOWED_RECIPIENTS` chiusa per difetto (assente = nessun destinatario; `*` esplicito = tutti); limiti sopra; il
-    dispatcher applica il divieto di contatto.
+13. **Abuso email**: nessun elenco di indirizzi ammessi (la whitelist `ESIGN_ALLOWED_RECIPIENTS` è stata rimossa: l'agente invia a
+    qualsiasi email valida del cliente); restano l'invio solo manuale da operatore autenticato della stessa agenzia, una richiesta
+    aperta per foglio, i limiti sopra e il divieto di contatto applicato dal dispatcher.
 14. **GDPR**: IP solo come HMAC con pepe; user-agent troncato; email mascherata nella pagina; dichiarazione e informativa mostrate.
 15. **Integrità**: catena + sigillo HMAC (`ESIGN_EVIDENCE_KEY`) e impronte dei tre PDF, verificate da `GET /verify`.
 
@@ -127,7 +128,7 @@ pubblicazione automatica al proprietario. La durata di conservazione non è fiss
 | `ESIGN_PROVIDER` | `stima360_otp` | assente/`simulated` = simulazione |
 | `ESIGN_OTP_PEPPER` | segreto ≥ 32 caratteri | **mai nel repository**; cambiarlo invalida i codici in corso |
 | `ESIGN_EVIDENCE_KEY` | segreto ≥ 32 caratteri | sigillo delle prove; cambiarlo rende non verificabili i sigilli precedenti |
-| `ESIGN_ALLOWED_RECIPIENTS` | elenco esplicito (sul TEST: solo gli indirizzi autorizzati) | chiusa per difetto; `*` = tutti (solo per uso reale autorizzato) |
+| ~~`ESIGN_ALLOWED_RECIPIENTS`~~ | non più letta | rimossa: se è ancora impostata sull'ambiente non ha effetto e si può cancellare |
 | `PUBLIC_BASE_URL` | `https://stima360-backend-test.onrender.com` | base dei collegamenti |
 | `ESIGN_OTP_TTL_MINUTES`, `ESIGN_OTP_MAX_ATTEMPTS`, `ESIGN_OTP_RESEND_SECONDS`, `ESIGN_OTP_MAX_PER_HOUR_SIGNER`, `ESIGN_OTP_MAX_PER_HOUR_IP`, `ESIGN_LINK_MAX_PER_HOUR_REQUEST` | 10, 5, 60, 5, 20, 6 | facoltative |
 | `ESIGN_DISPATCH_IMMEDIATE` | `1` (default) | `0` = le email le spedisce solo il cron |

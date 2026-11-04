@@ -7,8 +7,8 @@ CODICE OTP               6 cifre da `secrets.randbelow` (uniforme). Un codice a 
                          (sale casuale, le stesse iterazioni delle password degli operatori) PIU' un PEPE del servizio
                          (`ESIGN_OTP_PEPPER`, variabile d'ambiente, mai nel database): senza il pepe la derivazione non
                          si ricostruisce nemmeno con il database in mano. Verifica a tempo costante; mai nei log.
-DESTINATARI              `ESIGN_ALLOWED_RECIPIENTS` e' CHIUSA PER DIFETTO: variabile assente = nessun destinatario;
-                         `*` esplicito = tutti. Sul TEST contiene solo gli indirizzi autorizzati al collaudo.
+DESTINATARI              nessun elenco di indirizzi ammessi: l'agente invia a qualsiasi email valida del cliente. Contro
+                         abusi restano i limiti di frequenza, i tentativi, l'autenticazione e il blocco «non contattare».
 IP                       mai in chiaro: SHA-256 di pepe + IP (`ip_hash`), come le altre pagine pubbliche del CRM.
 """
 from __future__ import annotations
@@ -23,9 +23,7 @@ from operator_auth.security import hash_password, verify_password
 
 PEPPER_ENV = "ESIGN_OTP_PEPPER"
 EVIDENCE_KEY_ENV = "ESIGN_EVIDENCE_KEY"
-RECIPIENTS_ENV = "ESIGN_ALLOWED_RECIPIENTS"
 MIN_SECRET_LENGTH = 32
-WILDCARD = "*"
 TOKEN_BYTES = 32
 OTP_DIGITS = 6
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -86,21 +84,6 @@ def require_configuration() -> None:
 
 def is_valid_email(value) -> bool:
     return isinstance(value, str) and value == value.strip() and len(value) <= 320 and _EMAIL.match(value) is not None
-
-
-def allowed_recipients() -> frozenset[str] | None:
-    """Gli indirizzi ammessi (minuscoli); None = nessun limite (solo con `*` esplicito); assente = NESSUNO."""
-    raw = os.getenv(RECIPIENTS_ENV)
-    if raw is None:
-        return frozenset()
-    if raw.strip() == WILDCARD:
-        return None
-    return frozenset(v.strip().lower() for v in re.split(r"[,;\s]+", raw) if "@" in v)
-
-
-def recipient_allowed(email: str) -> bool:
-    allowed = allowed_recipients()
-    return True if allowed is None else email.strip().lower() in allowed
 
 
 # ---- collegamento personale -------------------------------------------------------------------------------------------
