@@ -477,3 +477,200 @@ def test_agenda_mobile_quattro_viste_a_sei_dimensioni(app, server, tmp_path):
         assert annullato in r["statiListaTutti"]["listIds"] and annullato not in r["statiListaPredefiniti"]["listIds"]
         # ultima vista ricordata
         assert r["ritorno"] == "month", (nome, r["ritorno"])
+
+
+# ---------------------------------------------------------------------------------------------------
+# SETTIMANA LEGGIBILE: blocchi con ora e tipo, giorno scelto, riepilogo del giorno, nessun ricaricamento
+# ---------------------------------------------------------------------------------------------------
+
+SETTIMANA = r"""
+const { chromium } = require('playwright');
+const [base, email, password, oggi, altro, shots] = process.argv.slice(2);
+const DIM = {
+  '375': { viewport: { width: 375, height: 667 }, isMobile: true, hasTouch: true },
+  '390': { viewport: { width: 390, height: 844 }, isMobile: true, hasTouch: true },
+  '430': { viewport: { width: 430, height: 932 }, isMobile: true, hasTouch: true },
+  '768': { viewport: { width: 768, height: 1024 }, isMobile: true, hasTouch: true },
+  '1280': { viewport: { width: 1280, height: 800 }, isMobile: false, hasTouch: false },
+};
+const pausa = (page, ms) => page.waitForTimeout(ms);
+async function carica(page) {
+  await page.waitForFunction(() => { const n = document.querySelector('.agenda-notice'); return n && !/Caricamento/.test(n.textContent); }, null, { timeout: 15000 }).catch(() => {});
+  await pausa(page, 300);
+}
+async function tocca(dim, loc) { if (dim.hasTouch) await loc.tap(); else await loc.click(); }
+const misura = (page) => page.evaluate(() => {
+  const vis = (n) => { const s = getComputedStyle(n); const r = n.getBoundingClientRect(); return s.display !== 'none' && r.width > 0 && r.height > 0; };
+  const blocchi = [...document.querySelectorAll('.agenda-week-block, .agenda-week-cluster')].filter(vis).map((b) => {
+    const r = b.getBoundingClientRect();
+    const righe = [...b.querySelectorAll('span')].map((s) => ({ t: s.textContent, font: parseFloat(getComputedStyle(s).fontSize), sw: s.scrollWidth, cw: s.clientWidth, top: s.getBoundingClientRect().top, bottom: s.getBoundingClientRect().bottom }));
+    return { id: b.dataset.appointmentId || null, cluster: b.dataset.clusterIds || null, day: b.closest('[data-day]').dataset.day, cat: [...b.classList].find((c) => c.startsWith('agenda-type-cat-')) || null, bg: getComputedStyle(b).backgroundColor, x: r.left, y: r.top, w: r.width, h: r.height, righe, bw: b.clientWidth, bsw: b.scrollWidth };
+  });
+  const pannello = document.querySelector('.agenda-week-day-panel');
+  const card = pannello ? [...pannello.querySelectorAll('.agenda-card')].map((c) => ({
+    id: c.dataset.appointmentId ? Number(c.dataset.appointmentId) : null,
+    ora: (c.querySelector('.agenda-card-time') || {}).textContent || '',
+    tipo: (c.querySelector('.agenda-card-type') || {}).textContent || '',
+    titolo: (c.querySelector('.agenda-card-title') || {}).textContent || '',
+    luogo: (c.querySelector('.agenda-card-place') || {}).textContent || '',
+    agente: (c.querySelector('.agenda-card-agent') || {}).textContent || '',
+    stato: (c.querySelector('.agenda-badge') || {}).textContent || '',
+  })) : [];
+  return {
+    hash: location.hash, compact: document.querySelector('.agenda-page').classList.contains('agenda-compact'),
+    colonne: [...document.querySelectorAll('.agenda-day-column')].map((c) => c.dataset.day),
+    colonneVisibili: [...document.querySelectorAll('.agenda-day-column')].filter((c) => { const r = c.getBoundingClientRect(); return r.left >= -1 && r.right <= innerWidth + 1; }).length,
+    scelti: [...document.querySelectorAll('.agenda-day-head.agenda-day-selected')].map((n) => n.dataset.day),
+    colonnaScelta: [...document.querySelectorAll('.agenda-day-column.agenda-day-selected')].map((n) => n.dataset.day),
+    pannelloGiorno: pannello ? pannello.dataset.selectedDay : null,
+    card, blocchi, docW: document.documentElement.scrollWidth, innerW: innerWidth,
+    chiave: !!document.querySelector('.agenda-type-key'),
+  };
+});
+
+(async () => {
+  const out = {};
+  const browser = await chromium.launch();
+  for (const [nome, dim] of Object.entries(DIM)) {
+    const r = { errors: [] };
+    out[nome] = r;
+    const ctx = await browser.newContext({ ...dim, deviceScaleFactor: shots ? 2 : 1, timezoneId: 'Europe/Rome', locale: 'it-IT' });
+    const page = await ctx.newPage();
+    page.on('pageerror', (e) => r.errors.push(String(e)));
+    let richieste = 0;
+    page.on('request', (q) => { if (q.url().includes('/api/appointments/calendar')) richieste += 1; });
+    await page.goto(`${base}/os/`);
+    await page.fill('#login-email', email);
+    await page.fill('#login-password', password);
+    await page.click('#login-form button[type=submit]');
+    await pausa(page, 1500);
+    await page.goto(`${base}/os/#/agenda/settimana/${oggi}`);
+    await carica(page);
+    r.dopoApertura = richieste;
+    r.inizio = await misura(page);
+    // la griglia alle 10 e il riepilogo sotto
+    await page.evaluate(() => { const s = document.querySelector('.agenda-scroll'); s.scrollTop = 9 * 64; document.querySelector('.agenda-area').scrollIntoView(); window.scrollBy(0, -170); });
+    await pausa(page, 300);
+    if (shots) await page.screenshot({ path: `${shots}/${nome}__settimana_griglia.png` });
+    await page.evaluate(() => { document.querySelector('.agenda-week-day-panel').scrollIntoView(); window.scrollBy(0, -200); });
+    await pausa(page, 300);
+    if (shots) await page.screenshot({ path: `${shots}/${nome}__settimana_riepilogo.png` });
+    // cambio giorno dall'intestazione: immediato, nessuna nuova richiesta, stessa settimana
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await tocca(dim, page.locator(`.agenda-day-head[data-day="${altro}"]`));
+    await pausa(page, 200);
+    r.cambio = await misura(page);
+    r.dopoCambio = richieste;
+    await tocca(dim, page.locator(`.agenda-day-head[data-day="${oggi}"]`));
+    await pausa(page, 200);
+    r.ritorno = await misura(page);
+    // tocco su una scheda del riepilogo: si apre il dettaglio esistente
+    const scheda = page.locator('.agenda-week-day-panel button.agenda-card').first();
+    await scheda.scrollIntoViewIfNeeded();
+    await tocca(dim, scheda);
+    await page.waitForSelector('dialog.agenda-drawer[open] h2', { timeout: 10000 }).catch(() => {});
+    r.dettaglio = await page.evaluate(() => { const d = document.querySelector('dialog.agenda-drawer[open]'); return d ? (d.querySelector('h2') || {}).textContent : null; });
+    await page.keyboard.press('Escape');
+    await pausa(page, 300);
+    // gruppo di sovrapposti (settimana stretta): li elenca tutti
+    const gruppo = page.locator('.agenda-week-cluster').first();
+    if (await gruppo.count()) {
+      await gruppo.scrollIntoViewIfNeeded();
+      await tocca(dim, gruppo);
+      await pausa(page, 400);
+      r.gruppo = await page.$$eval('dialog.agenda-overflow[open] [data-appointment-id]', (n) => n.map((x) => Number(x.dataset.appointmentId)));
+      await page.keyboard.press('Escape');
+      await pausa(page, 300);
+    }
+    r.fine = richieste;
+    await ctx.close();
+  }
+  await browser.close();
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e); process.exit(1); });
+"""
+
+ABBREVIATI = {"call": "Tel.", "video_call": "Video", "seller_meeting": "Propr.", "inspection": "Sopr.",
+              "buyer_visit": "Visita", "valuation_presentation": "Valut.", "mandate_signing": "Incar.",
+              "proposal": "PdA", "preliminary_contract": "Prelim", "notary": "Rogito"}
+ETICHETTE_TIPO = {"call": "Telefonata", "seller_meeting": "Appuntamento proprietario", "inspection": "Sopralluogo",
+                  "buyer_visit": "Visita immobile", "notary": "Rogito notarile"}
+STATI = {"scheduled": "Fissato", "requested": "Richiesta"}
+NOMI = {"owner_a": "Olga Alfa", "admin_a": "Adele Alfa", "agent_a": "Aldo Alfa", "agent2_a": "Ada Alfa"}
+
+
+def test_settimana_leggibile_blocchi_giorno_scelto_e_riepilogo(app, server, tmp_path):
+    nodo = _node_con_playwright()
+    if not nodo:
+        pytest.skip("Node o Playwright non disponibili: prova browser NON eseguita (BLOCKED)")
+    node, env = nodo
+    righe, oggi_dt = _seme(app)
+    oggi = oggi_dt.date().isoformat()
+    lun = oggi_dt - timedelta(days=oggi_dt.weekday())
+    settimana = [(lun + timedelta(days=i)).date().isoformat() for i in range(7)]
+    domenica = settimana[6]
+    altro = domenica if domenica != oggi else settimana[0]
+    shots = os.environ.get("AGENDA_SCREENSHOTS_DIR", "")
+    if shots:
+        Path(shots).mkdir(parents=True, exist_ok=True)
+    script = tmp_path / "settimana.js"
+    script.write_text(SETTIMANA, encoding="utf-8")
+    esito = subprocess.run([node, str(script), server, "b2c.owner_a@example.test", PASSWORD, oggi, altro, shots],
+                           env=env, capture_output=True, text=True, timeout=900)
+    assert esito.returncode == 0, esito.stderr[-4000:]
+    out = json.loads(esito.stdout.strip().splitlines()[-1])
+    per_id = {r["id"]: r for r in righe.values()}
+    sovrapposti = sorted(righe[k]["id"] for k in ("ov_owner", "ov_admin", "ov_agent2", "ov_richiesta"))
+
+    for nome, r in out.items():
+        assert r["errors"] == [], (nome, r["errors"])
+        s = r["inizio"]
+        compatto = nome in ("375", "390", "430")
+        assert s["compact"] is compatto
+        # 1. sette giorni lun-dom, tutti nello schermo, nessuno scorrimento orizzontale
+        assert s["colonne"] == settimana and s["colonneVisibili"] == 7, (nome, s["colonneVisibili"])
+        assert s["docW"] <= s["innerW"], (nome, s["docW"], s["innerW"])
+        # 3. il giorno scelto (dall'indirizzo: oggi) evidenziato, con la sua colonna
+        assert s["scelti"] == [oggi] and s["colonnaScelta"] == [oggi], (nome, s["scelti"])
+        # 4-5. riepilogo del giorno: tutti gli appuntamenti, ciascuno con i suoi dati veri
+        assert s["pannelloGiorno"] == oggi
+        assert sorted(c["id"] for c in s["card"]) == _attesi(righe, oggi), (nome, s["card"])
+        for c in s["card"]:
+            riga = per_id[c["id"]]
+            assert c["ora"] and c["tipo"] == ETICHETTE_TIPO[riga["tipo"]], (nome, c)
+            assert c["titolo"] == "Visitatore Sintetico" and c["luogo"] == "Comune Sintetico", (nome, c)
+            assert NOMI[riga["chi"]] in c["agente"] and c["stato"] == STATI[riga["stato"]], (nome, c)
+        if compatto:
+            assert s["chiave"] is True
+            blocchi = s["blocchi"]
+            # 2. ogni blocco: ora e tipo, almeno 11px, nessun testo tagliato o sovrapposto
+            for b in blocchi:
+                assert len(b["righe"]) == 2, (nome, b)
+                assert all(x["font"] >= 11 for x in b["righe"]), (nome, b)
+                assert all(x["sw"] <= x["cw"] + 1 for x in b["righe"]), (nome, "testo tagliato", json.dumps(b))
+                assert b["righe"][0]["bottom"] <= b["righe"][1]["top"] + 0.5, (nome, "righe sovrapposte", b)
+                if b["id"]:
+                    tipo = per_id[int(b["id"])]["tipo"]
+                    assert b["righe"][1]["t"] == ABBREVIATI[tipo], (nome, b)
+                    assert b["cat"] and b["bg"] not in ("rgba(0, 0, 0, 0)", "transparent"), (nome, b)
+            # nessun blocco sopra un altro nella stessa colonna
+            for d in settimana:
+                col = sorted((b for b in blocchi if b["day"] == d), key=lambda b: b["y"])
+                for a, b in zip(col, col[1:]):
+                    assert a["y"] + a["h"] <= b["y"] + 0.5, (nome, d, a, b)
+            # i sovrapposti di oggi sono UN gruppo, che li elenca tutti
+            gruppi = [b for b in blocchi if b["cluster"]]
+            assert [sorted(map(int, g["cluster"].split(","))) for g in gruppi if g["day"] == oggi] == [sovrapposti]
+            assert sorted(r["gruppo"]) == sovrapposti, (nome, r.get("gruppo"))
+            visita = next(b for b in blocchi if b["id"] == str(righe["visita"]["id"]))
+            assert visita["righe"][1]["t"] == "Visita" and visita["cat"] == "agenda-type-cat-visit"
+        # 7. cambio giorno immediato: nessuna nuova richiesta, stessa settimana, riepilogo aggiornato
+        c = r["cambio"]
+        assert c["colonne"] == settimana and c["scelti"] == [altro] and c["colonnaScelta"] == [altro]
+        assert c["pannelloGiorno"] == altro and sorted(x["id"] for x in c["card"]) == _attesi(righe, altro)
+        assert c["hash"] == f"#/agenda/settimana/{altro}"
+        assert r["dopoApertura"] == 1 and r["dopoCambio"] == 1, (nome, r["dopoApertura"], r["dopoCambio"])
+        assert r["ritorno"]["scelti"] == [oggi]
+        # 6. tocco su una scheda: il dettaglio esistente; 9. nessun caricamento in piu'
+        assert r["dettaglio"], (nome, r["dettaglio"])
+        assert r["fine"] == 1, (nome, r["fine"])

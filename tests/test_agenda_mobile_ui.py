@@ -278,3 +278,43 @@ def test_pagina_gesto_passivo_orologio_che_non_trattiene_e_nessuna_sostituzione(
     assert "vai(" not in adegua and "navigate(" not in adegua and "disegna();" in adegua
     viste = _senza_commenti(VIEWS_JS.read_text(encoding="utf-8"))
     assert "innerHTML" not in viste
+
+
+SETTIMANA_PURA = """
+import * as m from './agenda/agenda-model.mjs';
+const A = (id, s, e, extra = {}) => ({ id, kind: 'appointment', status: 'scheduled', type: 'call', start_at: s, end_at: e, ...extra });
+const out = {};
+out.brevi = Object.keys(m.TYPE_LABELS).map((t) => [t, m.typeShortLabel({ type: t }), m.typeCategory({ type: t })]);
+out.lista = [m.typeShortLabel({ appointment_type: 'buyer_visit' }), m.typeCategory({ appointment_type: 'notary' })];
+out.collega = [m.typeShortLabel({ kind: 'busy', label: 'Occupato' }), m.typeCategory({ kind: 'busy' })];
+out.ignoto = [m.typeShortLabel({ type: 'nuovo_tipo' }), m.typeCategory({ type: 'nuovo_tipo' }), m.typeShortLabel(null)];
+out.famiglie = m.TYPE_CATEGORY_LABELS;
+const giorno = [A(1, '2026-11-05T10:00:00+01:00', '2026-11-05T11:00:00+01:00'),
+                A(2, '2026-11-05T10:30:00+01:00', '2026-11-05T11:30:00+01:00'),
+                A(3, '2026-11-05T11:15:00+01:00', '2026-11-05T12:00:00+01:00'),
+                A(4, '2026-11-05T15:00:00+01:00', '2026-11-05T16:00:00+01:00'),
+                A(5, '2026-11-05T16:00:00+01:00', '2026-11-05T16:30:00+01:00')];
+out.gruppi = m.clusterLayout(giorno).map((g) => ({ ids: g.indices.map((i) => giorno[i].id), s: g.start_at, e: g.end_at }));
+out.vuoto = m.clusterLayout([]);
+console.log(JSON.stringify(out));
+"""
+
+
+def test_settimana_tipo_abbreviato_famiglia_e_gruppi(tmp_path):
+    o = _node(tmp_path, SETTIMANA_PURA)
+    from appointments.enums import APPOINTMENT_TYPE_LABELS_IT
+
+    tipi = {t for t, _, _ in o["brevi"]}
+    assert tipi == set(APPOINTMENT_TYPE_LABELS_IT)                 # ogni tipo del backend ha la sua sigla
+    for tipo, breve, famiglia in o["brevi"]:
+        assert breve and len(breve) <= 6, (tipo, breve)          # sta in un blocco stretto
+        assert famiglia in o["famiglie"], (tipo, famiglia)
+    assert len({b for _, b, _ in o["brevi"]}) == len(o["brevi"])  # nessuna sigla ambigua
+    assert dict((t, b) for t, b, _ in o["brevi"])["buyer_visit"] == "Visita"
+    assert o["lista"] == ["Visita", "deal"]                      # anche le righe dell'API lista
+    assert o["collega"] == ["Occup.", "busy"]
+    assert o["ignoto"] == ["", "other", ""]                      # niente sigle inventate
+    # sovrapposti in catena = un gruppo; i tocchi di bordo (16:00) non si sovrappongono
+    assert [g["ids"] for g in o["gruppi"]] == [[1, 2, 3], [4], [5]]
+    assert o["gruppi"][0]["s"] == "2026-11-05T09:00:00.000Z" and o["gruppi"][0]["e"] == "2026-11-05T11:00:00.000Z"
+    assert o["vuoto"] == []

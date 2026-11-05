@@ -629,7 +629,18 @@ export async function renderAgenda(container, params = []) {
       // pulsante "+ Nuovo appuntamento", precompilato su quel giorno e ora.
       onSlotClick: (giorno, ora) => apriCreazione({ dateKey: giorno, startTime: `${due(ora)}:00` }),
     };
-    if (view === 'week') renderWeek(area, { ...argomenti, onDayOpen: (giorno) => vai('day', giorno) });
+    if (view === 'week') {
+      // SETTIMANA LEGGIBILE: un giorno si sceglie senza ricaricare e senza
+      // cambiare settimana; il riepilogo sotto la griglia ne mostra gli
+      // appuntamenti. "Apri giorno" porta alla vista Giorno.
+      renderWeek(area, {
+        ...argomenti,
+        selectedKey: chiave,
+        onSelect: (giorno) => { chiave = giorno; sostituisciIndirizzo('week', giorno); },
+        onDay: (giorno) => vai('day', giorno),
+        onCreate: (giorno) => apriCreazione({ dateKey: giorno }),
+      });
+    }
     else if (view === 'day') renderDay(area, argomenti);
     else if (view === 'month') {
       // AGENDA MOBILE: un tocco su una data la sceglie e mostra i suoi

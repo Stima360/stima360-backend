@@ -42,10 +42,36 @@ prenotazione, Aggiorna richieste dal sito, Google Calendar, + Nuovo appuntamento
 filtri e legenda dietro «Filtri»; «+» flottante; bersagli da 44 px; nessuno scorrimento
 orizzontale della pagina.
 
+## Settimana leggibile
+
+Cosa restituisce davvero `GET /api/appointments/calendar` (verificato sul banco locale): tipo, stato,
+inizio e fine, nome del cliente (`contact_name`), agente (`agent_name`) e `place`, cioè il luogo
+scritto sull'appuntamento o, se manca, il **comune** dell'immobile. Titolo e indirizzo
+dell'immobile NON sono nella risposta: nelle schede compare `place` e nient'altro (nessun dato
+inventato); l'immobile completo resta nel dettaglio. Per un agente gli impegni dei colleghi
+arrivano solo come «Occupato», agente e orario.
+
+- **Blocchi** (settimana stretta): due righe da 11 px, ora d'inizio e tipo abbreviato («Visita»,
+  «Sopr.», «Propr.», «PdA», «Rogito»…; massimo 6 caratteri, una sigla per ogni tipo del backend).
+  Chi inizia in un giorno precedente mostra «ieri» o la data (bordo superiore tratteggiato).
+  Appuntamenti sovrapposti = UN blocco «10:00 · 4 app.» che li elenca tutti: niente testi
+  sovrapposti.
+- **Colori**: lo sfondo è la famiglia del tipo (visite, sopralluoghi e valutazioni, proprietari e
+  incarichi, proposte e atti, telefonate e video, altro), il bordo è lo stato. Contrasto testo/sfondo
+  almeno 6:1; il tipo è sempre anche scritto. Chiave dei colori sotto la griglia.
+- **Giorno scelto**: intestazione piena e colonna velata; si cambia toccando l'intestazione, un
+  blocco o un'ora vuota. Nessuna nuova richiesta e nessun cambio di settimana: cambia solo il
+  riepilogo (l'indirizzo si aggiorna senza ricaricare).
+- **Riepilogo del giorno** sotto la griglia, su ogni dispositivo: orario, stato, tipo (nel colore
+  della famiglia), cliente, luogo, agente, durata; il tocco apre il dettaglio esistente.
+
 ## Verifica
 
 - `tests/test_agenda_mobile_browser_postgres.py`: Chromium con tocchi simulati a 375, 390, 430,
   768, 1280 px e 932×430, PostgreSQL usa-e-getta, dati sintetici. Le 14 verifiche richieste.
+- `test_settimana_leggibile_blocchi_giorno_scelto_e_riepilogo` (stesso file): 375, 390, 430, 768 e
+  1280 px; testi mai tagliati né sovrapposti e mai sotto 11 px, una sola richiesta del calendario
+  anche cambiando giorno, riepilogo con i dati veri, apertura del dettaglio.
 - `tests/test_agenda_mobile_ui.py`: funzioni pure in quattro fusi del dispositivo (ora legale e
   solare, cambio di mese e di anno), preferenza della vista, cascata CSS reale.
 - Sentinelle che fissavano la regola G3 aggiornate con il commento «SENTINELLA AGGIORNATA (AGENDA

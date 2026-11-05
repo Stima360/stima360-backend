@@ -502,7 +502,9 @@ def test_13_css_nessuna_vista_nascosta_e_settimana_sempre_nello_schermo():
     assert "agenda-desktop-only {" not in css and "agenda-desktop-only{" not in css
     assert "min-width: 880px" not in css
     assert "grid-template-columns: 56px repeat(7, minmax(0, 1fr));" in css
-    assert "grid-template-columns: 34px repeat(7, minmax(0, 1fr));" in css      # settimana compatta
+    # SENTINELLA AGGIORNATA (SETTIMANA LEGGIBILE): colonna delle ore a 30px per
+    # dare spazio a ora e tipo nei blocchi della settimana stretta.
+    assert "grid-template-columns: 30px repeat(7, minmax(0, 1fr));" in css      # settimana compatta
     assert "overflow: auto" in css
     # nessuna regola che nasconda una colonna (la domenica resta)
     assert "nth-child" not in css and "nth-of-type" not in css

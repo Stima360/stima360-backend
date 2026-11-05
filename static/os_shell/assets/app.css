@@ -1914,22 +1914,13 @@ a.census-unit-main { text-decoration: none; }
 .agenda-page.agenda-compact .agenda-grid-day .agenda-grid-head,
 .agenda-page.agenda-compact .agenda-grid-day .agenda-grid-body { grid-template-columns: 44px minmax(0, 1fr); }
 .agenda-page.agenda-compact .agenda-grid-week .agenda-grid-head,
-.agenda-page.agenda-compact .agenda-grid-week .agenda-grid-body { grid-template-columns: 34px repeat(7, minmax(0, 1fr)); }
+.agenda-page.agenda-compact .agenda-grid-week .agenda-grid-body { grid-template-columns: 30px repeat(7, minmax(0, 1fr)); }
 .agenda-page.agenda-compact .agenda-hour-label { font-size: 10px; padding: 2px 3px 0 0; }
 .agenda-page.agenda-compact .agenda-grid-week .agenda-day-head { padding: 4px 1px; font-size: 11px; line-height: 1.15; min-height: 44px; white-space: normal; overflow-wrap: anywhere; }
 
-/* Settimana stretta: blocchi colorati con l'ora d'inizio; il resto nel pannello. */
-.agenda-page.agenda-compact .agenda-grid-compact .agenda-card { padding: 2px 2px 2px 3px; border-left-width: 3px; border-radius: 5px; font-size: 10px; line-height: 1.15; }
-.agenda-compact .agenda-grid-compact .agenda-card-head { display: block; overflow: hidden; }
-.agenda-compact .agenda-grid-compact .agenda-card-time { font-size: 10px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: clip; display: block; }
-.agenda-page.agenda-compact .agenda-grid-compact .agenda-card-to,
-.agenda-page.agenda-compact .agenda-grid-compact .agenda-badge,
-.agenda-page.agenda-compact .agenda-grid-compact .agenda-card-type,
-.agenda-page.agenda-compact .agenda-grid-compact .agenda-card-title,
-.agenda-page.agenda-compact .agenda-grid-compact .agenda-card-place,
-.agenda-page.agenda-compact .agenda-grid-compact .agenda-card-meta { display: none; }
-.agenda-page.agenda-compact .agenda-grid-compact .agenda-more { min-height: 0; padding: 0; font-size: 11px; font-weight: 700; border-radius: 5px; justify-content: center; }
-.agenda-page.agenda-compact .agenda-grid-compact .agenda-is-visit { box-shadow: inset 0 -3px 0 #0f9d8a; }
+/* Settimana stretta: i blocchi sono `.agenda-week-block` e i gruppi di
+   sovrapposti `.agenda-week-cluster` (sezione SETTIMANA LEGGIBILE, in fondo). */
+.agenda-page.agenda-compact .agenda-grid-compact .agenda-more { min-height: 0; border-radius: 6px; }
 
 /* Mese a indicatori; l'elenco del giorno scelto sotto la griglia. */
 .agenda-page.agenda-compact .agenda-month-weekday { padding: 6px 0; text-align: center; font-size: 11px; }
@@ -1943,3 +1934,55 @@ a.census-unit-main { text-decoration: none; }
 .agenda-page.agenda-compact .agenda-month-selected .agenda-month-day { box-shadow: 0 0 0 2px var(--primary); }
 .agenda-page.agenda-compact .agenda-month-key { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: -4px 2px 0; font-size: 12px; color: var(--muted); }
 .agenda-page.agenda-compact .agenda-month-key .agenda-dot { display: inline-block; margin-right: 4px; vertical-align: middle; }
+
+/* =========================================================================
+   SETTIMANA LEGGIBILE - blocchi con ora e tipo, giorno scelto, riepilogo.
+   Colori per FAMIGLIA DI TIPO (sfondo e testo del tipo), STATO sul bordo
+   (le regole `.agenda-status-*` di sempre). Contrasto testo/sfondo >= 6:1;
+   il tipo e' sempre anche SCRITTO, mai affidato al solo colore.
+   ========================================================================= */
+.agenda-type-cat-visit { --agenda-type-bg: #ccfbf1; --agenda-type-fg: #115e59; }
+.agenda-type-cat-valuation { --agenda-type-bg: #ede9fe; --agenda-type-fg: #5b21b6; }
+.agenda-type-cat-owner { --agenda-type-bg: #dbeafe; --agenda-type-fg: #1e3a8a; }
+.agenda-type-cat-deal { --agenda-type-bg: #ffedd5; --agenda-type-fg: #9a3412; }
+.agenda-type-cat-call { --agenda-type-bg: #e2e8f0; --agenda-type-fg: #334155; }
+.agenda-type-cat-other { --agenda-type-bg: #f5f5f4; --agenda-type-fg: #44403c; }
+
+/* Il tipo, scritto, nel colore della sua famiglia (card di ogni vista). */
+.agenda-card.agenda-type-cat-visit .agenda-card-type,
+.agenda-card.agenda-type-cat-valuation .agenda-card-type,
+.agenda-card.agenda-type-cat-owner .agenda-card-type,
+.agenda-card.agenda-type-cat-deal .agenda-card-type,
+.agenda-card.agenda-type-cat-call .agenda-card-type,
+.agenda-card.agenda-type-cat-other .agenda-card-type { color: var(--agenda-type-fg); }
+
+/* Il blocco della settimana stretta: due righe da 11px, mai sovrapposte. */
+.agenda-week-block { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 0; padding: 2px 1px 2px 2px; border-radius: 6px; font-size: 11px; line-height: 13px; text-align: left; color: #0f172a; overflow: hidden; cursor: pointer; }
+.agenda-week-block.agenda-type-cat-visit,
+.agenda-week-block.agenda-type-cat-valuation,
+.agenda-week-block.agenda-type-cat-owner,
+.agenda-week-block.agenda-type-cat-deal,
+.agenda-week-block.agenda-type-cat-call,
+.agenda-week-block.agenda-type-cat-other { background: var(--agenda-type-bg); }
+.agenda-week-block-time { display: block; font-weight: 700; letter-spacing: -.2px; white-space: nowrap; }
+.agenda-week-block-type { display: block; font-weight: 600; letter-spacing: -.2px; white-space: nowrap; color: var(--agenda-type-fg, #334155); }
+.agenda-week-block.agenda-status-cancelled,
+.agenda-week-block.agenda-status-rescheduled { opacity: .6; text-decoration: line-through; }
+.agenda-week-block[data-starts-before] { border-top-style: dashed; }
+.agenda-week-block[data-ends-after] { border-bottom-style: dashed; }
+.agenda-page.agenda-compact .agenda-grid-compact .agenda-week-cluster { display: flex; flex-direction: column; align-items: stretch; justify-content: flex-start; gap: 0; padding: 2px 1px 2px 2px; font-size: 11px; line-height: 13px; text-align: left; color: #0f172a; background: #fff; border: 1px solid #64748b; border-left-width: 3px; border-radius: 6px; box-shadow: 0 1px 3px rgba(15, 23, 42, .18); }
+
+/* Il giorno scelto: intestazione piena e colonna appena velata. */
+.agenda-page .agenda-day-head.agenda-day-selected { background: var(--primary); color: #fff; border-radius: 10px 10px 0 0; }
+.agenda-page .agenda-day-column.agenda-day-selected { background: rgba(36, 69, 212, .06); }
+
+/* Riepilogo del giorno sotto la Settimana. */
+.agenda-page .agenda-week-layout { display: grid; gap: 12px; }
+.agenda-page .agenda-week-day-panel .agenda-card { font-size: 14px; padding: 10px 12px; min-height: 44px; }
+
+/* Chiave dei colori (settimana stretta). */
+.agenda-page .agenda-type-key { display: flex; flex-wrap: wrap; gap: 4px; margin: -4px 0 0; font-size: 12px; }
+.agenda-page .agenda-type-key-item { padding: 1px 7px; border-radius: 999px; background: var(--agenda-type-bg); color: var(--agenda-type-fg); font-weight: 600; }
+
+/* Settimana stretta: griglia a meta' schermo, cosi' il riepilogo si vede subito. */
+.agenda-page.agenda-compact.agenda-view-week .agenda-scroll { min-height: 240px; max-height: 52vh; max-height: 52dvh; }

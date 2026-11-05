@@ -16,10 +16,12 @@
 // il server rifiuterebbe.
 
 import {
+  addDays,
   COMPACT_OVERLAP_COLUMNS,
   HOUR_HEIGHT,
   MAX_OVERLAP_COLUMNS,
   blockGeometry,
+  clusterLayout,
   dayTimeLabel,
   durationMinutes,
   emptyRangeLabel,
@@ -38,10 +40,14 @@ import {
   monthGrid,
   nowLineTop,
   overflowLayout,
+  romeDateKey,
   sortedItemsForDay,
   statusLabel,
   todayKey,
+  TYPE_CATEGORY_LABELS,
+  typeCategory,
   typeLabel,
+  typeShortLabel,
 } from '../../agenda/agenda-model.js';
 
 function el(tag, className, text) {
@@ -74,7 +80,7 @@ export function renderCard(item, { onOpen, compact = false, dayKey = null } = {}
   const busy = isBusy(item);
   const stato = busy ? 'busy' : (item.status || '');
   const card = el(busy ? 'div' : 'button',
-    `agenda-card agenda-status-${stato}${compact ? ' agenda-card-compact' : ''}${isVisit(item) ? ' agenda-is-visit' : ''}`);
+    `agenda-card agenda-status-${stato} agenda-type-cat-${typeCategory(item)}${compact ? ' agenda-card-compact' : ''}${isVisit(item) ? ' agenda-is-visit' : ''}`);
   card.setAttribute('aria-label', itemAriaLabel(item));
   if (!busy) {
     card.type = 'button';
@@ -127,6 +133,42 @@ export function renderCard(item, { onOpen, compact = false, dayKey = null } = {}
   return card;
 }
 
+/**
+ * SETTIMANA LEGGIBILE: il blocco della settimana stretta. Due righe, mai
+ * sovrapposte e mai sotto gli 11px: l'ora d'inizio (o "ieri" / "3/11" se e'
+ * cominciato in un giorno precedente: bordo superiore tratteggiato, orari
+ * completi nel riepilogo e nell'etichetta accessibile) e il tipo abbreviato ("Visita", "Sopr.", "PdA"). Il colore di
+ * fondo e' la famiglia del tipo, il bordo e' lo stato; tutto il resto (cliente,
+ * luogo, agente, stato per esteso) e' nel riepilogo del giorno e nella scheda.
+ */
+function giornoDiInizio(item, key) {
+  const inizio = romeDateKey(item.start_at);
+  if (inizio === addDays(key, -1)) return 'ieri';
+  return `${Number(inizio.slice(8, 10))}/${Number(inizio.slice(5, 7))}`;
+}
+
+export function renderWeekBlock(item, key, { onOpen } = {}) {
+  const busy = isBusy(item);
+  const stato = busy ? 'busy' : (item.status || '');
+  const blocco = el(busy ? 'div' : 'button',
+    `agenda-card agenda-week-block agenda-status-${stato} agenda-type-cat-${typeCategory(item)}`);
+  blocco.setAttribute('aria-label', itemAriaLabel(item));
+  blocco.title = itemAriaLabel(item);
+  const orario = dayTimeLabel(item, key);
+  const ora = orario.startsBefore ? giornoDiInizio(item, key) : formatTime(item.start_at);
+  blocco.append(el('span', 'agenda-week-block-time', ora));
+  const tipo = typeShortLabel(item);
+  if (tipo) blocco.append(el('span', 'agenda-week-block-type', tipo));
+  if (orario.startsBefore) blocco.dataset.startsBefore = '';
+  if (orario.endsAfter) blocco.dataset.endsAfter = '';
+  if (!busy) {
+    blocco.type = 'button';
+    blocco.dataset.appointmentId = String(item.id);
+    if (onOpen) blocco.addEventListener('click', () => onOpen(item));
+  }
+  return blocco;
+}
+
 function colonnaOre() {
   const colonna = el('div', 'agenda-hours');
   for (let h = 0; h < 24; h += 1) {
@@ -137,8 +179,10 @@ function colonnaOre() {
   return colonna;
 }
 
-function colonnaGiorno(key, items, onOpen, onSlotClick, apriAltri, { maxColumns = MAX_OVERLAP_COLUMNS, compact = false } = {}) {
-  const colonna = el('div', 'agenda-day-column');
+function colonnaGiorno(key, items, onOpen, onSlotClick, apriAltri, {
+  maxColumns = MAX_OVERLAP_COLUMNS, compact = false, cluster = false, selected = false, onPick = null,
+} = {}) {
+  const colonna = el('div', `agenda-day-column${selected ? ' agenda-day-selected' : ''}`);
   colonna.dataset.day = key;
   colonna.style.height = `${24 * HOUR_HEIGHT}px`;
   for (let h = 0; h < 24; h += 1) {
@@ -156,7 +200,7 @@ function colonnaGiorno(key, items, onOpen, onSlotClick, apriAltri, { maxColumns 
       riga.setAttribute('role', 'button');
       riga.setAttribute('aria-label',
         `Nuovo appuntamento alle ${String(h).padStart(2, '0')}:00`);
-      riga.addEventListener('click', () => onSlotClick(key, h));
+      riga.addEventListener('click', () => { if (onPick) onPick(key); onSlotClick(key, h); });
       riga.addEventListener('keydown', (ev) => {
         if (ev.key === 'Enter' || ev.key === ' ') {
           ev.preventDefault();
@@ -167,21 +211,59 @@ function colonnaGiorno(key, items, onOpen, onSlotClick, apriAltri, { maxColumns 
     colonna.appendChild(riga);
   }
   const delGiorno = itemsForDay(items, key);
-  // A30-13C: oltre MAX_OVERLAP_COLUMNS eventi sovrapposti le card non si
-  // impilano piu' una sull'altra (solo quella sopra restava cliccabile):
-  // l'ultima corsia porta un "+N" che apre l'elenco dei nascosti.
-  const { placement, overflow } = overflowLayout(delGiorno, maxColumns);
+  // Nella settimana stretta (a gruppi) il blocco sta a 1px dai bordi della
+  // colonna, per lasciare spazio al testo; altrove 2px come sempre.
+  const margine = cluster ? 1 : 2;
   const posiziona = (nodo, { top, height }, { column, columns }) => {
     nodo.classList.add('agenda-block');
     nodo.style.top = `${top}px`;
     nodo.style.height = `${height}px`;
-    nodo.style.left = `calc(${(100 / columns) * column}% + 2px)`;
-    nodo.style.width = `calc(${100 / columns}% - 4px)`;
+    nodo.style.left = `calc(${(100 / columns) * column}% + ${margine}px)`;
+    nodo.style.width = `calc(${100 / columns}% - ${2 * margine}px)`;
   };
+  const apriEScegli = onOpen ? (item) => { if (onPick) onPick(key); onOpen(item); } : undefined;
+  if (cluster) {
+    // SETTIMANA LEGGIBILE: niente blocchi affiancati nella colonna stretta.
+    // Un appuntamento solo = un blocco; piu' appuntamenti sovrapposti = UN
+    // blocco "10:00 · 3 app." che li elenca tutti (e il riepilogo del giorno).
+    for (const gruppo of clusterLayout(delGiorno)) {
+      const tutta = { column: 0, columns: 1 };
+      if (gruppo.indices.length === 1) {
+        const item = delGiorno[gruppo.indices[0]];
+        const blocco = renderWeekBlock(item, key, { onOpen: apriEScegli });
+        posiziona(blocco, blockGeometry(item, key), tutta);
+        colonna.appendChild(blocco);
+        continue;
+      }
+      const elenco = gruppo.indices.map((i) => delGiorno[i]);
+      const orario = `${formatTime(gruppo.start_at)}–${formatTime(gruppo.end_at)}`;
+      const insieme = el('button', 'btn agenda-more agenda-week-cluster');
+      insieme.type = 'button';
+      insieme.dataset.overflowCount = String(elenco.length);
+      insieme.dataset.clusterIds = elenco.map((x) => x.id).filter((x) => x !== undefined).join(',');
+      insieme.setAttribute('aria-label', `${elenco.length} appuntamenti sovrapposti, ${orario}`);
+      insieme.title = `${elenco.length} appuntamenti sovrapposti, ${orario}`;
+      const primo = dayTimeLabel(elenco[0], key).startsBefore ? giornoDiInizio(elenco[0], key) : formatTime(gruppo.start_at);
+      insieme.append(el('span', 'agenda-week-block-time', primo),
+        el('span', 'agenda-week-block-type', `${elenco.length} app.`));
+      posiziona(insieme, blockGeometry(gruppo, key), tutta);
+      if (apriAltri) {
+        insieme.addEventListener('click', () => {
+          if (onPick) onPick(key);
+          apriAltri({ day: key, items: elenco, orario });
+        });
+      }
+      colonna.appendChild(insieme);
+    }
+  }
+  // A30-13C: oltre MAX_OVERLAP_COLUMNS eventi sovrapposti le card non si
+  // impilano piu' una sull'altra (solo quella sopra restava cliccabile):
+  // l'ultima corsia porta un "+N" che apre l'elenco dei nascosti.
+  const { placement, overflow } = cluster ? { placement: [], overflow: [] } : overflowLayout(delGiorno, maxColumns);
   delGiorno.forEach((item, i) => {
     if (!placement[i]) return;                   // dietro un "+N"
     const geometria = blockGeometry(item, key);
-    const card = renderCard(item, { onOpen, compact: compact || geometria.height < 40, dayKey: key });
+    const card = renderCard(item, { onOpen: apriEScegli, compact: compact || geometria.height < 40, dayKey: key });
     posiziona(card, geometria, placement[i]);
     colonna.appendChild(card);
   });
@@ -247,7 +329,9 @@ function pannelloAltri(radice, onOpen) {
   };
 }
 
-function griglia(days, items, onOpen, classe, onSlotClick, { compact = false, maxColumns = MAX_OVERLAP_COLUMNS, onDayOpen = null } = {}) {
+function griglia(days, items, onOpen, classe, onSlotClick, {
+  compact = false, maxColumns = MAX_OVERLAP_COLUMNS, onDayOpen = null, cluster = false, selectedKey = null, onPick = null,
+} = {}) {
   const oggi = todayKey();
   const radice = el('div', `agenda-grid ${classe}${compact ? ' agenda-grid-compact' : ''}`);
   radice.style.setProperty('--agenda-days', String(days.length));
@@ -256,17 +340,25 @@ function griglia(days, items, onOpen, classe, onSlotClick, { compact = false, ma
   testata.appendChild(el('div', 'agenda-hours-head'));
   for (const key of days) {
     const testo = days.length === 1 ? formatDayLong(key) : formatDayShort(key);
-    // AGENDA MOBILE: nella settimana l'intestazione di un giorno apre quel
-    // giorno (come nelle app calendario).
-    const cella = onDayOpen && days.length > 1
-      ? el('button', `agenda-day-head${key === oggi ? ' agenda-today' : ''}`, testo)
-      : el('div', `agenda-day-head${key === oggi ? ' agenda-today' : ''}`, testo);
+    // Nella settimana l'intestazione di un giorno e' un pulsante: con
+    // `onPick` lo SCEGLIE (riepilogo sotto la griglia, nessun caricamento),
+    // altrimenti con `onDayOpen` apre la vista Giorno.
+    const scelto = !!onPick && key === selectedKey;
+    const cliccabile = days.length > 1 && (onPick || onDayOpen);
+    const classi = `agenda-day-head${key === oggi ? ' agenda-today' : ''}${scelto ? ' agenda-day-selected' : ''}`;
+    const cella = cliccabile ? el('button', classi, testo) : el('div', classi, testo);
     cella.dataset.day = key;
     if (key === oggi) cella.setAttribute('aria-current', 'date');
-    if (onDayOpen && days.length > 1) {
+    if (cliccabile) {
       cella.type = 'button';
-      cella.setAttribute('aria-label', `Apri ${formatDayLong(key)}`);
-      cella.addEventListener('click', () => onDayOpen(key));
+      if (onPick) {
+        cella.setAttribute('aria-pressed', scelto ? 'true' : 'false');
+        cella.setAttribute('aria-label', `Mostra ${formatDayLong(key)}`);
+        cella.addEventListener('click', () => onPick(key));
+      } else {
+        cella.setAttribute('aria-label', `Apri ${formatDayLong(key)}`);
+        cella.addEventListener('click', () => onDayOpen(key));
+      }
     }
     testata.appendChild(cella);
   }
@@ -276,7 +368,9 @@ function griglia(days, items, onOpen, classe, onSlotClick, { compact = false, ma
   corpo.appendChild(colonnaOre());
   const apriAltri = pannelloAltri(radice, onOpen);
   for (const key of days) {
-    corpo.appendChild(colonnaGiorno(key, items, onOpen, onSlotClick, apriAltri, { maxColumns, compact }));
+    corpo.appendChild(colonnaGiorno(key, items, onOpen, onSlotClick, apriAltri, {
+      maxColumns, compact, cluster, selected: !!onPick && key === selectedKey, onPick,
+    }));
   }
   radice.appendChild(corpo);
   return radice;
@@ -293,13 +387,64 @@ function scrollIniziale(scroller) {
  * massimo COMPACT_OVERLAP_COLUMNS.week affiancati e poi "+N"; il dettaglio e'
  * nel pannello, con un tocco.
  */
-export function renderWeek(target, { days, items, onOpen, onSlotClick, compact = false, onDayOpen = null }) {
+export function renderWeek(target, {
+  days, items, onOpen, onSlotClick, compact = false, onDayOpen = null,
+  selectedKey = null, onSelect = null, onDay = null, onCreate = null,
+}) {
   const scroller = el('div', 'agenda-scroll agenda-scroll-week');
+  // SETTIMANA LEGGIBILE: con `onSelect` un giorno si SCEGLIE (intestazione,
+  // un blocco, un'ora vuota) e il riepilogo sotto la griglia mostra i suoi
+  // appuntamenti. Cambiare giorno non ricarica nulla e non cambia settimana:
+  // si aggiornano solo le classi e il riepilogo.
+  const giorno = onSelect ? (days.includes(selectedKey) ? selectedKey : days[0]) : null;
+  let riepilogo = null;
+  const contenitore = el('div', 'agenda-week-layout');
+  const scegli = onSelect ? (key) => {
+    if (!days.includes(key)) return;
+    for (const n of scroller.querySelectorAll('[data-day]')) {
+      const si = n.dataset.day === key;
+      n.classList.toggle('agenda-day-selected', si);
+      if (n.tagName === 'BUTTON') n.setAttribute('aria-pressed', si ? 'true' : 'false');
+    }
+    const nuovo = pannelloGiorno(key, items, { onOpen, onDay, onCreate });
+    nuovo.classList.add('agenda-week-day-panel');
+    if (riepilogo) {
+      contenitore.insertBefore(nuovo, riepilogo);
+      riepilogo.remove();
+    } else {
+      contenitore.appendChild(nuovo);
+    }
+    riepilogo = nuovo;
+    onSelect(key);
+  } : null;
   scroller.appendChild(griglia(days, items, onOpen, 'agenda-grid-week', onSlotClick, {
-    compact, onDayOpen, maxColumns: compact ? COMPACT_OVERLAP_COLUMNS.week : MAX_OVERLAP_COLUMNS,
+    compact,
+    onDayOpen,
+    cluster: compact,
+    maxColumns: compact ? COMPACT_OVERLAP_COLUMNS.week : MAX_OVERLAP_COLUMNS,
+    selectedKey: giorno,
+    onPick: scegli,
   }));
-  target.appendChild(scroller);
+  contenitore.appendChild(scroller);
+  if (compact) contenitore.appendChild(chiaveTipi());
+  target.appendChild(contenitore);
+  if (scegli) {
+    riepilogo = pannelloGiorno(giorno, items, { onOpen, onDay, onCreate });
+    riepilogo.classList.add('agenda-week-day-panel');
+    contenitore.appendChild(riepilogo);
+  }
   scrollIniziale(scroller);
+}
+
+/** La chiave dei colori delle famiglie di tipo (sotto la settimana stretta). */
+function chiaveTipi() {
+  const chiave = el('p', 'agenda-type-key');
+  chiave.setAttribute('aria-label', 'Colori dei tipi di appuntamento');
+  for (const [famiglia, nome] of Object.entries(TYPE_CATEGORY_LABELS)) {
+    const voce = el('span', `agenda-type-key-item agenda-type-cat-${famiglia}`, nome);
+    chiave.appendChild(voce);
+  }
+  return chiave;
 }
 
 /** GIORNO: una colonna, con la linea dell'ora corrente. */

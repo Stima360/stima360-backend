@@ -1095,3 +1095,91 @@ export function swipeDirection({ dx, dy, dt, startX = null, width = null } = {})
       && (startX < SWIPE_EDGE || startX > width - SWIPE_EDGE)) return 0;
   return dx < 0 ? 1 : -1;
 }
+
+// ---------------------------------------------------------------------------
+// SETTIMANA LEGGIBILE: tipo abbreviato, categoria di colore, raggruppamento
+// delle sovrapposizioni. Solo dati gia' restituiti dall'API (`type`/
+// `appointment_type`, `kind`): nessun dato inventato.
+// ---------------------------------------------------------------------------
+
+/** Il tipo in al massimo sei caratteri, per i blocchi stretti della Settimana. */
+export const TYPE_SHORT_LABELS = Object.freeze({
+  call: 'Tel.',
+  video_call: 'Video',
+  seller_meeting: 'Propr.',
+  inspection: 'Sopr.',
+  buyer_visit: 'Visita',
+  valuation_presentation: 'Valut.',
+  mandate_signing: 'Incar.',
+  proposal: 'PdA',
+  preliminary_contract: 'Prelim',
+  notary: 'Rogito',
+  technical: 'Tecn.',
+  other: 'Altro',
+  sale_appointment: 'Vend.',
+});
+
+/** Le famiglie di tipi, ciascuna con il suo colore (stesso colore ovunque). */
+export const TYPE_CATEGORIES = Object.freeze({
+  buyer_visit: 'visit',
+  sale_appointment: 'visit',
+  inspection: 'valuation',
+  valuation_presentation: 'valuation',
+  seller_meeting: 'owner',
+  mandate_signing: 'owner',
+  proposal: 'deal',
+  preliminary_contract: 'deal',
+  notary: 'deal',
+  call: 'call',
+  video_call: 'call',
+  technical: 'other',
+  other: 'other',
+});
+
+/** Le famiglie nell'ordine della chiave dei colori, con il loro nome. */
+export const TYPE_CATEGORY_LABELS = Object.freeze({
+  visit: 'Visite',
+  valuation: 'Sopr./valut.',
+  owner: 'Propr./incarichi',
+  deal: 'Proposte/atti',
+  call: 'Tel./video',
+  other: 'Altro',
+});
+
+function tipoDi(item) {
+  return item ? (item.type || item.appointment_type || '') : '';
+}
+
+/** "Visita", "Sopr.", "Occup." (impegno di un collega); '' se il tipo manca. */
+export function typeShortLabel(item) {
+  if (!item) return '';
+  if (item.kind === 'busy') return 'Occup.';
+  const tipo = tipoDi(item);
+  return TYPE_SHORT_LABELS[tipo] || '';
+}
+
+/** La famiglia di colore: 'busy' per un collega, 'other' se il tipo e' ignoto. */
+export function typeCategory(item) {
+  if (!item) return 'other';
+  if (item.kind === 'busy') return 'busy';
+  return TYPE_CATEGORIES[tipoDi(item)] || 'other';
+}
+
+/**
+ * La Settimana stretta non affianca blocchi: gli appuntamenti che si
+ * sovrappongono diventano UN blocco con il loro numero (si aprono tutti dal
+ * blocco e compaiono nel riepilogo del giorno). Restituisce i gruppi:
+ * `{ indices, start_at, end_at }`; ogni indice sta in un solo gruppo.
+ */
+export function clusterLayout(items) {
+  const lista = items || [];
+  return gruppiSovrapposti(lista).map((gruppo) => {
+    const indici = gruppo.map((g) => g.i)
+      .sort((a, b) => Date.parse(lista[a].start_at) - Date.parse(lista[b].start_at) || a - b);
+    return {
+      indices: indici,
+      start_at: new Date(Math.min(...indici.map((i) => Date.parse(lista[i].start_at)))).toISOString(),
+      end_at: new Date(Math.max(...indici.map((i) => Date.parse(lista[i].end_at)))).toISOString(),
+    };
+  });
+}
