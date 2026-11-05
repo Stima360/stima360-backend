@@ -15,6 +15,7 @@
 //   GET /api/core/contacts (+ /contacts/{id} per i mancanti)    nome e telefono
 //   GET /api/next-best-action?limit=20                          suggerimenti P23
 //   GET /api/core/activities?limit=20&mistakes=false            storico, a richiesta
+//   GET /api/signature-requests/notifications?days=14           firme dei fogli visita
 //
 // SCRITTURE (solo su un gesto esplicito dell'operatore)
 //   PATCH /api/core/tasks/{id} {status:'completed'}   «Completa» (e «Annulla»)
@@ -189,6 +190,35 @@ function nbaCtaHref(n) {
 }
 
 // ---------------------------------------------------------------------------
+// FIRMA SEMPLIFICATA: le firme dei fogli visita da guardare
+// ---------------------------------------------------------------------------
+// Completate, rifiutate, scadute, invii non riusciti: una voce per visita, dalla stessa API dei
+// fogli visita (agenzia della sessione; l'agente vede le sue visite). Ogni voce apre il foglio
+// visita. Se l'API non risponde (firma non attiva) il riquadro semplicemente non c'e'.
+async function mountAvvisiFirme(slot, superato) {
+  let data;
+  try { data = await apiGet('/api/signature-requests/notifications?days=14'); } catch (errore) { data = null; }
+  if (superato()) return;
+  const items = (data && Array.isArray(data.items)) ? data.items : [];
+  if (!items.length) { slot.replaceChildren(); return; }
+  const card = el('section', 'card panel sign-alerts');
+  card.setAttribute('data-sign-alerts', '');
+  card.appendChild(el('h2', '', 'Firme dei fogli visita'));
+  const lista = el('ul', 'sign-alerts-list');
+  for (const it of items) {
+    const a = link(`#/fogli-visita/${encodeURIComponent(it.appointment_id)}`, '', `sign-alert sign-alert-${it.state}`);
+    a.setAttribute('data-sign-alert', it.state);
+    a.append(el('span', `sign-state sign-state-${it.state}`, it.label),
+      el('span', '', [it.client, it.property, it.visit_text ? `visita del ${it.visit_text}` : null].filter(Boolean).join(' · ')));
+    const li = el('li');
+    li.appendChild(a);
+    lista.appendChild(li);
+  }
+  card.appendChild(lista);
+  slot.replaceChildren(card);
+}
+
+// ---------------------------------------------------------------------------
 // la pagina
 // ---------------------------------------------------------------------------
 
@@ -251,9 +281,11 @@ export async function renderOggi(container) {
 
   const avvisi = el('div', 'scrivania-messages');
   avvisi.setAttribute('aria-live', 'polite');
+  // FIRMA SEMPLIFICATA: lo spazio del riquadro «Firme dei fogli visita» (vuoto se non c'e' nulla).
+  const firme = el('div', 'scrivania-sign-alerts');
   const corpo = el('div', 'scrivania-body');
   corpo.appendChild(el('p', 'muted scrivania-loading', 'Caricamento della scrivania…'));
-  root.append(testata, avvisi, corpo);
+  root.append(testata, avvisi, firme, corpo);
 
   const dialogo = el('dialog', 'scrivania-dialog');
   root.appendChild(dialogo);
@@ -266,6 +298,7 @@ export async function renderOggi(container) {
     aggiorna.disabled = true;
     aggiorna.textContent = 'Aggiornamento…';
     const now = new Date();
+    mountAvvisiFirme(firme, superato);
     try {
       const { dati, errori } = await loadAll(now);
       if (superato()) return;

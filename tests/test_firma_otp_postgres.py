@@ -25,6 +25,7 @@ pytestmark = [
                        "(BLOCCO_2C_TEST_CLUSTER_VERIFIED=1)"),
 ]
 PASSWORD_AGENTE = None
+# SENTINELLA AGGIORNATA (FIRMA SEMPLIFICATA): la dichiarazione accettata oggi e' la v2.
 
 
 @pytest.fixture
@@ -60,7 +61,7 @@ def _richiedi_codice(o, token) -> str:
 
 
 def _conferma(o, token, code, **extra):
-    body = {"code": code, "consent_accepted": True, "consent_version": "dichiarazione_firma_otp_v1", **extra}
+    body = {"code": code, "consent_accepted": True, "consent_version": "dichiarazione_firma_otp_v2", **extra}
     return o["public"].post(f"{PUB}/{token}/confirm", json=body)
 
 
@@ -133,7 +134,7 @@ def test_f_il_procedimento_completo(otp):
     crm = o["owner"].get(API, params={"visit_sheet_id": sheet["id"]}).json()["items"][0]
     assert crm["state"] == "awaiting_agent" and crm["status"] == "sent" and crm["has_document"] is False
     # l'agente firma: solo l'agente assegnato, con password e dichiarazione
-    corpo = {"password": o["password"], "consent_accepted": True, "consent_version": "dichiarazione_firma_otp_v1"}
+    corpo = {"password": o["password"], "consent_accepted": True, "consent_version": "dichiarazione_firma_otp_v2"}
     assert o["owner"].post(f"{API}/{req['id']}/sign-as-agent", json=corpo).status_code == 403            # non e' l'agente
     assert o["agent"].post(f"{API}/{req['id']}/sign-as-agent", json={**corpo, "password": "sbagliata"}).status_code == 403
     assert o["agent"].post(f"{API}/{req['id']}/sign-as-agent", json={**corpo, "consent_accepted": False}).status_code == 400
@@ -377,7 +378,7 @@ def test_n_permessi_e_isolamento(otp):
                              ("post", f"{API}/{req['id']}/links"), ("post", f"{API}/{req['id']}/sign-as-agent"),
                              ("get", f"{API}/{req['id']}/document"), ("get", f"{API}/{req['id']}/audit-trail"),
                              ("get", f"{API}/{req['id']}/events"), ("get", f"{API}/{req['id']}/verify")):
-            body = {"send": False} if path.endswith("/links") else ({"password": "x", "consent_accepted": True, "consent_version": "dichiarazione_firma_otp_v1"}
+            body = {"send": False} if path.endswith("/links") else ({"password": "x", "consent_accepted": True, "consent_version": "dichiarazione_firma_otp_v2"}
                                                                    if path.endswith("sign-as-agent") else None)
             r = getattr(c, method)(path, json=body) if method == "post" else c.get(path)
             assert r.status_code == 404, (who, path, r.status_code)
@@ -395,7 +396,7 @@ def test_n_alterazione_del_pdf_archiviato_e_delle_prove_viene_rilevata(otp):
     code = _richiedi_codice(o, token)
     assert _conferma(o, token, code).status_code == 200
     assert o["agent"].post(f"{API}/{req['id']}/sign-as-agent", json={"password": o["password"], "consent_accepted": True,
-                                                                     "consent_version": "dichiarazione_firma_otp_v1"}).status_code == 200
+                                                                     "consent_version": "dichiarazione_firma_otp_v2"}).status_code == 200
     assert o["owner"].get(f"{API}/{req['id']}/verify").json()["ok"] is True
     # le prove sono append-only e la catena/sigillo scoprono una manomissione fatta a basso livello
     import psycopg2
@@ -421,7 +422,7 @@ def test_n_alterazione_del_pdf_archiviato_e_delle_prove_viene_rilevata(otp):
 def test_n_la_firma_dell_agente_ha_le_sue_regole(otp):
     o, b = otp, otp["app"]
     sheet, req, token = _avvia(o)
-    corpo = {"password": o["password"], "consent_accepted": True, "consent_version": "dichiarazione_firma_otp_v1"}
+    corpo = {"password": o["password"], "consent_accepted": True, "consent_version": "dichiarazione_firma_otp_v2"}
     # l'agente puo' firmare anche prima del cliente; la richiesta resta aperta finche' manca il cliente
     r = o["agent"].post(f"{API}/{req['id']}/sign-as-agent", json=corpo)
     assert r.status_code == 200 and r.json()["request"]["status"] == "sent" and r.json()["request"]["signers"][1]["status"] == "signed"

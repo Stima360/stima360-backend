@@ -546,7 +546,8 @@ def test_n1_menu_entry_appears_only_when_the_server_says_yes(staged):  # noqa: F
     assert acceso["title"] == "Voce"
     # le altre voci restano quelle di prima, nello stesso ordine
     assert [r for r in acceso["nav"] if r != "voce"] == spento["nav"]
-    assert spento["nav"][:3] == ["oggi", "agenda", "contatti"]
+    # SENTINELLA AGGIORNATA (FOGLI VISITA, richiesta del titolare): «Fogli visita» subito dopo «Agenda».
+    assert spento["nav"][:4] == ["oggi", "agenda", "fogli-visita", "contatti"]
 
 
 @node

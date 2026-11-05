@@ -1,31 +1,51 @@
-/* FIRMA OTP: la pagina del firmatario. Base: /prenota/assets/booking.css (stessa palette). Sfondo bianco, pulsanti grandi. */
+/* FIRMA OTP - FIRMA SEMPLIFICATA: la pagina del cliente. Base: /prenota/assets/booking.css (stessa palette).
+   Una colonna, testi grandi, un pulsante principale per volta, bersagli da almeno 48px. */
 html, body { background: #ffffff; }
-.sign-shell { width: min(100%, 720px); overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
+.sign-shell { width: min(100%, 640px); overflow-wrap: anywhere; word-break: break-word; min-width: 0; }
 .sign-shell .panel { min-width: 0; max-width: 100%; }
+.sign-header { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; margin: 4px 0 18px; }
+.sign-logo { width: 132px; height: auto; display: block; }
+.sign-title { margin: 0; font-size: 1.6rem; line-height: 1.2; color: var(--ink, #17231d); }
+.sign-steps { display: flex; gap: 6px; margin: 0 0 14px; padding: 0; list-style: none; font-size: 0.85rem; color: var(--muted); }
+.sign-steps li { flex: 1; text-align: center; padding: 6px 4px; border-bottom: 3px solid var(--line); }
+.sign-steps li.done { border-color: var(--brand); color: var(--brand); }
+.sign-steps li.now { border-color: var(--brand); color: var(--ink, #17231d); font-weight: 700; }
 .sign-doc { margin: 0 0 12px; min-width: 0; }
-.sign-doc dl { display: grid; grid-template-columns: minmax(96px, max-content) minmax(0, 1fr); gap: 6px 12px; margin: 0; min-width: 0; }
-.sign-doc dt { color: var(--muted); font-size: 0.9rem; }
-.sign-doc dd { margin: 0; min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
-.sign-pdf { width: 100%; height: min(70vh, 640px); border: 1px solid var(--line); border-radius: 10px; background: #fff; }
-.sign-pdf-links { display: flex; flex-wrap: wrap; gap: 10px; margin: 10px 0 0; }
-.sign-pdf-links a.primary-link { background: var(--brand); color: #fff; border-color: var(--brand); width: 100%; text-align: center; }
-.sign-pdf-links a { display: inline-block; padding: 12px 16px; border: 1px solid var(--line); border-radius: 10px;
-  color: var(--brand); text-decoration: none; font-weight: 600; }
+.sign-doc h2 { margin: 0 0 8px; font-size: 1.2rem; }
+.sign-doc dl { display: grid; grid-template-columns: minmax(84px, max-content) minmax(0, 1fr); gap: 6px 12px; margin: 0; min-width: 0; }
+.sign-doc dt { color: var(--muted); font-size: 0.95rem; }
+.sign-doc dd { margin: 0; min-width: 0; font-size: 1rem; }
+.sign-pdf { width: 100%; height: min(70vh, 640px); border: 1px solid var(--line); border-radius: 10px; background: #fff; margin-top: 12px; }
+.sign-pdf-links { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0 0; }
+.sign-pdf-links a { flex: 1 1 auto; display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 12px 16px;
+  border: 1px solid var(--line); border-radius: 12px; color: var(--brand); text-decoration: none; font-weight: 700; }
+.sign-pdf-links a.primary-link { background: var(--soft); border-color: var(--brand); }
 .sign-consent { background: var(--soft); border: 1px solid var(--line); border-radius: 12px; padding: 14px; margin: 12px 0; }
-.sign-consent p { margin: 0 0 10px; font-size: 0.95rem; line-height: 1.55; }
-.sign-consent .privacy { color: var(--muted); font-size: 0.85rem; }
-.sign-consent label { display: flex; gap: 12px; align-items: flex-start; font-weight: 600; cursor: pointer; }
-.sign-consent input[type="checkbox"] { width: 24px; height: 24px; flex: 0 0 auto; margin-top: 1px; }
-.sign-otp input { font-size: 1.8rem; letter-spacing: 0.4em; text-align: center; width: 100%; padding: 12px; border: 1px solid var(--line);
-  border-radius: 12px; }
-.sign-actions { display: grid; gap: 10px; margin-top: 12px; }
-.sign-actions button { width: 100%; padding: 16px; font-size: 1.05rem; border-radius: 12px; border: 0; cursor: pointer; }
+.sign-consent h2 { margin: 0 0 8px; font-size: 1.05rem; }
+.sign-consent p { margin: 0 0 10px; font-size: 1rem; line-height: 1.55; }
+.sign-consent details { color: var(--muted); font-size: 0.88rem; }
+.sign-consent summary { cursor: pointer; min-height: 32px; }
+.sign-otp p { margin: 0 0 10px; font-size: 1rem; line-height: 1.5; }
+.sign-code-input { font-size: 2rem; letter-spacing: 0.5em; text-align: center; width: 100%; padding: 14px 10px 14px 0.5em; border: 2px solid var(--line);
+  border-radius: 12px; font-variant-numeric: tabular-nums; box-sizing: border-box; }
+.sign-code-input:focus { border-color: var(--brand); outline: none; }
+.sign-actions { display: grid; gap: 10px; margin-top: 14px; }
+.sign-actions button { width: 100%; min-height: 52px; padding: 14px 16px; font-size: 1.08rem; border-radius: 12px; border: 0; cursor: pointer; }
 .sign-actions .primary { background: var(--brand); color: #fff; font-weight: 700; }
 .sign-actions .primary:disabled { opacity: 0.45; cursor: not-allowed; }
-.sign-actions .ghost { background: #fff; border: 1px solid var(--line); color: var(--ink); }
-.sign-actions .danger { background: #fff; border: 1px solid var(--danger); color: var(--danger); }
-.sign-notice { background: var(--ok-bg); border-radius: 12px; padding: 14px; }
+.sign-actions .ghost { background: #fff; border: 1px solid var(--line); color: var(--ink, #17231d); }
+.sign-actions .ghost:disabled { opacity: 0.6; }
+.sign-link-button { background: none; border: 0; color: var(--muted); text-decoration: underline; font-size: 0.95rem; padding: 12px 4px; min-height: 44px; cursor: pointer; }
+.sign-final { border-radius: 12px; padding: 18px; }
+.sign-final.ok { background: var(--ok-bg); }
+.sign-final.wait { background: var(--soft); }
+.sign-final.stop { background: var(--danger-bg); }
+.sign-final h2 { margin: 0 0 8px; font-size: 1.3rem; }
+.sign-final p { margin: 0 0 8px; line-height: 1.5; }
+.sign-final .sign-pdf-links a { background: var(--brand); color: #fff; border-color: var(--brand); }
 .sign-error { background: var(--danger-bg); color: var(--danger); border-radius: 12px; padding: 12px; margin-top: 10px; }
-.sign-hint { color: var(--muted); font-size: 0.9rem; margin: 8px 0 0; }
-.sign-level { font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; margin-top: 14px; }
-.sign-code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; word-break: break-all; overflow-wrap: anywhere; font-size: 0.85rem; }
+.sign-hint { color: var(--muted); font-size: 0.92rem; margin: 8px 0 0; }
+.sign-level { font-size: 0.85rem; color: var(--muted); border-top: 1px solid var(--line); padding-top: 10px; margin-top: 18px; }
+.sign-doc-compact { padding-top: 12px; padding-bottom: 12px; }
+.sign-doc-compact h2 { margin-bottom: 2px; }
+.sign-doc-compact .sign-pdf-links { margin-top: 8px; }

@@ -117,8 +117,9 @@ def test_02_agenda_e_una_voce_normale_di_sections_una_sola_volta():
     # essenziale in quest'ordine; "edifici" e' sottovoce di "immobili"; "stime-dettagliate",
     # "abbinamenti", "attivita", "automazioni" e "cestino" non sono piu' voci ma restano rotte
     # valide dentro Stime, Richieste, Oggi e Impostazioni. "impostazioni" chiude la barra.
+    # SENTINELLA AGGIORNATA (FOGLI VISITA, richiesta del titolare): «Fogli visita» subito dopo «Agenda».
     assert re.findall(r"name:\s*'([a-z-]+)'", sezioni) == [
-        "oggi", "agenda", "contatti", "immobili", "edifici", "zona", "venditori",
+        "oggi", "agenda", "fogli-visita", "contatti", "immobili", "edifici", "zona", "venditori",
         "acquisizioni", "incarichi", "acquirenti", "stime", "messaggi", "impostazioni"]
     assert sezioni.count("{ name: 'agenda', label: 'Agenda' },") == 1
     # la costante del workaround non esiste piu', in nessuna forma
@@ -981,8 +982,9 @@ def test_s1_un_tenant_vede_agenda_una_volta_subito_dopo_oggi(shell_staged):
     # essenziale in quest'ordine; "edifici" e' sottovoce di "immobili"; "stime-dettagliate",
     # "abbinamenti", "attivita", "automazioni" e "cestino" non sono piu' voci ma restano rotte
     # valide dentro Stime, Richieste, Oggi e Impostazioni. "impostazioni" chiude la barra.
-    assert out["navRoutes"] == ["oggi", "agenda", "contatti", "immobili", "edifici", "zona", "venditori", "acquisizioni",
-                                "incarichi", "acquirenti", "stime", "messaggi", "impostazioni"], out["navRoutes"]
+    # SENTINELLA AGGIORNATA (FOGLI VISITA, richiesta del titolare): «Fogli visita» subito dopo «Agenda».
+    assert out["navRoutes"] == ["oggi", "agenda", "fogli-visita", "contatti", "immobili", "edifici", "zona", "venditori",
+                                "acquisizioni", "incarichi", "acquirenti", "stime", "messaggi", "impostazioni"], out["navRoutes"]
     assert out["navRoutes"].count("agenda") == 1
     assert out["nav"].count("Agenda") == 1
     # Rete resta assente per un tenant

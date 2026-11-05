@@ -108,7 +108,8 @@ def test_b01_la_voce_zona_apre_la_mappa_ed_e_attiva(staged):  # noqa: F811
     out = _run(staged, scenario)
     assert out["prima"]["c_e"] is True and out["prima"]["etichetta"] == "Zona" and out["prima"]["icona"] is True
     ordine = out["prima"]["ordine"]
-    assert ordine.index("edifici") + 1 == ordine.index("zona") and ordine[:3] == ["oggi", "agenda", "contatti"]
+    # SENTINELLA AGGIORNATA (FOGLI VISITA, richiesta del titolare): «Fogli visita» subito dopo «Agenda».
+    assert ordine.index("edifici") + 1 == ordine.index("zona") and ordine[:4] == ["oggi", "agenda", "fogli-visita", "contatti"]
     assert out["mappa"] == {"hash": "#/edifici/mappa", "attiva": ["zona"], "titolo": "Zona", "mappe": 1, "pagina": True}
     assert out["selezionato"] == {"attiva": ["zona"], "titolo": "Zona"}
     assert out["posiziona"] == {"attiva": ["zona"], "titolo": "Zona"}

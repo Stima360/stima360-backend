@@ -10,11 +10,14 @@
 // BLOCCO-6B: per ogni foglio, le richieste di firma. Con l'adattatore SIMULATO ogni
 // richiesta e ogni esito portano la scritta «SIMULAZIONE — nessuna firma valida».
 //
-// FIRMA OTP STIMA360: il riquadro «Firma elettronica OTP» (FES). L'agente invia la richiesta
-// (email con il collegamento personale al cliente), vede lo stato dal server, reinvia o copia
-// il collegamento, revoca, firma come agente (password + dichiarazione), scarica documento e
-// rapporto delle prove, verifica l'integrità. Il livello è sempre «firma elettronica semplice».
-// Tutto via `textContent`.
+// FIRMA OTP STIMA360 - FIRMA SEMPLIFICATA: il riquadro «Firma del foglio visita» (FES), uguale
+// in Agenda, nella scheda dell'immobile e nella sezione «Fogli visita». Un pulsante principale
+// coerente con lo stato («Invia per firma», «Firma come agente», «Scarica PDF firmato»), le altre
+// azioni nel menu «⋯» e solo quando sono possibili. Cliente precompilato dal CRM, agente dalla
+// visita; il foglio si genera o si riusa sul server. Lo stato lo dice il server (sette parole,
+// `presentation.py`) e si aggiorna da solo mentre si attende qualcuno. Nessun identificativo
+// tecnico in vista: procedimento e registro delle prove stanno in «Dettagli tecnici».
+// Il livello è sempre «firma elettronica semplice». Tutto via `textContent`.
 
 import { apiGet, apiPost } from '../core/api-client.js';
 
@@ -147,7 +150,9 @@ function agentSignForm(r, box, load) {
   return form;
 }
 
-async function mountSignatures(holder, sheet, badge) {
+// Il riquadro di prima, usato SOLO con l'adattatore SIMULATO (BLOCCO-6B): la firma OTP usa
+// `mountSignaturePanel` qui sotto.
+async function mountLegacySignatures(holder, sheet, badge) {
   const box = el('div', 'visit-sign');
   box.setAttribute('data-signatures', String(sheet.id));
   holder.appendChild(box);
@@ -296,30 +301,377 @@ async function mountSignatures(holder, sheet, badge) {
 }
 
 async function downloadPdf(sheet, holder) {
+  return downloadFrom(`${API}/${sheet.id}/pdf`, `foglio-visita-${sheet.appointment_id}-v${sheet.version}.pdf`, holder);
+}
+
+// Apre un PDF del CRM in una scheda nuova. La scheda si apre SUBITO (gesto dell'utente: niente
+// blocco dei popup su iPhone) e riceve il documento appena arriva; se il browser non la concede,
+// il PDF si scarica.
+async function openPdf(url, filename, holder) {
+  let finestra = null;
+  try { finestra = window.open('', '_blank'); } catch (e) { finestra = null; }
   try {
-    const response = await fetch(`${API}/${sheet.id}/pdf`, { credentials: 'include' });
-    if (!response.ok) throw new Error('Download non riuscito.');
+    const response = await fetch(url, { credentials: 'include' });
+    if (!response.ok) throw new Error('Documento non disponibile.');
     const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    const a = el('a');
-    a.href = url;
-    a.download = `foglio-visita-${sheet.appointment_id}-v${sheet.version}.pdf`;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    const href = URL.createObjectURL(blob);
+    if (finestra) {
+      finestra.location.href = href;
+    } else {
+      const a = el('a');
+      a.href = href; a.download = filename;
+      document.body.appendChild(a); a.click(); a.remove();
+    }
+    setTimeout(() => URL.revokeObjectURL(href), 60000);
   } catch (error) {
+    if (finestra) finestra.close();
     holder.appendChild(el('div', 'error-box', errorText(error)));
   }
 }
 
-/**
- * Il blocco di UNA visita: i suoi fogli (versione, stato, firma, scarico, richieste di
- * firma) e «Genera foglio visita». Lo usano la scheda dell'immobile e la scheda
- * dell'appuntamento in Agenda: un solo componente, nessuna copia. `reload(notice)`
- * ridisegna il contenitore dopo una generazione. Con `compact` non ripete la data.
- */
-export function buildVisitItem(v, reload, { compact = false } = {}) {
+const EMAIL_OK = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+
+// Le voci del registro delle prove in parole (Dettagli tecnici). Gli user-agent e le impronte
+// restano nel rapporto delle prove, non qui.
+const EVENT_LABELS = {
+  request_created: 'Richiesta creata', link_issued: 'Collegamento personale creato', link_email_queued: 'Email del collegamento affidata all’invio',
+  link_opened: 'Collegamento aperto dal cliente', otp_requested: 'Codice richiesto dal cliente', otp_email_queued: 'Email del codice affidata all’invio',
+  otp_failed: 'Codice errato', otp_verified: 'Codice verificato', otp_invalidated: 'Codice annullato', consent_recorded: 'Dichiarazione accettata',
+  signer_signed: 'Firma registrata', signer_declined: 'Firma rifiutata', agent_authenticated: 'Agente autenticato con password',
+  agent_auth_failed: 'Password dell’agente errata', signature_completed: 'Firma completata', documents_archived: 'Documento firmato e prove archiviati',
+  request_expired: 'Richiesta scaduta', request_cancelled: 'Richiesta annullata', link_invalidated: 'Collegamento sostituito',
+};
+const ACTOR_LABELS = { operator: 'agenzia', signer: 'firmatario', system: 'sistema' };
+
+async function technicalDetails(r, holder) {
+  holder.replaceChildren();
+  let data;
+  try { data = await apiGet(`${ESIGN}/${r.id}/events`); } catch (error) { holder.appendChild(el('div', 'error-box', errorText(error))); return; }
+  holder.appendChild(el('p', 'muted', `Procedimento ${r.procedure || r.provider_reference || r.id} · ${r.signature_level_label || 'Firma elettronica semplice (FES)'}`));
+  const list = el('ol', 'visit-sign-events');
+  for (const e of data.items) {
+    list.appendChild(el('li', null, `${when(e.occurred_at)} — ${EVENT_LABELS[e.event_type] || 'Evento registrato'} (${ACTOR_LABELS[e.actor_kind] || e.actor_kind})`));
+  }
+  holder.appendChild(list);
+  holder.appendChild(el('p', data.integrity.ok ? 'success-box' : 'error-box',
+    data.integrity.ok ? `Registro delle prove integro (${data.integrity.count} voci).` : 'Registro delle prove NON integro: controlla «Verifica integrità».'));
+}
+
+function signerOf(r, role) {
+  return (r && r.signers || []).find((s) => s.role === role) || null;
+}
+
+// Il riquadro della firma della visita `appointmentId`. `onChanged` (facoltativo) viene chiamato
+// dopo ogni cambio di stato, per chi mostra lo stesso foglio altrove (l'elenco Fogli visita).
+export async function mountSignaturePanel(holder, { appointmentId, onChanged = null } = {}) {
+  const box = el('section', 'sign-panel');
+  box.setAttribute('data-sign-panel', String(appointmentId));
+  holder.appendChild(box);
+  let config = { otp: false, simulation: true };
+  try { config = await apiGet(`${ESIGN}/config/provider`); } catch (error) { /* senza configurazione: niente firma */ }
+  let timer = null;
+  let occupato = false;              // un modulo in compilazione non viene ridisegnato dall'aggiornamento automatico
+  let ultimoStato = null;
+
+  const notifica = () => { if (onChanged) { try { onChanged(); } catch (e) { /* chi ascolta non blocca il riquadro */ } } };
+
+  function pianifica(stato) {
+    if (timer) clearTimeout(timer);
+    timer = null;
+    if (!['awaiting_client', 'awaiting_agent'].includes(stato)) return;
+    if (typeof box.isConnected !== 'boolean') return;          // fuori da un documento vero: niente orologio
+    timer = setTimeout(() => {
+      if (!box.isConnected) return;
+      if (occupato) { pianifica(stato); return; }
+      load().catch(() => {});
+    }, 15000);
+  }
+
+  async function load(notice) {
+    let data;
+    try {
+      data = await apiGet(`${API}/appointments/${encodeURIComponent(String(appointmentId))}`);
+    } catch (error) {
+      box.replaceChildren(el('div', 'error-box', errorText(error)));
+      return;
+    }
+    const latest = data.sheets[0] || null;
+    if (!config.otp) {
+      // Firma OTP non attiva (nessun fornitore, o l'adattatore simulato): il foglio si genera, si scarica e
+      // (in simulazione) si «firma» come prima. Il riquadro semplificato vale solo con la firma OTP.
+      box.replaceChildren();
+      if (notice) box.appendChild(notice);
+      const lista = el('ul', 'visit-sheets-list');
+      lista.appendChild(buildLegacyItem(data, (avviso) => load(avviso), { compact: true }));
+      box.appendChild(lista);
+      return;
+    }
+    let requests = [];
+    if (latest) {
+      try { requests = (await apiGet(`${ESIGN}?visit_sheet_id=${latest.id}`)).items || []; } catch (error) {
+        if (!(error && error.status === 503)) { box.replaceChildren(el('div', 'error-box', errorText(error))); return; }
+      }
+    }
+    const r = requests.find((x) => x.otp) || null;
+    render(data, latest, r, notice);
+    const stato = r && r.ui ? r.ui.state : 'to_send';
+    if (ultimoStato !== null && ultimoStato !== stato) notifica();
+    ultimoStato = stato;
+    pianifica(stato);
+  }
+
+  function render(data, latest, r, notice) {
+    occupato = false;
+    box.replaceChildren();
+    const ui = r && r.ui ? r.ui : { state: 'to_send', label: 'Da inviare', note: null };
+    const testa = el('div', 'sign-panel-head');
+    testa.appendChild(el('h4', 'sign-panel-title', 'Firma del foglio visita'));
+    const stato = el('span', `sign-state sign-state-${ui.state}`, ui.label);
+    stato.setAttribute('data-sign-state', ui.state);
+    testa.appendChild(stato);
+    box.appendChild(testa);
+    if (notice) box.appendChild(notice);
+    if (ui.note) box.appendChild(el('p', 'sign-note', ui.note));
+    if (config.otp_ready === false) {
+      box.appendChild(el('div', 'error-box', 'La firma elettronica non è ancora configurata su questo servizio.'));
+      return;
+    }
+    box.appendChild(el('p', 'muted sign-doc-line', latest
+      ? `Foglio visita, versione ${latest.version} · ${latest.visit_state_label} · preparato il ${when(latest.generated_at)}`
+      : 'Il foglio visita verrà preparato con i dati della visita al primo invio.'));
+
+    const azioni = el('div', 'sign-actions');
+    const area = el('div', 'sign-area');
+    const menu = buildMenu(data, latest, r, area);
+    const aperta = r && r.status === 'sent';
+    const agente = signerOf(r, 'agent');
+    const cliente = signerOf(r, 'visitor');
+
+    if (['to_send', 'expired', 'declined'].includes(ui.state)) {
+      area.appendChild(sendForm(data, latest, ui.state === 'to_send' ? 'Invia per firma' : 'Invia di nuovo'));
+    } else if (ui.state === 'completed') {
+      const scarica = button('Scarica PDF firmato', 'primary', 'data-sign-download-final');
+      scarica.addEventListener('click', () => downloadFrom(`${ESIGN}/${r.id}/document`, `foglio-visita-firmato-${data.appointment_id}.pdf`, box));
+      azioni.appendChild(scarica);
+      area.appendChild(el('p', 'sign-done', 'Documento completato · firma elettronica semplice (FES).'));
+    } else if (aperta) {
+      if (cliente) area.appendChild(el('p', 'muted', `Cliente: ${cliente.name} · ${cliente.email}`));
+      const puoFirmare = r.can_agent_sign && data.agent && data.agent.is_me && agente && agente.status === 'pending';
+      if (puoFirmare) {
+        if (ui.state === 'awaiting_agent') {
+          area.appendChild(agentForm(r));
+        } else {
+          const firma = button('Firma come agente', 'primary', 'data-signature-agent');
+          firma.addEventListener('click', () => { firma.remove(); area.appendChild(agentForm(r)); });
+          azioni.appendChild(firma);
+        }
+      } else if (ui.state === 'send_failed' && r.can_resend) {
+        const reinvia = button('Reinvia email', 'primary', 'data-sign-resend-main');
+        reinvia.addEventListener('click', () => resend(r, reinvia));
+        azioni.appendChild(reinvia);
+      } else if (agente && agente.status === 'pending' && ui.state === 'awaiting_agent') {
+        area.appendChild(el('p', 'muted', `Manca la firma di ${agente.name}: può firmare dal suo accesso al CRM.`));
+      }
+    }
+    azioni.appendChild(menu.toggle);
+    box.append(azioni, menu.list, area);
+    if (data.sheets.length > 1) box.appendChild(history(data));
+  }
+
+  function sendForm(data, latest, etichetta) {
+    const form = el('form', 'sign-form');
+    form.setAttribute('data-sign-form', '');
+    form.noValidate = true;
+    const proposta = data.signer_suggestion || {};
+    const campo = (testo, input) => { const l = el('label', 'sign-field'); l.append(el('span', null, testo), input); return l; };
+    const nome = el('input', 'input'); nome.value = proposta.name || ''; nome.maxLength = 120; nome.autocomplete = 'off';
+    nome.setAttribute('data-signature-name', '');
+    const email = el('input', 'input'); email.type = 'email'; email.value = proposta.email || ''; email.maxLength = 200;
+    email.autocomplete = 'off'; email.setAttribute('data-signature-contact', '');
+    form.append(campo('Nome e cognome del cliente', nome), campo('Email del cliente', email));
+    if (data.agent && data.agent.name) form.appendChild(el('p', 'muted', `Agente: ${data.agent.name}${data.agent.is_me ? ' (tu)' : ''}.`));
+    let spunta = null; let password = null;
+    if (data.agent && data.agent.is_me) {
+      const riga = el('label', 'sign-agent-now');
+      spunta = el('input'); spunta.type = 'checkbox'; spunta.setAttribute('data-sign-agent-now', '');
+      riga.append(spunta, el('span', null, 'Firmo anche io adesso: dichiaro di aver letto il foglio visita in questa versione e di volerlo firmare con firma elettronica semplice.'));
+      password = el('input', 'input'); password.type = 'password'; password.autocomplete = 'current-password';
+      password.placeholder = 'La tua password del CRM'; password.hidden = true; password.setAttribute('data-sign-agent-password', '');
+      spunta.addEventListener('change', () => { password.hidden = !spunta.checked; if (spunta.checked) password.focus(); });
+      form.append(riga, password);
+    }
+    const errore = el('div', 'sign-form-error');
+    errore.setAttribute('role', 'alert');
+    const barra = el('div', 'sign-actions');
+    const vedi = button('Visualizza PDF', 'ghost', 'data-sign-preview');
+    const invia = el('button', 'btn primary', etichetta);
+    invia.type = 'submit'; invia.setAttribute('data-sign-send', '');
+    barra.append(invia, vedi);
+    form.append(errore, barra);
+    const chiave = newKey();
+    for (const n of [nome, email, password].filter(Boolean)) n.addEventListener('input', () => { occupato = true; });
+    vedi.addEventListener('click', async () => {
+      if (latest) { openPdf(`${API}/${latest.id}/pdf`, `foglio-visita-${data.appointment_id}.pdf`, box); return; }
+      vedi.disabled = true;
+      try {
+        const out = await apiPost(`${API}/appointments/${data.appointment_id}`, {});
+        await openPdf(`${API}/${out.sheet.id}/pdf`, `foglio-visita-${data.appointment_id}.pdf`, box);
+        await load();
+      } catch (error) { vedi.disabled = false; errore.textContent = errorText(error); }
+    });
+    form.addEventListener('submit', async (evento) => {
+      if (evento && evento.preventDefault) evento.preventDefault();
+      errore.textContent = '';
+      const n = nome.value.trim(); const m = email.value.trim();
+      if (!n) { errore.textContent = 'Indica il nome del cliente.'; nome.focus(); return; }
+      if (!EMAIL_OK.test(m)) { errore.textContent = 'Indica un indirizzo email valido del cliente.'; email.focus(); return; }
+      const firmoAnche = !!(spunta && spunta.checked);
+      if (firmoAnche && !password.value) { errore.textContent = 'Per firmare adesso inserisci la tua password.'; password.focus(); return; }
+      invia.disabled = true; vedi.disabled = true;
+      invia.textContent = 'Invio in corso…';
+      const corpo = { appointment_id: data.appointment_id, known_sheet_id: latest ? latest.id : null,
+        signer_name: n, signer_contact: m, idempotency_key: chiave };
+      if (firmoAnche) corpo.agent_sign = { password: password.value, consent_accepted: true, consent_version: config.consent_version };
+      try {
+        const out = await apiPost(`${ESIGN}/send`, corpo);
+        const testo = out.agent_error
+          ? `Richiesta inviata a ${m}. La tua firma non è stata registrata: ${out.agent_error}`
+          : `Richiesta inviata a ${m}${out.agent_signed ? ' e firma dell’agente registrata' : ''}.`;
+        await load(el('div', out.agent_error ? 'error-box' : 'success-box', testo));
+        notifica();
+      } catch (error) {
+        const codice = error && error.data && error.data.detail && error.data.detail.code;
+        if (codice === 'SHEET_UPDATED' || codice === 'REQUEST_OPEN') {
+          await load(el('div', 'error-box', errorText(error)));
+          return;
+        }
+        invia.disabled = false; vedi.disabled = false; invia.textContent = etichetta;
+        errore.textContent = errorText(error);
+      }
+    });
+    return form;
+  }
+
+  function agentForm(r) {
+    occupato = true;
+    const form = el('div', 'sign-form');
+    form.setAttribute('data-agent-sign-form', '');
+    const riga = el('label', 'sign-agent-now');
+    const check = el('input'); check.type = 'checkbox'; check.setAttribute('data-agent-consent', '');
+    riga.append(check, el('span', null, 'Dichiaro di aver letto il foglio visita in questa versione e di volerlo firmare con firma elettronica semplice.'));
+    const pwd = el('input', 'input'); pwd.type = 'password'; pwd.placeholder = 'La tua password del CRM'; pwd.autocomplete = 'current-password';
+    pwd.setAttribute('data-agent-password', '');
+    const go = button('Firma come agente', 'primary', 'data-agent-sign');
+    go.disabled = true;
+    const errore = el('div', 'sign-form-error');
+    const update = () => { go.disabled = !(check.checked && pwd.value.length > 0); };
+    check.addEventListener('change', update); pwd.addEventListener('input', update);
+    go.addEventListener('click', async () => {
+      go.disabled = true;
+      try {
+        await apiPost(`${ESIGN}/${r.id}/sign-as-agent`, { password: pwd.value, consent_accepted: check.checked === true, consent_version: r.consent_version || config.consent_version });
+        await load(el('div', 'success-box', 'La tua firma è registrata.'));
+        notifica();
+      } catch (error) { update(); errore.textContent = errorText(error); }
+    });
+    form.append(riga, pwd, go, errore);
+    return form;
+  }
+
+  async function resend(r, pulsante) {
+    pulsante.disabled = true;
+    try {
+      await apiPost(`${ESIGN}/${r.id}/links`, { send: true });
+      await load(el('div', 'success-box', 'Nuovo collegamento inviato: il precedente non vale più.'));
+    } catch (error) { pulsante.disabled = false; box.appendChild(el('div', 'error-box', errorText(error))); }
+  }
+
+  function buildMenu(data, latest, r, area) {
+    const toggle = button('⋯', 'ghost sign-menu-toggle', 'data-sign-menu');
+    toggle.setAttribute('aria-label', 'Altre azioni');
+    toggle.setAttribute('aria-expanded', 'false');
+    const list = el('div', 'sign-menu');
+    list.setAttribute('data-sign-menu-list', '');
+    list.hidden = true;
+    toggle.addEventListener('click', () => {
+      list.hidden = !list.hidden;
+      toggle.setAttribute('aria-expanded', list.hidden ? 'false' : 'true');
+    });
+    const voce = (testo, attr, fn) => {
+      const b = button(testo, 'ghost', attr);
+      b.addEventListener('click', async () => { list.hidden = true; toggle.setAttribute('aria-expanded', 'false'); await fn(b); });
+      list.appendChild(b);
+    };
+    const aperta = r && r.status === 'sent';
+    if (aperta && r.can_resend) {
+      voce('Reinvia', 'data-signature-resend', (b) => resend(r, b));
+      voce('Copia link', 'data-signature-copy', async () => {
+        try {
+          const out = await apiPost(`${ESIGN}/${r.id}/links`, { send: false });
+          try { await navigator.clipboard.writeText(out.url); area.appendChild(el('p', 'success-box', 'Collegamento copiato: il precedente non vale più. È personale, mandalo solo al cliente.')); }
+          catch (e) { area.appendChild(el('p', 'muted', `Collegamento personale del cliente: ${out.url}`)); }
+        } catch (error) { area.appendChild(el('div', 'error-box', errorText(error))); }
+      });
+    }
+    if (aperta) {
+      voce('Annulla richiesta', 'data-signature-cancel', async () => {
+        if (!window.confirm('Annullare la richiesta di firma? Il collegamento del cliente smetterà di funzionare.')) return;
+        try { await apiPost(`${ESIGN}/${r.id}/cancel`, {}); await load(el('div', 'success-box', 'Richiesta annullata.')); notifica(); }
+        catch (error) { area.appendChild(el('div', 'error-box', errorText(error))); }
+      });
+    }
+    if (latest) voce('Visualizza documento', 'data-sign-view', () => openPdf(`${API}/${latest.id}/pdf`, `foglio-visita-${data.appointment_id}.pdf`, box));
+    if (r && r.has_document) {
+      voce('Scarica PDF finale', 'data-signature-document', () => downloadFrom(`${ESIGN}/${r.id}/document`, `foglio-visita-firmato-${data.appointment_id}.pdf`, box));
+    }
+    if (r && r.has_audit_trail) {
+      voce('Scarica rapporto delle prove', 'data-signature-audit', () => downloadFrom(`${ESIGN}/${r.id}/audit-trail`, `rapporto-prove-foglio-${data.appointment_id}.pdf`, box));
+    }
+    if (r) {
+      voce('Verifica integrità', 'data-signature-verify', async () => {
+        try {
+          const out = await apiGet(`${ESIGN}/${r.id}/verify`);
+          area.appendChild(el('p', out.ok ? 'success-box' : 'error-box', out.ok
+            ? 'Integrità verificata: documento, firme e registro delle prove corrispondono alle impronte.'
+            : `Integrità NON verificata: ${out.checks.filter((c) => !c.ok).map((c) => c.name).join(', ')}.`));
+        } catch (error) { area.appendChild(el('div', 'error-box', errorText(error))); }
+      });
+      const dettagli = el('div', 'sign-technical');
+      voce('Dettagli tecnici', 'data-signature-events', () => technicalDetails(r, dettagli));
+      area.appendChild(dettagli);
+    }
+    if (!list.children.length) toggle.hidden = true;
+    return { toggle, list };
+  }
+
+  function history(data) {
+    const box2 = el('details', 'sign-history');
+    box2.appendChild(el('summary', null, `Versioni precedenti (${data.sheets.length - 1})`));
+    const ul = el('ul');
+    for (const s of data.sheets.slice(1)) {
+      const li = el('li');
+      const firma = s.signature;
+      li.appendChild(el('span', null, `Versione ${s.version} · ${when(s.generated_at)} · ${firma ? firma.state_label : 'Non inviata'}`));
+      const vedi = button('Visualizza', 'ghost btn-small', 'data-sign-history-view');
+      vedi.addEventListener('click', () => openPdf(`${API}/${s.id}/pdf`, `foglio-visita-${s.appointment_id}-v${s.version}.pdf`, li));
+      li.appendChild(vedi);
+      if (firma && firma.has_document && firma.request_id) {
+        const d = button('Scarica PDF firmato', 'ghost btn-small', 'data-sign-history-signed');
+        d.addEventListener('click', () => downloadFrom(`${ESIGN}/${firma.request_id}/document`, `foglio-visita-firmato-${s.appointment_id}-v${s.version}.pdf`, li));
+        li.appendChild(d);
+      }
+      ul.appendChild(li);
+    }
+    box2.appendChild(ul);
+    return box2;
+  }
+
+  await load();
+  return box;
+}
+
+// Il blocco di prima (versioni, «Genera foglio visita», scarico, richieste simulate), solo senza firma OTP.
+function buildLegacyItem(v, reload, { compact = false } = {}) {
   const item = el('li');
   item.setAttribute('data-visit-sheet-visit', String(v.appointment_id));
   if (!compact) item.append(el('strong', null, when(v.start_at)), el('span', 'muted', ` · ${STATUS[v.status] || v.status}`));
@@ -334,7 +686,7 @@ export function buildVisitItem(v, reload, { compact = false } = {}) {
     dl.addEventListener('click', () => downloadPdf(s, item));
     line.appendChild(dl);
     item.appendChild(line);
-    mountSignatures(item, s, firma).catch(() => {});
+    mountLegacySignatures(item, s, firma).catch(() => {});
   }
   if (v.can_generate) {
     const gen = button('Genera foglio visita', 'ghost', 'data-visit-sheet-generate');
@@ -355,6 +707,34 @@ export function buildVisitItem(v, reload, { compact = false } = {}) {
   return item;
 }
 
+/**
+ * Una visita nell'elenco dell'immobile: data, stato della visita, stato della firma del suo
+ * foglio e il collegamento al foglio nella sezione «Fogli visita» (dove si invia e si firma).
+ */
+export function buildVisitItem(v, reload, { compact = false } = {}) {
+  const item = el('li');
+  item.setAttribute('data-visit-sheet-visit', String(v.appointment_id));
+  if (!compact) item.append(el('strong', null, when(v.start_at)), el('span', 'muted', ` · ${STATUS[v.status] || v.status}`));
+  const ultimo = v.sheets[0] || null;
+  const line = el('div', 'visit-sheet-line');
+  const firma = ultimo && ultimo.signature;
+  const badge = el('span', 'badge badge-gray', firma ? firma.list_label : (ultimo ? 'Da firmare' : 'Foglio non ancora preparato'));
+  badge.setAttribute('data-visit-sheet-signature-state', firma ? firma.state : (ultimo ? 'unsigned' : 'none'));
+  line.appendChild(badge);
+  if (ultimo) {
+    line.appendChild(el('span', 'muted', ` Versione ${ultimo.version} · ${ultimo.visit_state_label}`));
+    const dl = button('Scarica PDF', 'ghost', 'data-visit-sheet-download');
+    dl.addEventListener('click', () => downloadPdf(ultimo, item));
+    line.appendChild(dl);
+  }
+  const apri = el('a', 'btn ghost', ultimo ? 'Apri foglio visita' : 'Prepara e invia');
+  apri.href = `#/fogli-visita/${v.appointment_id}`;
+  apri.setAttribute('data-visit-sheet-open', String(v.appointment_id));
+  line.appendChild(apri);
+  item.appendChild(line);
+  return item;
+}
+
 export async function mountVisitSheets(container, { propertyId }) {
   const root = el('section', 'visit-sheets');
   root.setAttribute('data-visit-sheets', '');
@@ -362,7 +742,7 @@ export async function mountVisitSheets(container, { propertyId }) {
 
   async function load(notice) {
     root.replaceChildren(el('h3', null, 'Fogli visita'));
-    root.appendChild(el('p', 'muted', 'Bozza di modello da revisionare. Una visita risulta svolta solo dopo l’esito registrato in agenda; il foglio non è un documento firmato.'));
+    root.appendChild(el('p', 'muted', 'Una visita risulta svolta solo dopo l’esito registrato in agenda. Il foglio non è un documento firmato finché la firma non è completata.'));
     if (notice) root.appendChild(notice);
     let data;
     try {
@@ -384,40 +764,32 @@ export async function mountVisitSheets(container, { propertyId }) {
 }
 
 /**
- * ROADMAP VISITE (fase C): il foglio visita DALLA SCHEDA DELL'APPUNTAMENTO in Agenda.
- * Legge i fogli della sola visita (`GET /api/visit-sheets/appointments/{id}`), li
- * elenca con versione, stato e «Da firmare», e permette di generare o scaricare il
- * PDF. Stessa API, stessi permessi e stesso componente della scheda dell'immobile.
+ * Il foglio visita DALLA SCHEDA DELL'APPUNTAMENTO in Agenda: lo stesso riquadro della sezione
+ * «Fogli visita» (stessa API, stessi permessi, stessi dati), piu' il collegamento alla sezione.
  */
 export async function mountAppointmentSheet(container, { appointmentId }) {
   const root = el('section', 'visit-sheets visit-sheets-appointment');
   root.setAttribute('data-appointment-sheet', String(appointmentId));
   container.appendChild(root);
-
-  async function load(notice) {
-    root.replaceChildren(el('h3', 'section-title', 'Foglio visita'));
-    root.appendChild(el('p', 'muted', 'Bozza di modello da revisionare: il foglio non è un documento firmato. '
-      + 'La firma elettronica reale è una fase separata: finché non è operativa lo stato è «Da firmare».'));
-    if (notice) root.appendChild(notice);
-    let data;
-    try {
-      data = await apiGet(`${API}/appointments/${encodeURIComponent(String(appointmentId))}`);
-    } catch (error) {
-      if (error && (error.status === 404 || error.status === 503)) {
-        root.replaceChildren();
-        return;
-      }
-      root.appendChild(el('div', 'error-box', errorText(error)));
-      return;
+  root.appendChild(el('h3', 'section-title', 'Foglio visita'));
+  let data;
+  try {
+    data = await apiGet(`${API}/appointments/${encodeURIComponent(String(appointmentId))}`);
+  } catch (error) {
+    if (error && (error.status === 404 || error.status === 503)) {
+      root.replaceChildren();
+      return root;
     }
-    const list = el('ul', 'visit-sheets-list');
-    list.appendChild(buildVisitItem(data, load, { compact: true }));
-    root.appendChild(list);
-    if (!data.can_generate && !data.sheets.length) {
-      root.appendChild(el('p', 'muted', 'Il foglio si genera per una visita fissata, confermata o svolta.'));
-    }
+    root.appendChild(el('div', 'error-box', errorText(error)));
+    return root;
   }
-
-  await load();
+  if (!data.can_generate && !data.sheets.length) {
+    root.appendChild(el('p', 'muted', 'Il foglio si prepara per una visita fissata, confermata o svolta.'));
+    return root;
+  }
+  await mountSignaturePanel(root, { appointmentId });
+  const link = el('a', 'sign-section-link', 'Apri in Fogli visita');
+  link.href = `#/fogli-visita/${appointmentId}`;
+  root.appendChild(link);
   return root;
 }

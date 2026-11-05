@@ -148,10 +148,19 @@ def test_la_catena_delle_prove_si_rompe_se_una_voce_cambia(configurato):
 # ---- dichiarazione ed email -------------------------------------------------------------------------------------------
 
 def test_la_dichiarazione_e_legata_alla_versione_del_pdf():
-    a = consent.text(title="Foglio visita n. 1 (versione 1)", sha256="a" * 64)
-    b = consent.text(title="Foglio visita n. 1 (versione 2)", sha256="b" * 64)
-    assert "a" * 64 in a and consent.digest(a) != consent.digest(b) and consent.VERSION == "dichiarazione_firma_otp_v1"
+    # SENTINELLA AGGIORNATA (FIRMA SEMPLIFICATA): la dichiarazione proposta oggi e' la v2, senza impronta visibile;
+    # il documento e' identificato da titolo, immobile e data e il legame crittografico e' nelle prove
+    # (`document_sha256` accanto a `consent_sha256`, vedi test_firma_otp_postgres). La v1 resta identica.
+    assert consent.VERSION == "dichiarazione_firma_otp_v2"
+    a = consent.text(title="Foglio visita n. 1 (versione 1)", sha256="a" * 64, address="Via Roma 1, Teramo",
+                     visit_text="02/11/2026")
+    b = consent.text(title="Foglio visita n. 1 (versione 2)", sha256="b" * 64, address="Via Roma 1, Teramo",
+                     visit_text="02/11/2026")
+    assert "a" * 64 not in a and "SHA" not in a and consent.digest(a) != consent.digest(b)
+    assert "Via Roma 1, Teramo" in a and "02/11/2026" in a and "questa versione del documento" in a
     assert "firma elettronica semplice" in a and "avanzata" not in a and "qualificata" not in a
+    v1 = consent.text(title="Foglio visita n. 1 (versione 1)", sha256="a" * 64, version=consent.VERSION_V1)
+    assert "a" * 64 in v1 and v1 == consent.TEMPLATE_V1.format(title="Foglio visita n. 1 (versione 1)", sha256="a" * 64)
 
 
 def test_le_email_hanno_marchio_oggetti_richiesti_e_nessun_dato_in_piu(monkeypatch):
@@ -230,19 +239,34 @@ def test_la_pagina_pubblica_non_usa_html_con_dati_ne_risorse_esterne():
     assert "credentials: 'omit'" in js and "cache: 'no-store'" in js
     assert "https://" not in html and "http://" not in html                              # nessuna risorsa esterna
     assert 'name="robots" content="noindex' in html and "/firma/assets/sign-page.js" in html
-    assert "check.checked === true" in js and "checked = true" not in js                   # nessuna casella preselezionata
-    assert "Conferma e richiedi codice OTP" in js and "Non voglio firmare" in js
+    # SENTINELLA AGGIORNATA (FIRMA SEMPLIFICATA): niente casella separata; il consenso e' l'azione esplicita
+    # «Accetto il documento e richiedo il codice» con la dichiarazione in vista, confermata da «Conferma firma» con il
+    # codice; il server lo registra (versione, impronta della dichiarazione e del documento). Nessuna casella
+    # preselezionata, nessuna impronta, procedimento o identificativo tecnico in pagina.
+    assert "checked = true" not in js and "type = 'checkbox'" not in js
+    assert "Accetto il documento e richiedo il codice" in js and "Conferma firma" in js and "Non voglio firmare" in js
+    assert js.count("consent_accepted: true") == 1 and "call('POST', '/confirm'" in js
+    for tecnico in ("sha256", "state.procedure", "Procedimento", "Impronta"):
+        assert tecnico not in js, tecnico
+    assert 'src="/os/assets/brand/stima360-logo.png"' in html and "Firma il foglio visita" in html
     for vietato in ("avanzata", "qualificata", "firma digitale"):
         assert vietato not in js.lower() or "non" in js.lower(), vietato
 
 
 def test_il_riquadro_crm_rispetta_le_regole():
+    # SENTINELLA AGGIORNATA (FIRMA SEMPLIFICATA): il riquadro «Firma del foglio visita». Un pulsante principale per
+    # stato, le azioni secondarie nel menu «⋯» (solo quelle possibili), lo stato dal server (`r.ui`, presentation.py),
+    # aggiornamento automatico invece di «Verifica stato». Il vecchio riquadro resta solo per la simulazione.
     js = (ROOT / "static" / "os_shell" / "assets" / "components" / "visit-sheets.js").read_text(encoding="utf-8")
-    assert "innerHTML" not in js and "Firma elettronica OTP" in js and "Invia per firma OTP" in js
-    for azione in ("data-signature-resend", "data-signature-copy", "data-signature-agent", "data-signature-cancel", "data-signature-document",
-                   "data-signature-audit", "data-signature-events", "data-signature-verify", "data-signature-refresh"):
-        assert azione in js, azione
-    assert "r.state_label" in js                                                            # stati dal server
+    nuovo = js[js.index("export async function mountSignaturePanel("):]
+    assert "innerHTML" not in js and "Firma del foglio visita" in nuovo and "'Invia per firma'" in nuovo
+    for azione in ("data-sign-send", "data-sign-preview", "data-sign-menu", "data-signature-resend", "data-signature-copy",
+                   "data-signature-cancel", "data-sign-view", "data-signature-document", "data-signature-audit",
+                   "data-signature-verify", "data-signature-events", "data-signature-agent", "data-agent-sign", "data-sign-agent-now"):
+        assert azione in nuovo, azione
+    assert "r.ui" in nuovo and "`${ESIGN}/send`" in nuovo and "setTimeout(" in nuovo           # stati dal server, da soli
+    assert "data-signature-refresh" not in nuovo and "Verifica stato" not in nuovo
+    assert "config.consent_version" in nuovo and "dichiarazione_firma_otp_v1" not in nuovo
     assert "signing-links" not in js and "documenso" not in js.lower()
 
 

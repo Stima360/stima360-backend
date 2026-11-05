@@ -64,6 +64,27 @@ class AgentSignRequest(BaseModel):
     consent_version: str = Field(..., min_length=1, max_length=60)
 
 
+class AgentSignNow(BaseModel):
+    """«Firmo anche io adesso»: sempre dichiarazione accettata e password, mai implicita."""
+    model_config = ConfigDict(extra="forbid")
+
+    password: str = Field(..., min_length=1, max_length=200)
+    consent_accepted: bool
+    consent_version: str = Field(..., min_length=1, max_length=60)
+
+
+class SendRequest(BaseModel):
+    """FIRMA SEMPLIFICATA: «Invia per firma» dalla visita (il foglio si genera o si riusa sul server)."""
+    model_config = ConfigDict(extra="forbid")
+
+    appointment_id: int = Field(..., ge=1)
+    known_sheet_id: int | None = Field(None, ge=1)
+    signer_name: str = Field(..., min_length=1, max_length=120)
+    signer_contact: str = Field(..., min_length=3, max_length=200)
+    idempotency_key: UUID
+    agent_sign: AgentSignNow | None = None
+
+
 def _call(fn, *args, **kwargs):
     try:
         return fn(*args, **kwargs)
@@ -84,6 +105,28 @@ def create(body: CreateRequest, ctx: OperatorContext = Depends(require_operator)
                  idempotency_key=str(body.idempotency_key), include_agent=body.include_agent)
 
 
+@router.post("/send")
+def send(body: SendRequest, request: Request, ctx: OperatorContext = Depends(require_operator)):
+    """Un gesto: foglio pronto (generato o riusato), richiesta, collegamento al cliente e, se chiesto, firma
+    dell'agente con password verificata PRIMA di qualunque invio."""
+    from . import send_flow
+
+    ip, ua = _client(request)
+    return JSONResponse(_call(send_flow.send_for_signature, ctx, appointment_id=body.appointment_id,
+                              known_sheet_id=body.known_sheet_id, signer_name=body.signer_name,
+                              signer_email=body.signer_contact, idempotency_key=str(body.idempotency_key),
+                              agent_sign=body.agent_sign.model_dump() if body.agent_sign else None, ip=ip, user_agent=ua),
+                        headers=NO_STORE)
+
+
+@router.get("/notifications")
+def notifications(days: int = Query(14, ge=1, le=60), ctx: OperatorContext = Depends(require_operator)):
+    """Gli avvisi per la pagina «Oggi» (completate, rifiutate, scadute, invii non riusciti), uno per visita."""
+    from . import summary
+
+    return JSONResponse(_call(summary.notifications, ctx, days=days), headers=NO_STORE)
+
+
 @router.get("")
 def list_requests(visit_sheet_id: int = Query(..., ge=1), ctx: OperatorContext = Depends(require_operator)):
     return _call(service.list_for_sheet, ctx, visit_sheet_id)
@@ -100,6 +143,9 @@ def provider_config(ctx: OperatorContext = Depends(require_operator)):
     out = {"configured": True, "provider": modo, "simulation": modo == providers.SIMULATED, "otp": modo == providers.OTP_PROVIDER}
     if out["otp"]:
         from . import otp_security
+        from . import consent
+
+        out["consent_version"] = consent.VERSION
         try:
             otp_security.require_configuration()
             out["otp_ready"] = True

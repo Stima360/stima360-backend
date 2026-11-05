@@ -40,6 +40,8 @@ import { renderRete } from './views/rete.js';
 import { renderReteAgenzia } from './views/rete-agenzia.js';
 import { renderReteTerritorio } from './views/rete-territorio.js';
 import { renderAgenda } from './views/agenda/agenda-page.js';
+// FOGLI VISITA: la sezione dei fogli visita e della loro firma (subito dopo l'Agenda).
+import { renderFogliVisita } from './views/fogli-visita.js';
 // CRM-OPS-3: le Acquisizioni (elenco, creazione, scheda).
 import { renderVenditori } from './views/venditori.js';
 import { renderAcquisizioni } from './views/acquisizioni.js';
@@ -68,6 +70,8 @@ const SECTIONS = [
   // collegamenti esistenti. Il pulsante «Oggi» dell'Agenda non cambia.
   { name: 'oggi', label: 'Scrivania' },
   { name: 'agenda', label: 'Agenda' },
+  // FOGLI VISITA: tutti i fogli visita e la loro firma, anche senza passare dall'Agenda.
+  { name: 'fogli-visita', label: 'Fogli visita' },
   { name: 'contatti', label: 'Contatti' },
   { name: 'immobili', label: 'Immobili' },
   { name: 'edifici', label: 'Edifici', parent: 'immobili' },
@@ -239,6 +243,8 @@ registerRoute('rete', (container, params = []) => {
 });
 // A30-4: `#/agenda[/<vista>/<data>]`. Tutta la logica sta in views/agenda/.
 registerRoute('agenda', (container, params = []) => renderAgenda(container, params));
+// FOGLI VISITA: `#/fogli-visita` (elenco) e `#/fogli-visita/<appuntamento>` (foglio e firma).
+registerRoute('fogli-visita', (container, params = []) => renderFogliVisita(container, params));
 // VENDITORI-1: la worklist delle opportunita' Venditore (persona + immobile).
 registerRoute('venditori', (container) => renderVenditori(container));
 // CRM-OPS-3: `#/acquisizioni` (elenco), `#/acquisizioni/nuova/<immobile>`
@@ -320,6 +326,8 @@ mountGlobalSearch(contentEl.parentElement);
 const NAV_ICON_PATHS = {
   oggi: ['M3 10.5 12 3l9 7.5', 'M5 9.5V21h14V9.5', 'M9 21v-7h6v7'],
   agenda: ['M4 5h16v16H4z', 'M4 9h16', 'M8 3v4', 'M16 3v4', 'M8 13h3', 'M14 13h2', 'M8 17h3'],
+  // FOGLI VISITA: un foglio con l'angolo piegato e una firma.
+  'fogli-visita': ['M6 3h9l4 4v14H6z', 'M15 3v4h4', 'M9 10h6', 'M8.5 17c1.2-1.6 2-1.6 2.7 0s1.5 1.6 2.7 0 1.6-1.1 2.4 0'],
   contatti: ['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8'],
   stime: ['M3 3v18h18', 'M7 16l4-5 3 2 5-7', 'M16 6h3v3'],
   'stime-dettagliate': ['M8 4h9l3 3v14H6V4z', 'M17 4v4h4', 'M10 12h7', 'M10 16h7'],

@@ -101,9 +101,47 @@ def list_for_appointment(ctx, appointment_id: int) -> dict:
         if visit["property_id"] is None:
             raise VisitSheetError("NO_PROPERTY", "La visita non è collegata a un immobile.")
         sheets = repository.sheets_for_appointments(cur, agency_id, [visit["id"]])
-    return {"appointment_id": visit["id"], "property_id": visit["property_id"], "status": visit["status"],
-            "start_at": visit["start_at"].isoformat(), "end_at": visit["end_at"].isoformat(),
-            "can_generate": visit["status"] in SHEET_STATUSES, "sheets": [_sheet_view(s) for s in sheets]}
+        extra = _signature_context(cur, ctx, agency_id, visit, sheets)
+    out = {"appointment_id": visit["id"], "property_id": visit["property_id"], "status": visit["status"],
+           "start_at": visit["start_at"].isoformat(), "end_at": visit["end_at"].isoformat(),
+           "can_generate": visit["status"] in SHEET_STATUSES, "sheets": [_sheet_view(s) for s in sheets]}
+    firme = extra.pop("signatures")
+    for vista in out["sheets"]:
+        vista["signature"] = firme.get(vista["id"])
+    return {**out, **extra}
+
+
+def _signature_context(cur, ctx, agency_id: int, visit: dict, sheets: list[dict]) -> dict:
+    """FIRMA SEMPLIFICATA: i dati per il riquadro firma, solo dal CRM e senza inventare nulla.
+
+    * cliente proposto: il nome dal foglio congelato (e' quello stampato nel documento), altrimenti dal contatto;
+      l'email dal contatto attuale (l'anagrafica corretta vale), altrimenti dal foglio. Sempre modificabile;
+    * agente: chi e' assegnato alla visita e se e' l'operatore della sessione (solo lui puo' firmare come agente);
+    * per ogni versione del foglio lo stato della sua richiesta di firma piu' recente (sola lettura)."""
+    card = repository.contact_card(cur, agency_id, visit.get("contact_id")) or {}
+    snap = (sheets[0]["data_snapshot"] if sheets else None) or {}
+    frozen = snap.get("visit") or {}
+    prop = repository.property_row(cur, agency_id, visit["property_id"]) if visit.get("property_id") else None
+    address = None
+    if prop:
+        address = ", ".join(x for x in (" ".join(y for y in (prop.get("address"), prop.get("civic_number")) if y),
+                                        prop.get("city")) if x) or None
+    agent_name = appointment_repository.agent_name(cur, agency_id, visit["assigned_user_id"]) \
+        if visit.get("assigned_user_id") else None
+    from esign import summary                            # senza tabelle della firma: nessuno stato, nessun errore
+
+    ultime = summary.latest_by_sheet(cur, agency_id, [s["id"] for s in sheets])
+    firme = {sid: summary.brief(v) for sid, v in ultime.items()}
+    return {
+        "client": {"name": card.get("name") or frozen.get("visitor_name"),
+                   "email": card.get("email") or frozen.get("visitor_email")},
+        "signer_suggestion": {"name": frozen.get("visitor_name") or card.get("name") or "",
+                              "email": card.get("email") or frozen.get("visitor_email") or ""},
+        "agent": {"name": agent_name, "is_me": visit.get("assigned_user_id") is not None
+                  and visit.get("assigned_user_id") == ctx.user_id},
+        "property": {"code": prop.get("code") if prop else None, "address": address},
+        "signatures": firme,
+    }
 
 
 def list_for_property(ctx, property_id: int) -> dict:
@@ -115,9 +153,12 @@ def list_for_property(ctx, property_id: int) -> dict:
             raise NotFound("PROPERTY_NOT_FOUND", "Immobile non trovato.")
         visits = repository.visits_for_property(cur, agency_id, property_id, None if _manager(ctx) else ctx.user_id)
         sheets = repository.sheets_for_appointments(cur, agency_id, [v["id"] for v in visits])
+        from esign import summary                        # FIRMA SEMPLIFICATA: lo stato vero della firma
+
+        firme = {sid: summary.brief(v) for sid, v in summary.latest_by_sheet(cur, agency_id, [s["id"] for s in sheets]).items()}
     by_visit: dict[int, list] = {}
     for s in sheets:
-        by_visit.setdefault(s["appointment_id"], []).append(_sheet_view(s))
+        by_visit.setdefault(s["appointment_id"], []).append({**_sheet_view(s), "signature": firme.get(s["id"])})
     return {"items": [{"appointment_id": v["id"], "status": v["status"], "start_at": v["start_at"].isoformat(),
                        "end_at": v["end_at"].isoformat(), "can_generate": v["status"] in SHEET_STATUSES,
                        "sheets": by_visit.get(v["id"], [])} for v in visits]}

@@ -382,7 +382,14 @@ def test_13_the_shell_stores_no_credential_in_the_browser():
             line for line in path.read_text(encoding="utf-8").splitlines()
             if not line.strip().startswith("//")
         )
-        for forbidden in ("localStorage", "sessionStorage", "indexedDB", "document.cookie"):
+        vietati = ("localStorage", "sessionStorage", "indexedDB", "document.cookie")
+        # SENTINELLA AGGIORNATA (AGENDA MOBILE, approvata dal titolare): UNA eccezione, `agenda/agenda-prefs.js`,
+        # che ricorda nel browser SOLO il nome dell'ultima vista dell'Agenda (giorno, settimana, mese, lista).
+        # Nessuna credenziale, nessun token, nessun dato: lo prova test_agenda_mobile_ui
+        # (test_preferenza_solo_il_nome_della_vista_e_mai_un_errore, test_un_solo_modulo_della_shell_tocca_uno_storage).
+        if path.relative_to(SHELL).as_posix() == "assets/agenda/agenda-prefs.js":
+            vietati = ("sessionStorage", "indexedDB", "document.cookie")
+        for forbidden in vietati:
             assert forbidden not in code, f"{path.name} uses {forbidden}"
 
 

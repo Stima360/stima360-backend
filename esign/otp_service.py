@@ -27,7 +27,7 @@ from core.database import core_cursor
 from operator_auth.context import SystemAgencyContext
 from operator_auth.security import verify_password
 
-from . import attest_pdf, consent, emails, evidence, otp_security, providers, report_pdf
+from . import attest_pdf, consent, emails, evidence, otp_security, presentation, providers, report_pdf
 from . import service as _s
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,19 @@ def _procedure_code() -> str:
 
 def _title(sheet: dict) -> str:
     return f"Foglio visita n. {sheet['appointment_id']} (versione {sheet['sheet_version']})"
+
+
+def _declaration(sheet: dict, version: str | None = None) -> str:
+    """La dichiarazione per questo foglio, nella versione indicata (di default quella proposta oggi). Con la v2 il
+    documento e' identificato come lo vede il cliente (titolo, immobile, data della visita); il legame con l'esatta
+    versione del PDF e' nelle prove (`document_sha256` registrato accanto alla dichiarazione)."""
+    snap = sheet.get("data_snapshot") or {}
+    prop, visit = snap.get("property") or {}, snap.get("visit") or {}
+    versione = version or consent.VERSION
+    if versione == consent.VERSION_V1:
+        return consent.text(title=_title(sheet), sha256=sheet["sha256"], version=versione)
+    return consent.text(title="Foglio visita", sha256=sheet["sha256"], address=prop.get("address"),
+                        visit_text=visit.get("date_text"), document_version=sheet.get("sheet_version"), version=versione)
 
 
 def _mask(email: str) -> str:
@@ -216,6 +229,8 @@ def decorate(cur, views: list[dict]) -> None:
             state = "sending"
         v["state"], v["state_label"] = state, STATE_LABELS[state]
         v["level_notice"] = "Firma elettronica semplice (FES): non è una firma avanzata né qualificata."
+        v["consent_version"] = consent.VERSION
+        v["ui"] = presentation.ui_state(v)
 
 
 # ---------------------------------------------------------------------------------------------------------------------
@@ -365,9 +380,10 @@ def sign_as_agent(ctx, request_id: int, *, password: str, consent_accepted: bool
             now = _now()
             _ev(cur, row, "agent_authenticated", actor_kind="operator", actor_ref=actor, signer_id=agent["id"],
                 details={"method": "crm_session+password", **_context(ip, user_agent)})
-            declaration = consent.text(title=_title(sheet), sha256=sheet["sha256"])
+            declaration = _declaration(sheet)
             _ev(cur, row, "consent_recorded", actor_kind="operator", actor_ref=actor, signer_id=agent["id"],
-                details={"consent_version": consent.VERSION, "consent_sha256": consent.digest(declaration)})
+                details={"consent_version": consent.VERSION, "consent_sha256": consent.digest(declaration),
+                         "document_sha256": sheet["sha256"]})
             cur.execute("UPDATE signature_request_signers SET status = 'signed', signed_at = %s, updated_at = NOW() WHERE id = %s",
                         (now, agent["id"]))
             _ev(cur, row, "signer_signed", actor_kind="operator", actor_ref=actor, signer_id=agent["id"],
@@ -427,7 +443,11 @@ def _report_data(cur, row: dict, sheet: dict, signers: list[dict], *, outcome: s
     snap = sheet.get("data_snapshot") or {}
     prop, visit = snap.get("property") or {}, snap.get("visit") or {}
     rows = evidence.entries(cur, row["id"])
-    declaration = consent.text(title=_title(sheet), sha256=sheet["sha256"])
+    # La dichiarazione realmente accettata: la versione registrata dal cliente (mai riscritta con quella di oggi).
+    versione = next((e["details"].get("consent_version") for e in reversed(rows)
+                     if e["event_type"] == "consent_recorded" and e["actor_kind"] == "signer"
+                     and e["details"].get("consent_version") in consent.TEMPLATES), consent.VERSION)
+    declaration = _declaration(sheet, versione)
     return {
         "procedure": row["provider_reference"], "request_id": row["id"], "generated_at": _now(),
         "property": " · ".join(x for x in (prop.get("code"), prop.get("address")) if x) or f"id {sheet['property_id']}",
@@ -437,7 +457,7 @@ def _report_data(cur, row: dict, sheet: dict, signers: list[dict], *, outcome: s
         "signers": [{"role_label": _s.SIGNER_LABELS[s["role"]], "name": s["name"], "email": s["email"],
                      "method": METHOD_VISITOR if s["role"] == "visitor" else METHOD_AGENT,
                      "status_label": _s.SIGNER_STATUS_LABELS[s["status"]], "signed_at": s["signed_at"]} for s in signers],
-        "consent": {"version": consent.VERSION, "text": declaration, "sha256": consent.digest(declaration)},
+        "consent": {"version": versione, "text": declaration, "sha256": consent.digest(declaration)},
         "events": rows, "chain_head": rows[-1]["entry_hash"] if rows else None,
     }
 
@@ -499,7 +519,7 @@ def _public_state(cur, challenge: dict, row: dict) -> dict:
     sheet = _sheet_full(cur, row["visit_sheet_id"])
     snap = sheet.get("data_snapshot") or {}
     prop, visit = snap.get("property") or {}, snap.get("visit") or {}
-    declaration = consent.text(title=_title(sheet), sha256=sheet["sha256"])
+    declaration = _declaration(sheet)
     link_ok = challenge["invalidated_at"] is None and challenge["expires_at"] > _now()
     otp = _otp_active(cur, [row["id"]]).get(row["id"])
     if row["status"] == "signed":
@@ -534,7 +554,9 @@ def _public_state(cur, challenge: dict, row: dict) -> dict:
                                         "expired": "Richiesta scaduta", "revoked": "Richiesta revocata dall'agenzia",
                                         "link_expired": "Collegamento scaduto", "link_revoked": "Collegamento non più valido"}[state],
         "procedure": row["provider_reference"], "agency_name": _agency_name(cur, row["agency_id"]),
-        "document": {"title": _title(sheet), "version": sheet["sheet_version"], "sha256": sheet["sha256"]},
+        "document": {"title": _title(sheet), "version": sheet["sheet_version"], "sha256": sheet["sha256"],
+                     "address": prop.get("address"), "visit_text": " ".join(x for x in (visit.get("date_text"),
+                                                                                       visit.get("time_text")) if x) or None},
         "property": {"reference": prop.get("code"), "address": prop.get("address"), "type_label": prop.get("type_label")},
         "visit": {"date_text": visit.get("date_text"), "time_text": visit.get("time_text"), "agent_name": visit.get("agent_name")},
         "signer": {"role": me["role"], "name": me["name"], "email_masked": _mask(me["email"])},
@@ -716,7 +738,7 @@ def public_confirm(token: str, *, code: str, consent_accepted: bool, consent_ver
                 cur.execute("UPDATE signature_challenges SET consumed_at = %s WHERE id = %s", (now, otp["id"]))
                 _ev(cur, row, "otp_verified", actor_kind="signer", signer_id=me["id"],
                     details={"challenge_id": otp["id"], "attempts": attempts, **ctx})
-                declaration = consent.text(title=_title(sheet), sha256=sheet["sha256"])
+                declaration = _declaration(sheet)
                 _ev(cur, row, "consent_recorded", actor_kind="signer", signer_id=me["id"],
                     details={"consent_version": consent.VERSION, "consent_sha256": consent.digest(declaration),
                              "document_sha256": sheet["sha256"], **ctx})

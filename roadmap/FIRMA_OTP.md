@@ -159,3 +159,45 @@ pubblicazione automatica al proprietario. La durata di conservazione non è fiss
   del procedimento e registro dei trattamenti da aggiornare; durata di conservazione da definire per finalità.
 - La lettura effettiva del documento non è dimostrabile: si registra l'apertura della pagina e la richiesta del PDF.
 - L'anteprima del PDF nella pagina usa il lettore del dispositivo (sul telefono si apre a tutto schermo).
+
+## 13. Firma semplificata e sezione «Fogli visita»
+
+Stesso motore (collegamento personale, OTP, prove a catena, documento congelato, FES): cambiano solo il percorso e la
+presentazione. Nessuna migrazione.
+
+**Agente — un pulsante.** Nel riquadro «Firma del foglio visita» (Agenda, scheda immobile, sezione Fogli visita) nome
+ed email del cliente sono precompilati (nome dal foglio, email dal contatto attuale; nessun dato inventato, campi
+correggibili) e l'agente assegnato è riconosciuto. «Invia per firma» chiama `POST /api/signature-requests/send`
+(`esign/send_flow.py`): controlla i dati, impedisce una seconda richiesta aperta sulla stessa visita, genera il foglio
+se manca o lo riusa se i dati non sono cambiati; se sono cambiati e l'agente guardava un'altra versione si ferma
+(`SHEET_UPDATED`: «controlla la nuova versione»). Poi `otp_service.create` come sempre.
+
+**«Firmo anche io adesso».** Facoltativo, solo per l'agente assegnato: dichiarazione accettata e password. La password
+si verifica PRIMA di creare la richiesta: con una password sbagliata non parte nessuna email. La firma la scrive
+`otp_service.sign_as_agent` (che riverifica tutto). L'agente può anche firmare dopo il cliente.
+
+**Cliente.** Una pagina: logo, «Firma il foglio visita», documento da leggere e scaricare, dichiarazione breve,
+«Accetto il documento e richiedo il codice», sei cifre, «Conferma firma», esito. Niente casella separata: il consenso
+è l'azione esplicita con la dichiarazione in vista, confermata dal codice; il server registra versione e impronta della
+dichiarazione e l'impronta del documento. In pagina nessuna impronta, codice di procedimento o identificativo interno.
+
+**Dichiarazione v2** (`esign/consent.py`, `dichiarazione_firma_otp_v2`): linguaggio semplice, documento identificato da
+immobile, data della visita e versione; l'impronta del PDF non è più nel testo ma resta legata alla firma nelle prove
+(`document_sha256` accanto a `consent_sha256`, ora anche per l'agente). La v1 resta nel codice: chi l'ha accettata la
+ritrova identica nel rapporto delle prove, che usa la versione registrata e non quella di oggi.
+**DA FAR VERIFICARE A UN LEGALE PRIMA DELL'USO COMMERCIALE.**
+
+**Stati per l'operatore** (`esign/presentation.py`, gli stessi ovunque): Da inviare, In attesa del cliente, In attesa
+dell'agente, Completato, Scaduto, Rifiutato, Invio non riuscito. «Email accettata dal server di posta» non è mai
+presentata come consegna. Il riquadro si aggiorna da solo ogni 15 secondi mentre si attende qualcuno.
+
+**Menu «⋯»**: Reinvia, Copia link, Annulla richiesta, Visualizza documento, Scarica PDF finale, Scarica rapporto delle
+prove, Verifica integrità, Dettagli tecnici — solo quando sono possibili.
+
+**Fogli visita** (voce dopo Agenda, `#/fogli-visita`, `GET /api/visit-sheets/overview`): ogni visita immobile con il suo
+foglio (ultima versione) o che può averne uno; cliente, immobile, agente, stato della firma, ultima attività; ricerca,
+filtri per stato, periodo e agente. Il dettaglio (`#/fogli-visita/<appuntamento>`) usa lo stesso riquadro dell'Agenda e
+porta all'appuntamento. Visibilità dei fogli visita: titolare e amministratori l'agenzia, agente le sue visite.
+
+**Avvisi in «Oggi»** (`GET /api/signature-requests/notifications`): firme completate, rifiutate, scadute, invii non
+riusciti degli ultimi 14 giorni, uno per visita; ogni voce apre il foglio.
