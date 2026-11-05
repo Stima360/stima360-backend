@@ -94,6 +94,9 @@ def test_zona3_campagna_nuovo_immobile_indipendente_marker_e_scheda(server, larg
         _punto_dalla_ricerca(page)
         page.click("[data-insert-point] [data-insert-cancel]")
         assert scritture == []
+        # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: «Annulla» richiude il pannello; si riapre dal «+»
+        page.click("[data-zone-add]")
+        page.click("[data-zone-add-search]")
         _punto_dalla_ricerca(page)
         page.click("[data-insert-confirm]")
         page.wait_for_selector("[data-insert-actions]:not([hidden])")
@@ -143,12 +146,15 @@ def test_zona3_campagna_nuovo_immobile_indipendente_marker_e_scheda(server, larg
     assert [s[:2] for s in scritture] == [("POST", f"{url}/api/property/census/units"), ("POST", f"{url}/api/property/properties/{pid}/position")]
     assert json.loads(scritture[1][2]) == {"latitude": "42.8330000", "longitude": "13.9250000"}
     assert punti == [pid] and attivo == {"selected": True}                          # ne' il non verificato, ne' l'unita', ne' l'altrui
-    assert "Apri scheda immobile" in riquadro and "Verificata su Zona" in pannello
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: la scheda rapida porta «Apri scheda completa»
+    assert "Apri scheda completa" in riquadro and "Verificata su Zona" in pannello
     assert consumato == {"azioni": True, "segnaposti": 0}
     assert _riga(m, non_verificato["id"])["at"] is None and _riga(m, u["id"])["at"] is None
     for misura in (misura_zona, misura_mappa):
         assert misura["scroll"] <= misura["inner"], misura
-    assert tocco >= 44
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: il pannello sta ora sotto la mappa (alta in `svh`, quindi a una
+    # posizione non intera): bottom - top di un pulsante alto 44 px puo' valere 43.99997. Si confronta al centesimo.
+    assert round(tocco, 2) >= 44
 
 
 def test_zona3_fallimento_senza_doppione_esistente_collegabile_cestino_e_agenzie(server, monkeypatch):
@@ -203,8 +209,11 @@ def test_zona3_fallimento_senza_doppione_esistente_collegabile_cestino_e_agenzie
         dopo_riprova = (_immobili(m), _riga(m, pid))
 
         # B. «Collega un immobile esistente»: solo gli indipendenti (l'unita' di palazzina e' esclusa)
-        page.evaluate("document.querySelector('[data-insert-panel]').open = true")
-        page.click("[data-insert-pick]")
+        # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: il pannello si apre dal «+» della mappa («Cerca un indirizzo»)
+        page.click("[data-zone-add]")
+        page.click("[data-zone-add-search]")
+        page.click("[data-zone-add]")          # ZONA-6: «+ → Scegli un punto sulla mappa»
+        page.click("[data-zone-add-pick]")
         page.evaluate(f"{MAPPA}.setZoom(18)")
         page.evaluate(f"{MAPPA}.fire('click', {{ lngLat: {{ lng: 13.9301234, lat: 42.8301234 }} }})")
         page.wait_for_selector("[data-insert-point]:not([hidden])")
@@ -220,8 +229,11 @@ def test_zona3_fallimento_senza_doppione_esistente_collegabile_cestino_e_agenzie
         page.wait_for_function(f"{MAPPA}.sources['stima-properties'] && {MAPPA}.sources['stima-properties'].data.features.some((f) => f.id === {esistente['id']})")
         punti = sorted(_punti(page))
         # l'unita' di palazzina non compare fra i collegabili
-        page.evaluate("document.querySelector('[data-insert-panel]').open = true")
-        page.click("[data-insert-pick]")
+        # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: il pannello si apre dal «+» della mappa («Cerca un indirizzo»)
+        page.click("[data-zone-add]")
+        page.click("[data-zone-add-search]")
+        page.click("[data-zone-add]")          # ZONA-6: «+ → Scegli un punto sulla mappa»
+        page.click("[data-zone-add-pick]")
         page.evaluate(f"{MAPPA}.fire('click', {{ lngLat: {{ lng: 13.9311234, lat: 42.8311234 }} }})")
         page.wait_for_selector("[data-insert-point]:not([hidden])")
         page.evaluate(f"{MAPPA}.setZoom(18)")

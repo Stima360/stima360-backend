@@ -270,7 +270,7 @@ def test_b03_collegamento_fallito_nessun_doppione_riprova_e_unita_in_palazzina_c
     # prima, nessun POST di posizione dell'immobile (la posizione e' dell'edificio)
     scenario2 = r"""
       await wait(); await wait(); M().emit('load'); await wait();
-      pq('[data-insert-pick]').dispatch('click'); await wait();
+      await sceglieSullaMappa();
       M().emit('click', { lngLat: { lng: 13.915, lat: 42.803 } }); await wait(); M().setZoom(18); await wait();
       await confermaPunto();
       await azione('unit');
@@ -290,7 +290,7 @@ def test_b03_collegamento_fallito_nessun_doppione_riprova_e_unita_in_palazzina_c
 def test_b04_collega_un_immobile_esistente_solo_indipendenti_e_annulla(staged):  # noqa: F811
     scenario = r"""
       await wait(); await wait(); M().emit('load'); await wait();
-      pq('[data-insert-pick]').dispatch('click'); await wait();
+      await sceglieSullaMappa();
       M().emit('click', { lngLat: { lng: 13.915, lat: 42.803 } }); await wait(); M().setZoom(18); await wait();
       await confermaPunto();
       await azione('link-property');
@@ -304,7 +304,7 @@ def test_b04_collega_un_immobile_esistente_solo_indipendenti_e_annulla(staged): 
       pq('[data-insert-actions]').querySelector('[data-insert-cancel]').dispatch('click'); await wait();   // lo stub non ha i selettori discendenti
       const annullato = { stato: stato(), scritture: scritte() };
       // di nuovo: punto, «Collega un immobile esistente», «Collega qui»
-      pq('[data-insert-pick]').dispatch('click'); await wait();
+      await sceglieSullaMappa();
       M().emit('click', { lngLat: { lng: 13.915, lat: 42.803 } }); await wait(); M().setZoom(18); await wait();
       await confermaPunto();
       await azione('link-property');

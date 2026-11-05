@@ -97,6 +97,18 @@ STATUS_FILTERS = {
 }
 #: Fuori da ogni vista normale (active/paused/closed/all).
 NOT_MISTAKE_SQL = f"l.lost_reason IS DISTINCT FROM '{MISTAKE_REASON}'"
+#: Chi e' un venditore della worklist (alias pl/l/p/c), oltre allo scope del lead.
+#: Condivisi con la mappa di Zona (`zone_summary`): una regola sola.
+_FILTRI_VENDITORE = ("pl.relation_type = 'seller'", "l.pipeline = 'sell'",
+                     # DELETE-ARCH Fase 0: un immobile archiviato esce dalla worklist.
+                     "p.archived_at IS NULL",
+                     # CESTINO-CONTATTI-1: un venditore nel Cestino esce dalla worklist.
+                     "(to_jsonb(c)->>'deleted_at') IS NULL")
+#: La prossima attivita' aperta del lead (alias nt), la piu' vicina per scadenza.
+_PROSSIMO_TASK = """LEFT JOIN LATERAL (
+                   SELECT t.id, t.title, t.due_at FROM tasks t
+                    WHERE t.agency_id = l.agency_id AND t.lead_id = l.id AND t.status IN ('open', 'in_progress')
+                    ORDER BY t.due_at ASC NULLS LAST, t.id LIMIT 1) nt ON TRUE"""
 STAGE_LABELS_IT = {
     "new": "Nuovo", "contacted": "Contattato", "qualified": "Qualificato",
     "appointment": "Appuntamento", "proposal": "Proposta", "won": "Acquisito", "lost": "Perso",
@@ -541,10 +553,7 @@ def list_sellers(ctx, *, view: str = "all", status: str = "active", agent_id: in
     # leggere (core.scope: per un agente, di cui e' autore o responsabile).
     interazioni_visibili, interazioni_params = scoped_predicate(ctx, "activities", "a")
     predicato, params = scoped_predicate(ctx, "leads", "l")
-    # DELETE-ARCH Fase 0: un immobile archiviato esce dalla worklist.
-    filtri = [predicato, "pl.relation_type = 'seller'", "l.pipeline = 'sell'", "p.archived_at IS NULL",
-              # CESTINO-CONTATTI-1: un venditore nel Cestino esce dalla worklist.
-              "(to_jsonb(c)->>'deleted_at') IS NULL"]
+    filtri = [predicato, *_FILTRI_VENDITORE]
     # DELETE-ARCH Fase 1B: gli inseriti per errore solo nel loro filtro.
     if status != "mistakes":
         filtri.append(NOT_MISTAKE_SQL)
@@ -594,10 +603,7 @@ def list_sellers(ctx, *, view: str = "all", status: str = "active", agent_id: in
                       AND {interazioni_visibili}
                       AND (a.lead_id = l.id OR (a.property_id = p.id AND a.contact_id = c.id))
                     ORDER BY a.occurred_at DESC, a.id DESC LIMIT 1) la ON TRUE
-              LEFT JOIN LATERAL (
-                   SELECT t.id, t.title, t.due_at FROM tasks t
-                    WHERE t.agency_id = l.agency_id AND t.lead_id = l.id AND t.status IN ('open', 'in_progress')
-                    ORDER BY t.due_at ASC NULLS LAST, t.id LIMIT 1) nt ON TRUE
+              {_PROSSIMO_TASK}
               LEFT JOIN LATERAL (
                    -- REV 2 (R1): «in corso» = NON terminale, su tutta la selezione:
                    -- una vecchia acquisizione persa/acquisita sul lead non conta,
@@ -652,3 +658,98 @@ def _voce(r: dict, punteggio: dict | None, ctx, sees_all: bool) -> dict:
             "id": r["aq_id"], "status": r["aq_status"],
             "visible": sees_all or r["aq_agent"] == getattr(ctx, "user_id", None)},
     }
+
+
+# ---------------------------------------------------------------------------
+# ZONA-6: ultimo contatto, prossima azione e «Da ricontattare» sulla mappa
+# ---------------------------------------------------------------------------
+
+def zone_summary(ctx) -> dict:
+    """Per la mappa di Zona, per edificio (e per immobile senza edificio):
+    l'ultimo contatto e la prossima azione dei VENDITORI delle sue unita'.
+    Stesse regole della worklist: venditori attivi (`_FILTRI_VENDITORE`, lead
+    aperto, mai gli inseriti per errore), prossima azione = attivita' aperta
+    piu' vicina o `leads.next_action_at`, «Da ricontattare» = la vista
+    «Da richiamare» (`VIEWS['overdue']`). Ultimo contatto = l'interazione piu'
+    recente registrata sulle unita' o sui loro venditori, fra quelle che il
+    lettore puo' leggere. Sola lettura: UNA statement per le prossime azioni,
+    UNA per gli ultimi contatti, per tutta l'agenzia."""
+    from datetime import datetime, timezone
+    agency_id = ctx.require_agency()
+    predicato, params = scoped_predicate(ctx, "leads", "l")
+    interazioni_visibili, interazioni_params = scoped_predicate(ctx, "activities", "a")
+    filtri = [predicato, *_FILTRI_VENDITORE, NOT_MISTAKE_SQL, STATUS_FILTERS["active"][1],
+              "(to_jsonb(p)->>'deleted_at') IS NULL", "l.agency_id = %s"]
+    with core_cursor() as (_, cur):
+        cur.execute(
+            f"""
+            SELECT p.id AS property_id, p.building_id, l.next_action_at,
+                   nt.id AS nt_id, nt.title AS nt_title, nt.due_at AS nt_due,
+                   ({VIEWS['overdue'][1]}) AS overdue
+              FROM property_leads pl
+              JOIN leads l ON l.id = pl.lead_id
+              JOIN properties p ON p.id = pl.property_id AND p.agency_id = l.agency_id
+              JOIN contacts c ON c.id = l.contact_id AND c.agency_id = l.agency_id
+              {_PROSSIMO_TASK}
+             WHERE {' AND '.join(filtri)}
+            """,
+            params + [agency_id])
+        azioni = [dict(r) for r in cur.fetchall()]
+        unita = ("p.archived_at IS NULL AND (to_jsonb(p)->>'deleted_at') IS NULL "
+                 "AND p.agency_id = a.agency_id")
+        cur.execute(
+            f"""
+            SELECT DISTINCT ON (x.building_id, x.solo) x.property_id, x.building_id, x.activity_type, x.occurred_at
+              FROM (
+                SELECT a.id, a.activity_type, a.occurred_at, p.id AS property_id, p.building_id,
+                       CASE WHEN p.building_id IS NULL THEN p.id END AS solo
+                  FROM activities a JOIN properties p ON p.id = a.property_id
+                 WHERE a.agency_id = %s AND a.activity_type = ANY(%s) AND {interazioni_visibili} AND {unita}
+                UNION ALL
+                SELECT a.id, a.activity_type, a.occurred_at, p.id, p.building_id,
+                       CASE WHEN p.building_id IS NULL THEN p.id END
+                  FROM activities a
+                  JOIN property_leads pl ON pl.lead_id = a.lead_id AND pl.relation_type = 'seller'
+                  JOIN properties p ON p.id = pl.property_id
+                 WHERE a.property_id IS NULL AND a.agency_id = %s AND a.activity_type = ANY(%s)
+                   AND {interazioni_visibili} AND {unita}
+              ) x
+             ORDER BY x.building_id, x.solo, x.occurred_at DESC, x.id DESC
+            """,
+            [agency_id, list(INTERACTION_TYPES)] + interazioni_params
+            + [agency_id, list(INTERACTION_TYPES)] + interazioni_params)
+        contatti = [dict(r) for r in cur.fetchall()]
+
+    adesso = datetime.now(timezone.utc)
+    voci: dict = {}
+
+    def voce(r):
+        chiave = ("building", r["building_id"]) if r["building_id"] is not None else ("property", r["property_id"])
+        if chiave not in voci:
+            voci[chiave] = {"last_contact": None, "next_action": None, "to_recontact": False}
+        return voci[chiave]
+
+    for r in azioni:
+        v = voce(r)
+        v["to_recontact"] = v["to_recontact"] or bool(r["overdue"])
+        scadenza = r["nt_due"] or r["next_action_at"]
+        if scadenza is None:
+            continue
+        attuale = v["next_action"]
+        if attuale is None or scadenza < attuale["_due"]:
+            v["next_action"] = {"_due": scadenza, "title": r["nt_title"] or "Prossima azione",
+                                "due_at": scadenza.isoformat(), "overdue": scadenza < adesso,
+                                "source": "task" if r["nt_id"] is not None else "lead"}
+    for r in contatti:
+        voce(r)["last_contact"] = {"type": r["activity_type"], "occurred_at": r["occurred_at"].isoformat()}
+    esito = {"buildings": [], "properties": []}
+    for (tipo, ident), v in voci.items():
+        if v["next_action"] is not None:
+            v["next_action"].pop("_due")
+        if tipo == "building":
+            esito["buildings"].append({"building_id": ident, **v})
+        else:
+            esito["properties"].append({"property_id": ident, **v})
+    esito["buildings"].sort(key=lambda x: x["building_id"])
+    esito["properties"].sort(key=lambda x: x["property_id"])
+    return esito

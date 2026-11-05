@@ -1,25 +1,24 @@
-// STIMA360 OS — territorio/gps.js (STIMA360 ZONA-4)
+// STIMA360 OS — territorio/gps.js (STIMA360 ZONA-4, ZONA-6)
 //
-// «La mia posizione»: il pulsante sulla mappa di Zona che chiede al browser la
-// posizione dello smartphone (Geolocation API nativa, `getCurrentPosition`,
-// una richiesta FRESCA per ogni tocco: niente `watchPosition`, niente
-// tracciamento, niente richiesta all'apertura della pagina). La posizione
-// personale resta nello stato di questa pagina: non viene salvata, non viene
-// inviata al backend, non diventa un marker persistente. Quello che si salva
-// e' solo il punto che l'operatore trasferisce con «Inserisci qui», corregge
-// e CONFERMA nel flusso «+ Inserisci dalla mappa» (ZONA-2/ZONA-3): la verifica
-// resta la conferma T4/103, mai il GPS da solo.
+// ZONA-6 - la posizione in tempo reale: appena si apre Zona la mappa chiede
+// al browser la posizione dello smartphone (Geolocation API nativa,
+// `watchPosition`) e la mostra con un punto blu e il cerchio della
+// precisione. Alla PRIMA posizione la mappa si centra su di essa, a meno che
+// l'operatore non l'abbia gia' spostata; poi il punto si aggiorna mentre ci
+// si muove e la vista resta dove l'operatore la lascia (nessun «Seguimi»).
+// Il GPS si ferma (`clearWatch`) quando si esce da Zona (`stop()`, chiamato
+// dalla mappa quando si chiude) e mentre la pagina e' nascosta.
 //
-//   1. tocco -> indicatore di attesa, pulsante bloccato (nessuna richiesta
-//      doppia) -> il browser chiede il consenso se serve;
-//   2. posizione ricevuta -> mappa centrata (zoom secondo la precisione),
-//      cerchio indicativo della precisione + punto blu, «Precisione stimata:
-//      circa N m», «Inserisci qui» e «Chiudi»;
-//   3. permesso negato, posizione non disponibile, tempo scaduto, browser
-//      senza posizione -> messaggio leggibile, si puo' riprovare;
-//   4. si lascia la pagina durante la richiesta -> la risposta si butta.
+// La posizione personale resta nello stato di questa pagina: non viene
+// salvata, non viene inviata al backend. Quello che si salva e' solo il punto
+// che l'operatore sceglie con «+ → Dalla mia posizione», controlla e CONFERMA
+// nel flusso di inserimento (ZONA-2/ZONA-3/ZONA-5): la verifica resta la
+// conferma T4/103, mai il GPS da solo.
 //
-// Nessun dato del CRM qui; solo `textContent`.
+// Errori (permesso negato, posizione non disponibile, tempo scaduto, browser
+// senza posizione): un messaggio leggibile sulla mappa finche' non arriva una
+// posizione; il permesso negato ferma la richiesta. Nessun dato del CRM qui;
+// solo `textContent`.
 
 import {
   GPS_OPTIONS, accuracyText, gpsErrorText, gpsFeatureCollection, zoomForAccuracy,
@@ -35,8 +34,6 @@ const LIVELLI = [
     paint: { 'circle-radius': 7, 'circle-color': '#1a56db', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 3 } },
 ];
 
-const ICONA = 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8zm9 3h-2.07A7.01 7.01 0 0 0 13 5.07V3h-2v2.07A7.01 7.01 0 0 0 5.07 11H3v2h2.07A7.01 7.01 0 0 0 11 18.93V21h2v-2.07A7.01 7.01 0 0 0 18.93 13H21v-2zm-9 8a5 5 0 1 1 0-10 5 5 0 0 1 0 10z';
-
 function el(tag, { cls = null, text = null, attrs = null } = {}) {
   const nodo = document.createElement(tag);
   if (cls) nodo.className = cls;
@@ -48,56 +45,44 @@ function el(tag, { cls = null, text = null, attrs = null } = {}) {
   return nodo;
 }
 
-function icona() {
-  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-  svg.setAttribute('viewBox', '0 0 24 24');
-  svg.setAttribute('width', '20');
-  svg.setAttribute('height', '20');
-  svg.setAttribute('aria-hidden', 'true');
-  const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-  p.setAttribute('d', ICONA);
-  p.setAttribute('fill', 'currentColor');
-  svg.appendChild(p);
-  return svg;
-}
-
 /**
- * Monta il comando dentro `area` (il contenitore della mappa viva `map`).
- *   vivo()          -> la pagina e' ancora questa (risposte tardive si buttano)
- *   onInsertHere(p) -> «Inserisci qui»: p = { lng, lat, accuracy }
- *   geo             -> la Geolocation API (navigator.geolocation; per le prove una finta)
- * Restituisce { request() } solo per le prove.
+ * Avvia la posizione in tempo reale sulla mappa viva `map` (contenitore `area`).
+ *   vivo()      -> la pagina e' ancora questa (risposte tardive si buttano)
+ *   onChange(p) -> ogni nuova posizione: p = { lng, lat, accuracy }
+ *   centra()    -> alla prima posizione: si puo' centrare la mappa? (es. no se un
+ *                  edificio o un punto scelto e' gia' in primo piano)
+ *   geo         -> la Geolocation API (navigator.geolocation; per le prove una finta)
+ *   doc         -> il documento (visibilita' della pagina)
+ * Restituisce { stop(), last(), status() }: `stop()` ferma il GPS (idempotente),
+ * `status()` il messaggio mostrato (attesa o errore), '' quando la posizione c'e'.
  */
-export function mountGps(area, { map, vivo = () => true, onInsertHere = () => {},
-  geo = (typeof navigator !== 'undefined' && navigator ? navigator.geolocation : null) } = {}) {
-  const box = el('div', { cls: 'territorio-gps', attrs: { 'data-gps': '1' } });
-  const bottone = el('button', { cls: 'btn territorio-gps-btn', attrs: { type: 'button', 'data-gps-button': '1', 'aria-label': 'La mia posizione', 'aria-busy': 'false' } });
-  bottone.appendChild(icona());
-  bottone.appendChild(el('span', { cls: 'territorio-gps-label', text: 'La mia posizione' }));
-  const stato = el('div', { cls: 'territorio-gps-status', attrs: { 'data-gps-status': '1', role: 'status', 'aria-live': 'polite', hidden: '' } });
+export function mountGps(area, { map, vivo = () => true, onChange = () => {}, centra = () => true,
+  geo = (typeof navigator !== 'undefined' && navigator ? navigator.geolocation : null),
+  doc = (typeof document !== 'undefined' ? document : null) } = {}) {
+  const stato = el('div', { cls: 'territorio-gps-status', attrs: { 'data-gps-status': '1', role: 'status', 'aria-live': 'polite' } });
   stato.hidden = true;
-  const testo = el('p', { cls: 'territorio-gps-text', attrs: { 'data-gps-text': '1' } });
-  const azioni = el('div', { cls: 'territorio-gps-actions' });
-  const inserisci = el('button', { cls: 'btn primary btn-small', text: 'Inserisci qui', attrs: { type: 'button', 'data-gps-insert': '1' } });
-  const chiudi = el('button', { cls: 'btn ghost btn-small', text: 'Chiudi', attrs: { type: 'button', 'data-gps-close': '1' } });
-  azioni.append(inserisci, chiudi);
-  stato.append(testo, azioni);
-  box.append(bottone, stato);
-  area.appendChild(box);
+  area.appendChild(stato);
 
-  let inCorso = false;
   let ultima = null;          // { lng, lat, accuracy }: SOLO in memoria, SOLO in questa pagina
+  let guardia = null;         // l'id di watchPosition
+  let fermo = false;
+  let negato = false;         // permesso negato: non si richiede piu' (nemmeno tornando visibili)
+  let centrata = false;       // la mappa si centra UNA volta, alla prima posizione
+  let spostata = false;       // l'operatore ha gia' spostato la mappa: la vista resta sua
   let disegnato = false;
   let caricata = typeof map.loaded === 'function' ? !!map.loaded() : false;
   let daDisegnare = null;
   map.on('load', () => { caricata = true; if (daDisegnare) { disegna(daDisegnare); daDisegnare = null; } });
+  // un gesto dell'operatore (non uno spostamento del programma) porta `originalEvent`
+  for (const evento of ['dragstart', 'zoomstart', 'rotatestart', 'pitchstart']) {
+    map.on(evento, (e) => { if (e && e.originalEvent) spostata = true; });
+  }
 
-  const mostra = (messaggio, { errore = false, pronto = false } = {}) => {
-    stato.hidden = false;
-    stato.classList.toggle('is-error', errore);
-    stato.dataset.gpsState = errore ? 'error' : (pronto ? 'ready' : 'busy');
-    testo.textContent = messaggio;
-    inserisci.hidden = !pronto;
+  const mostra = (messaggio, statoGps) => {
+    stato.hidden = !messaggio;
+    stato.dataset.gpsState = statoGps;
+    stato.classList.toggle('is-error', statoGps === 'error');
+    stato.textContent = messaggio || '';
   };
 
   function disegna(fc) {
@@ -113,51 +98,63 @@ export function mountGps(area, { map, vivo = () => true, onInsertHere = () => {}
     for (const livello of LIVELLI) map.addLayer({ ...livello, source: SORGENTE });
   }
 
-  function richiesta() {
-    if (inCorso) return;                     // un tocco ripetuto non chiede due volte
-    if (!geo || typeof geo.getCurrentPosition !== 'function') {
-      mostra(gpsErrorText('unsupported'), { errore: true });
+  const ricevuta = (posizione) => {
+    if (fermo || !vivo()) return;            // si e' andati altrove: nulla da mostrare
+    const c = posizione && posizione.coords ? posizione.coords : null;
+    const lat = c ? Number(c.latitude) : NaN;
+    const lng = c ? Number(c.longitude) : NaN;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      if (!ultima) mostra(gpsErrorText(2), 'error');
       return;
     }
-    inCorso = true;
-    bottone.disabled = true;
-    bottone.setAttribute('aria-busy', 'true');
-    box.classList.add('is-busy');
-    mostra('Ricerca della posizione…');
-    const fine = () => {
-      inCorso = false;
-      bottone.disabled = false;
-      bottone.setAttribute('aria-busy', 'false');
-      box.classList.remove('is-busy');
-    };
-    geo.getCurrentPosition((posizione) => {
-      fine();
-      if (!vivo()) return;                   // si e' andati altrove: nulla da mostrare
-      const c = posizione && posizione.coords ? posizione.coords : null;
-      const lat = c ? Number(c.latitude) : NaN;
-      const lng = c ? Number(c.longitude) : NaN;
-      if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-        mostra(gpsErrorText(2), { errore: true });
-        return;
-      }
-      const accuracy = c && Number.isFinite(Number(c.accuracy)) ? Number(c.accuracy) : NaN;
-      ultima = { lng, lat, accuracy };
-      map.jumpTo({ center: [lng, lat], zoom: zoomForAccuracy(accuracy) });
-      disegna(gpsFeatureCollection(lng, lat, Number.isFinite(accuracy) ? accuracy : 0));
-      mostra(`${accuracyText(accuracy)}. Il punto è indicativo: con «Inserisci qui» lo controlli, lo correggi e lo confermi tu.`, { pronto: true });
-    }, (errore) => {
-      fine();
-      if (!vivo()) return;
-      mostra(gpsErrorText(errore), { errore: true });
-    }, { ...GPS_OPTIONS });
-  }
+    const accuracy = c && Number.isFinite(Number(c.accuracy)) ? Number(c.accuracy) : NaN;
+    ultima = { lng, lat, accuracy };
+    if (!centrata) {
+      centrata = true;
+      if (!spostata && centra()) map.jumpTo({ center: [lng, lat], zoom: zoomForAccuracy(accuracy) });
+    }
+    disegna(gpsFeatureCollection(lng, lat, Number.isFinite(accuracy) ? accuracy : 0));
+    area.dataset.gpsAccuracy = accuracyText(accuracy);
+    mostra('', 'live');
+    onChange({ ...ultima });
+  };
+  const errore = (e) => {
+    if (fermo || !vivo()) return;
+    const codice = e && typeof e === 'object' ? e.code : e;
+    if (codice === 1) { negato = true; ferma(); }   // permesso negato: non si insiste
+    if (!ultima || codice === 1) mostra(gpsErrorText(e), 'error');
+  };
 
-  bottone.addEventListener('click', richiesta);
-  inserisci.addEventListener('click', () => {
-    if (!ultima) return;
-    onInsertHere({ ...ultima });
-    stato.hidden = true;
-  });
-  chiudi.addEventListener('click', () => { stato.hidden = true; });
-  return { request: richiesta };
+  function avvia() {
+    if (fermo || negato || guardia !== null) return;
+    if (!geo || typeof geo.watchPosition !== 'function') {
+      mostra(gpsErrorText('unsupported'), 'error');
+      return;
+    }
+    if (!ultima) mostra('Ricerca della tua posizione…', 'busy');
+    guardia = geo.watchPosition(ricevuta, errore, { ...GPS_OPTIONS });
+  }
+  function ferma() {
+    if (guardia !== null && geo && typeof geo.clearWatch === 'function') geo.clearWatch(guardia);
+    guardia = null;
+  }
+  // pagina nascosta (altra app, schermo spento): GPS fermo; di nuovo visibile: riparte
+  const visibilita = () => {
+    if (!doc || fermo) return;
+    if (doc.hidden) ferma();
+    else if (vivo()) avvia();
+  };
+  if (doc && typeof doc.addEventListener === 'function') doc.addEventListener('visibilitychange', visibilita);
+
+  avvia();
+  return {
+    stop() {
+      if (fermo) return;
+      fermo = true;
+      ferma();
+      if (doc && typeof doc.removeEventListener === 'function') doc.removeEventListener('visibilitychange', visibilita);
+    },
+    last: () => (ultima ? { ...ultima } : null),
+    status: () => (stato.hidden ? '' : stato.textContent),
+  };
 }

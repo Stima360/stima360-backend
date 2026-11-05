@@ -33,10 +33,16 @@
 // dell'agenzia (solo quelli senza edificio) e conferma su questo punto, con
 // lo stato della verifica in chiaro.
 //
-// ZONA-4 - «Inserisci qui» dal GPS (territorio/gps.js): il punto dello
-// smartphone entra qui come PROVVISORIO (`placeProvisional`), con la precisione
-// nel suggerimento; si corregge e si conferma come ogni altro punto. Nulla di
+// ZONA-4 - il punto dal GPS (territorio/gps.js): il punto dello smartphone
+// entra qui come PROVVISORIO (`placeProvisional`), con la precisione nel
+// suggerimento; si corregge e si conferma come ogni altro punto. Nulla di
 // automatico: senza «Conferma punto» non succede niente.
+//
+// ZONA-6 - un solo «+» sulla mappa (views/territorio.js) avvia questo pannello:
+// «Dalla mia posizione» (`placeProvisional`), «Scegli un punto sulla mappa»
+// (`startPick`: il tocco successivo e' il punto, come il vecchio «Scegli il punto
+// toccando la mappa») o «Cerca un indirizzo» (`startSearch`). Il pannello resta
+// nascosto finche' non serve e si richiude con «Annulla».
 //
 // ZONA-5 - scelta del punto con un GESTO sulla mappa: doppio clic (computer,
 // con lo zoom del doppio clic spento su questa mappa) o pressione prolungata
@@ -257,15 +263,16 @@ const STATO_POSIZIONE = {
  * viva `map`. `onLinked(id)` = la posizione di un edificio e' stata verificata:
  * la pagina riapre la mappa con quell'edificio evidenziato.
  */
-export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = () => {}, onPropertyLinked = () => {} } = {}) {
+export function mountInserimento(host, { map, ml, area = null, vivo = () => true, onLinked = () => {}, onPropertyLinked = () => {} } = {}) {
   host.innerHTML = `
-      <summary class="territorio-insert-summary">+ Inserisci dalla mappa</summary>
+      <summary class="territorio-insert-summary" hidden>Inserisci dalla mappa</summary>
       <div class="territorio-insert-body">
-        <p class="muted territorio-insert-intro">Cerca un indirizzo o tocca il punto sulla mappa, poi scegli che cosa inserire: la posizione resta collegata all’edificio quando lo salvi.</p>
-        ${geocodeSearchHtml('il punto si usa solo quando salvi o colleghi un edificio.')}
-        <div class="territorio-insert-pick">
-          <button type="button" class="btn ghost" data-insert-pick aria-pressed="false">📍 Scegli il punto toccando la mappa</button>
+        <div class="territorio-insert-head">
+          <h3 class="territorio-insert-title">Nuovo dalla mappa</h3>
+          <button type="button" class="btn ghost btn-small" data-insert-close>Chiudi</button>
         </div>
+        <p class="muted territorio-insert-intro">Controlla il punto esatto, confermalo, poi scegli che cosa inserire: la posizione resta collegata all’edificio quando lo salvi.</p>
+        ${geocodeSearchHtml('il punto si usa solo quando salvi o colleghi un edificio.')}
         <div class="territorio-place-bar territorio-insert-point" data-insert-point hidden>
           <p class="territorio-insert-coords" data-insert-point-text></p>
           <section class="territorio-address" data-insert-address hidden>
@@ -322,7 +329,17 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
   const ricercaIndirizzo = q('[data-address-refresh]');
   const suggerimento = q('[data-insert-hint]');
   const conferma = q('[data-insert-confirm]');
-  const sceltaBtn = q('[data-insert-pick]');
+  // ZONA-6: la scelta del punto toccando la mappa ha un avviso sulla mappa stessa
+  const avvisoTocco = document.createElement('div');
+  avvisoTocco.className = 'territorio-pick-hint';
+  avvisoTocco.dataset.zonePickHint = '1';
+  avvisoTocco.setAttribute('role', 'status');
+  avvisoTocco.hidden = true;
+  const avvisoTesto = el('span', { text: 'Tocca il punto esatto sulla mappa.' });
+  const avvisoAnnulla = el('button', { cls: 'btn ghost btn-small', text: 'Annulla', attrs: { type: 'button', 'data-zone-pick-cancel': '1' } });
+  avvisoTocco.append(avvisoTesto, avvisoAnnulla);
+  if (area && typeof area.appendChild === 'function') area.appendChild(avvisoTocco);
+  host.hidden = true;                        // ZONA-6: si apre solo dal «+» (o da un gesto sulla mappa)
   const azioniEl = q('[data-insert-actions]');
   const sceltoTesto = q('[data-insert-chosen]');
   const sceltoNota = q('[data-insert-chosen-note]');
@@ -344,9 +361,13 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
   };
   const impostaTocco = (si) => {
     modoTocco = si;
-    sceltaBtn.setAttribute('aria-pressed', si ? 'true' : 'false');
-    sceltaBtn.classList.toggle('active', si);
+    avvisoTocco.hidden = !si;
+    avvisoTesto.textContent = punto ? 'Tocca di nuovo per spostare il punto, oppure trascina il segnaposto.' : 'Tocca il punto esatto sulla mappa.';
     try { map.getCanvas().style.cursor = si ? 'crosshair' : ''; } catch (_e) { /* mappa finta */ }
+  };
+  const mostraPannello = () => {
+    host.hidden = false;
+    host.open = true;
   };
   // ZONA-5: lo stato dell'indirizzo del punto provvisorio. `attivo` = il pannello e' in gioco
   // (gesto, GPS o risultato della ricerca); `confermato` = dichiarato dall'operatore.
@@ -478,7 +499,8 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     } else {
       provvisorio.setLngLat([punto.lng, punto.lat]);
     }
-    host.open = true;
+    mostraPannello();
+    if (modoTocco) impostaTocco(true);         // l'avviso sulla mappa dice come correggerlo
     if (da) indirizzoDaRisultato(da);
     else if (!lookup) chiudiIndirizzo();
     mostraPunto();
@@ -497,6 +519,8 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     puntoEl.hidden = true;
     azioniEl.hidden = true;
     linkForm.hidden = true;
+    host.hidden = true;                      // ZONA-6: annullato, il pannello torna nascosto
+    host.open = false;
     aggiorna();
   };
 
@@ -508,7 +532,7 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     puntoEl.hidden = true;
     linkForm.hidden = true;
     azioniEl.hidden = false;
-    host.open = true;
+    mostraPannello();
     sceltoTesto.textContent = `Punto scelto: ${chosenPointText(punto)}`;
     sceltoNota.textContent = nota;
     carte.replaceChildren();
@@ -531,7 +555,8 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     mostraPunto();
   });
   for (const b of host.querySelectorAll('[data-insert-cancel]')) b.addEventListener('click', azzera);
-  sceltaBtn.addEventListener('click', () => { impostaTocco(!modoTocco); host.open = true; });
+  q('[data-insert-close]').addEventListener('click', azzera);
+  avvisoAnnulla.addEventListener('click', () => { if (punto) impostaTocco(false); else azzera(); });
   map.on('click', (e) => { if (modoTocco) scegli(e && e.lngLat); });
   map.on('zoomend', aggiorna);
 
@@ -568,7 +593,7 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
     const annullaPressione = () => { if (pressione) { clearTimeout(pressione.timer); pressione = null; } };
     contenitore.addEventListener('pointerdown', (ev) => {
       if (!ev || ev.pointerType !== 'touch' || !ev.isPrimary) return;
-      if (ev.target && typeof ev.target.closest === 'function' && ev.target.closest('button, a, input, .maplibregl-ctrl, .maplibregl-marker, [data-gps]')) return;
+      if (ev.target && typeof ev.target.closest === 'function' && ev.target.closest('button, a, input, .maplibregl-ctrl, .maplibregl-marker, [data-gps-status], [data-zone-add-box], [data-zone-pick-hint]')) return;
       annullaPressione();
       const x = ev.clientX;
       const y = ev.clientY;
@@ -947,10 +972,32 @@ export function mountInserimento(host, { map, ml, vivo = () => true, onLinked = 
       clearChosenPoint();
       confermato = false;
     }
-    host.open = true;
+    impostaTocco(false);
+    map.jumpTo({ center: [Number(p.lng), Number(p.lat)], zoom: Math.max(map.getZoom(), MIN_CONFIRM_ZOOM + 1) });
     // ZONA-5: stesso meccanismo del gesto: punto provvisorio + ricerca dell'indirizzo da confermare
     scegli({ lng: Number(p.lng), lat: Number(p.lat) }, { nota: `Punto dal GPS (${accuracyText(p.accuracy).toLowerCase()}): controllalo e correggilo se serve.`, lookup: true });
     if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
-  return { placeProvisional };
+  /** ZONA-6, «+ → Scegli un punto sulla mappa»: il prossimo tocco sulla mappa e' il punto. */
+  function startPick() {
+    if (confermato) {
+      clearChosenPoint();
+      confermato = false;
+      mostraPunto();
+    }
+    impostaTocco(true);
+  }
+
+  /** ZONA-6, «+ → Cerca un indirizzo»: il pannello con la ricerca, pronto a scrivere. */
+  function startSearch() {
+    mostraPannello();
+    const campo = q('[data-geocode-input]');
+    if (campo && typeof campo.focus === 'function') campo.focus();
+    if (typeof host.scrollIntoView === 'function') host.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  /** C'e' un inserimento in corso (punto scelto o scelta col tocco)? */
+  const busy = () => modoTocco || punto !== null || !host.hidden;
+
+  return { placeProvisional, startPick, startSearch, busy };
 }

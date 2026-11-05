@@ -62,6 +62,11 @@ export function listSellers(query = '') {
   return request('GET', `/api/crm/sellers${query ? `?${query}` : ''}`);
 }
 
+/** ZONA-6: per la mappa, ultimo contatto, prossima azione e «Da ricontattare» per edificio/immobile. */
+export function zoneSummary() {
+  return request('GET', '/api/crm/sellers/zone');
+}
+
 /** «Vende»: idempotente sul server per (immobile, contatto). `leadId` per la
  *  scelta esplicita fra lead candidati, `newLead` per crearne comunque uno. */
 export function activateSeller(propertyId, contactId, { leadId = null, newLead = false } = {}) {

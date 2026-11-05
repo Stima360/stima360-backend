@@ -55,7 +55,9 @@ def _apri_zona(page, url):
     page.wait_for_selector("canvas.finta")
     page.wait_for_function("document.querySelector('[data-map-status]').hidden")
     page.wait_for_selector("[data-to-place] summary")
-    page.evaluate("document.querySelector('[data-insert-panel]').open = true")
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: il pannello si apre dal «+» della mappa («Cerca un indirizzo»)
+    page.click("[data-zone-add]")
+    page.click("[data-zone-add-search]")
 
 
 def _punto_dalla_ricerca(page, testo="Via Roma 25, Alba Adriatica"):
@@ -101,6 +103,10 @@ def test_zona2_ricerca_punto_nuovo_edificio_posizione_collegata_e_marker(server,
         page.wait_for_selector("[data-insert-point][hidden]", state="attached")
         assert page.evaluate("window.__ml.markers.filter((k) => k.el.isConnected).length") == 0
         assert scritture == []
+        # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: «Annulla» richiude il pannello; si riapre dal «+»
+        assert page.evaluate("document.querySelector('[data-insert-panel]').hidden") is True
+        page.click("[data-zone-add]")
+        page.click("[data-zone-add-search]")
         _punto_dalla_ricerca(page)
         page.click("[data-insert-confirm]")
         page.wait_for_selector("[data-insert-actions]:not([hidden])")
@@ -156,7 +162,9 @@ def test_zona2_ricerca_punto_nuovo_edificio_posizione_collegata_e_marker(server,
     assert consumato == {"azioni": True, "punto": True, "segnaposti": 0}
     for misura in (misura_zona, misura_dopo):
         assert misura["scroll"] <= misura["inner"], misura
-    assert tocco >= 44
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: il pannello sta ora sotto la mappa (alta in `svh`, quindi a una
+    # posizione non intera): bottom - top di un pulsante alto 44 px puo' valere 43.99997. Si confronta al centesimo.
+    assert round(tocco, 2) >= 44
 
 
 def test_zona2_collegamento_fallito_nessun_doppione_poi_riprova_e_collega_esistente(server, monkeypatch):
@@ -214,8 +222,11 @@ def test_zona2_collegamento_fallito_nessun_doppione_poi_riprova_e_collega_esiste
         page.wait_for_selector(f"[data-building-panel='{bid}']")
 
         # «Collega un edificio esistente» su un nuovo punto (tocco sulla mappa)
-        page.evaluate("document.querySelector('[data-insert-panel]').open = true")
-        page.click("[data-insert-pick]")
+        # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: il pannello si apre dal «+» della mappa («Cerca un indirizzo»)
+        page.click("[data-zone-add]")
+        page.click("[data-zone-add-search]")
+        page.click("[data-zone-add]")          # ZONA-6: «+ → Scegli un punto sulla mappa»
+        page.click("[data-zone-add-pick]")
         page.evaluate(f"{MAPPA}.setZoom(18)")
         page.evaluate(f"{MAPPA}.fire('click', {{ lngLat: {{ lng: 13.9301234, lat: 42.8301234 }} }})")
         page.wait_for_selector("[data-insert-point]:not([hidden])")

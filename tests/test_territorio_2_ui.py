@@ -237,7 +237,10 @@ def test_c01_la_rotta_crea_una_mappa_e_non_chiama_il_crm(staged):  # noqa: F811
     # della lista, una pagina qui); nessun'altra chiamata al CRM e nessuna scrittura.
     # SENTINELLA AGGIORNATA DA STIMA360 ZONA-3: la mappa legge anche gli immobili indipendenti
     # verificati (GET della lista leggera, una pagina qui); sempre e solo letture, nessuna scrittura.
-    assert [u.split("?")[0] for u in _crm(out)] == ["/api/property/buildings", "/api/property/properties/positions"], _crm(out)
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: in piu' UNA lettura di ultimo contatto / prossima azione
+    # (scheda rapida e filtro «Da ricontattare»), sola lettura.
+    assert [u.split("?")[0] for u in _crm(out)] == ["/api/property/buildings", "/api/property/properties/positions",
+                                                    "/api/crm/sellers/zone"], _crm(out)
     assert all(c["m"] == "GET" for c in out["calls"]), out["calls"]
 
 

@@ -210,6 +210,10 @@ const stato = () => ({ punto: visibile('[data-insert-point]'), azioni: visibile(
                        hint: pq('[data-insert-hint]') ? pq('[data-insert-hint]').textContent : null });
 const passo = () => { const el = D() && D().querySelector('[data-wizard-step]'); return el ? el.dataset.wizardStep : null; };
 const pronto = () => { const b = D() && D().querySelector('[data-ready-building]'); return b ? { stato: b.dataset.readyState, testo: b.visibleText() } : null; };
+// SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: il punto si sceglie toccando la mappa dal «+» della mappa
+// («Scegli un punto sulla mappa»); l'avviso sulla mappa dice che la modalita' e' attiva.
+async function sceglieSullaMappa() { C().querySelector('[data-zone-add]').dispatch('click'); await wait(); C().querySelector('[data-zone-add-pick]').dispatch('click'); await wait(); }
+const premuto = () => (C().querySelector('[data-zone-pick-hint]').hidden ? 'false' : 'true');
 """
 
 GEOCODE = {"query": "Via Roma 25, Tortoreto", "cached": False, "attribution": "© OpenStreetMap contributors", "results": [
@@ -327,16 +331,16 @@ def test_b02_annulla_non_scrive_e_il_punto_resta_in_memoria_fra_le_pagine(staged
       // tocco sulla mappa SOLO in modalita' «scegli il punto»
       M().emit('click', { lngLat: { lng: 13.9262, lat: 42.8341 } }); await wait();
       const senzaModo = stato();
-      pq('[data-insert-pick]').dispatch('click'); await wait();
+      await sceglieSullaMappa();
       M().emit('click', { lngLat: { lng: 13.9262, lat: 42.8341 } }); await wait();
-      const conModo = { ...stato(), premuto: pq('[data-insert-pick]').getAttribute('aria-pressed') };
+      const conModo = { ...stato(), premuto: premuto() };
       // trascinamento = correzione
       K()[0].setLngLat([13.9265, 42.8345]); K()[0].fire('dragend'); await wait();
       const trascinato = stato().testo;
       pq('[data-insert-cancel]').dispatch('click'); await wait();
-      const annullato = { ...stato(), premuto: pq('[data-insert-pick]').getAttribute('aria-pressed'), scritture: scritte() };
+      const annullato = { ...stato(), premuto: premuto(), scritture: scritte() };
       // di nuovo: scelta, conferma, poi via su un'altra pagina e ritorno
-      pq('[data-insert-pick]').dispatch('click'); await wait();
+      await sceglieSullaMappa();
       M().emit('click', { lngLat: { lng: 13.9262, lat: 42.8341 } }); await wait();
       M().setZoom(17); await wait();
       await confermaPunto();
@@ -428,7 +432,7 @@ def test_b03_collegamento_fallito_nessun_doppione_riprova_e_recupero_dal_posizio
 def test_b04_collega_un_edificio_esistente_e_nuovo_immobile_con_la_nota(staged):  # noqa: F711
     scenario = r"""
       await wait(); await wait(); M().emit('load'); await wait();
-      pq('[data-insert-pick]').dispatch('click'); await wait();
+      await sceglieSullaMappa();
       M().emit('click', { lngLat: { lng: 13.915, lat: 42.803 } }); await wait();
       M().setZoom(18); await wait();
       await confermaPunto();
@@ -446,7 +450,7 @@ def test_b04_collega_un_edificio_esistente_e_nuovo_immobile_con_la_nota(staged):
       const dopo = { hash: window.location.hash, scritture: scritte(), punti: (M().sources['stima-buildings'] || { data: { features: [] } }).data.features.map((f) => f.id),
                      stato: stato() };
       // «Nuovo immobile»: la procedura esistente, percorso da scegliere, con la nota gia' letta
-      pq('[data-insert-pick]').dispatch('click'); await wait();
+      await sceglieSullaMappa();
       M().emit('click', { lngLat: { lng: 13.915, lat: 42.803 } }); await wait(); M().setZoom(18); await wait();
       await confermaPunto();
       await azione('unit');

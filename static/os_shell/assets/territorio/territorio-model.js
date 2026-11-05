@@ -323,7 +323,8 @@ export function zoomForAccuracy(metri) {
 export function gpsErrorText(codice) {
   const c = codice && typeof codice === 'object' ? codice.code : codice;
   if (c === 'unsupported') return 'Questo browser non offre la posizione: cerca l’indirizzo o tocca il punto sulla mappa.';
-  if (c === 1) return 'Permesso negato: consenti al browser di usare la posizione per «La mia posizione», oppure cerca l’indirizzo.';
+  // ZONA-6: niente piu' pulsante «La mia posizione»: la posizione si usa da Zona
+  if (c === 1) return 'Permesso negato: consenti al browser di usare la posizione per Zona, oppure cerca l’indirizzo.';
   if (c === 2) return 'Posizione non disponibile ora: riprova all’aperto, oppure cerca l’indirizzo.';
   if (c === 3) return 'Tempo scaduto: nessuna posizione ricevuta. Riprova, oppure cerca l’indirizzo.';
   return 'Posizione non ricevuta: riprova, oppure cerca l’indirizzo.';
@@ -385,4 +386,87 @@ export function addressSummary(campi) {
   const via = [f.road, f.house_number].filter(Boolean).join(' ');
   const luogo = [f.postcode, f.town].filter(Boolean).join(' ');
   return [via, luogo].filter(Boolean).join(', ') || 'Indirizzo non indicato';
+}
+
+// ---------------------------------------------------------------------------
+// STIMA360 ZONA-6 - scheda rapida e filtri rapidi
+//
+// Ultimo contatto e prossima azione arrivano da GET /api/crm/sellers/zone
+// (crm/sellers.py::zone_summary: le regole della worklist Venditori). Qui solo
+// come leggerli e mostrarli; nessun dato inventato: cio' che manca non si dice.
+//
+//   Tutti            gli edifici e gli immobili indipendenti con posizione
+//                    verificata (la mappa di sempre);
+//   Da verificare    gli edifici con coordinate nel CRM ma posizione non
+//                    confermata (`positionStatus` = 'unverified'): punti grigi;
+//   Da ricontattare  edifici e immobili con almeno un venditore la cui
+//                    prossima azione e' scaduta (la vista «Da richiamare»).
+// ---------------------------------------------------------------------------
+
+export const ZONE_FILTERS = Object.freeze([
+  { key: 'all', label: 'Tutti' },
+  { key: 'verify', label: 'Da verificare' },
+  { key: 'recontact', label: 'Da ricontattare' },
+]);
+
+/** La risposta di zone_summary indicizzata per id (numero): edifici e immobili. */
+export function zoneIndex(risposta) {
+  const r = risposta && typeof risposta === 'object' ? risposta : {};
+  const indice = { buildings: new Map(), properties: new Map() };
+  for (const [lista, chiave, mappa] of [[r.buildings, 'building_id', indice.buildings], [r.properties, 'property_id', indice.properties]]) {
+    for (const v of Array.isArray(lista) ? lista : []) {
+      const id = v ? Number(v[chiave]) : NaN;
+      if (Number.isInteger(id) && id > 0) mappa.set(id, v);
+    }
+  }
+  return indice;
+}
+
+/** Gli id «Da ricontattare» (edifici e immobili). */
+export function recontactIds(indice) {
+  const scegli = (mappa) => [...(mappa || new Map()).entries()].filter(([, v]) => v && v.to_recontact === true).map(([id]) => id);
+  return { buildings: scegli(indice && indice.buildings), properties: scegli(indice && indice.properties) };
+}
+
+const TIPI_CONTATTO = { call: 'Telefonata', meeting: 'Incontro', note: 'Nota', email: 'Email', whatsapp: 'WhatsApp' };
+
+/**
+ * Le righe della scheda rapida, SOLO quelle disponibili:
+ *   [{ key: 'last', label: 'Ultimo contatto', text }, { key: 'next', label: 'Prossima azione', text, overdue }]
+ */
+export function quickFacts(voce) {
+  const righe = [];
+  const ultimo = voce && voce.last_contact;
+  if (ultimo && ultimo.occurred_at) {
+    const quando = dataItaliana(ultimo.occurred_at);
+    const tipo = TIPI_CONTATTO[ultimo.type] || '';
+    if (quando) righe.push({ key: 'last', label: 'Ultimo contatto', text: [tipo, quando].filter(Boolean).join(', ') });
+  }
+  const prossima = voce && voce.next_action;
+  if (prossima && prossima.due_at) {
+    const quando = dataItaliana(prossima.due_at);
+    const titolo = testoBreve(prossima.title) || 'Prossima azione';
+    if (quando) {
+      righe.push({ key: 'next', label: 'Prossima azione', overdue: prossima.overdue === true,
+        text: `${titolo}, ${quando}${prossima.overdue === true ? ' (scaduta)' : ''}` });
+    }
+  }
+  return righe;
+}
+
+/** Gli edifici «Da verificare» (coordinate presenti, posizione non confermata), con lng/lat validati. */
+export function unverifiedPoints(gruppi) {
+  const esito = [];
+  for (const { building } of (gruppi && gruppi.unverified) || []) {
+    const c = parseCoordinates(building);
+    if (c && c.valid) esito.push({ building, lng: c.lng, lat: c.lat });
+  }
+  return esito;
+}
+
+/** Il testo del filtro con il conteggio: «Da verificare · 3». `null` = conteggio non noto. */
+export function filterLabel(filtro, n) {
+  const voce = ZONE_FILTERS.find((f) => f.key === filtro);
+  const nome = voce ? voce.label : filtro;
+  return Number.isInteger(n) ? `${nome} · ${n}` : nome;
 }

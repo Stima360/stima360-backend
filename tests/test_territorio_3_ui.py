@@ -288,6 +288,12 @@ def test_c01_solo_il_verificato_diventa_un_punto_gli_altri_da_posizionare(staged
     assert "limit=200" in _get(out, "/api/property/buildings?")[0] and "offset=0" in _get(out, "/api/property/buildings?")[0]
 
 
+ZONA_9 = {"buildings": [{"building_id": 9, "to_recontact": True,
+                         "last_contact": {"type": "call", "occurred_at": "2026-10-12T08:30:00+00:00"},
+                         "next_action": {"title": "Richiamare", "due_at": "2020-01-01T08:00:00+00:00", "overdue": True, "source": "task"}}],
+           "properties": []}
+
+
 @node
 def test_c02_clic_sul_punto_attivo_riquadro_di_solo_testo_e_apri_scheda(staged):  # noqa: F811
     scenario = r"""
@@ -307,13 +313,18 @@ def test_c02_clic_sul_punto_attivo_riquadro_di_solo_testo_e_apri_scheda(staged):
       await window._fire('hashchange'); await wait(); await wait();
       report({ primo, secondo, hash: window.location.hash, rimossa: __maps[0].removed });
     """
-    out = _run(staged, scenario, [rt.ok(QUATTRO)], extra=[("GET", "/api/property/buildings/9", [rt.ok(SCHEDA_9)])])
+    out = _run(staged, scenario, [rt.ok(QUATTRO)], extra=[("GET", "/api/property/buildings/9", [rt.ok(SCHEDA_9)]),
+                                                          ("GET", "/api/crm/sellers/zone", [rt.ok(ZONA_9)])])
     p = out["primo"]
     assert p["at"] == [13.9262, 42.8341] and p["stato"] == {"selected": True} and p["attivo"] == "9"
     assert p["titolo"] == "Palazzina <b>Mare</b>" and p["figli"] == 0         # testo, mai HTML
     assert "Via Roma 10" in p["testo"] and "Alba Adriatica · Centro" in p["testo"]
-    assert "Unità dichiarate: 6 · censite: 5 · da completare: 2" in p["testo"]   # dalla scheda (getBuilding)
-    assert p["bottone"] == "Apri scheda edificio"
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: il riquadro e' la scheda rapida (indirizzo, ultimo contatto,
+    # prossima azione, «Apri scheda completa»); i numeri del censimento restano nel pannello sotto la mappa.
+    assert "Unità dichiarate" not in p["testo"]
+    assert "Ultimo contatto" in p["testo"] and "Telefonata, 12/10/2026" in p["testo"]
+    assert "Prossima azione" in p["testo"] and "Richiamare, 01/01/2020 (scaduta)" in p["testo"]
+    assert p["bottone"] == "Apri scheda completa"
     s = out["secondo"]
     assert s["popup"] == 2 and s["primoChiuso"] is True and s["stato"] == {"selected": True}
     assert s["letture"] == 1                                                    # la scheda: una volta sola

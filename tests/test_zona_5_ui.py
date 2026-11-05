@@ -86,7 +86,10 @@ def test_a02_statici_una_ricerca_per_gesto_mai_scrivendo_gesti_con_soglie():
     assert ins.count("api.reverseGeocode(") == 1 and "async function cercaIndirizzo()" in ins
     assert "map.doubleClickZoom.disable()" in ins and "map.on('dblclick'" in ins
     assert "const PRESSIONE_MS = 600;" in ins and "const PRESSIONE_PX = 10;" in ins
-    assert "ev.pointerType !== 'touch' || !ev.isPrimary" in ins and "closest('button, a, input, .maplibregl-ctrl, .maplibregl-marker, [data-gps]')" in ins
+    assert "ev.pointerType !== 'touch' || !ev.isPrimary" in ins
+    # SENTINELLA AGGIORNATA DA STIMA360 ZONA-6: i comandi sulla mappa sono ora lo stato del GPS, il «+» col suo menu
+    # e l'avviso «tocca il punto» (il pulsante «La mia posizione» non c'e' piu')
+    assert "closest('button, a, input, .maplibregl-ctrl, .maplibregl-marker, [data-gps-status], [data-zone-add-box], [data-zone-pick-hint]')" in ins
     assert "daTocco(e.originalEvent) || suMarker(e)" in ins
     # la ricerca inversa SOLO da gesto / GPS / «Cerca di nuovo»: mai da trascinamento, zoom, spostamento
     for riga in ins.splitlines():
@@ -224,7 +227,7 @@ def test_b02_pressione_prolungata_solo_ferma_da_touch_e_non_sui_comandi(staged):
       const breve = { punto: stato().punto, inverse: inverse().length };
       await pressione({ tipo: 'mouse' });                               // mouse: non e' una pressione prolungata
       const mouse = { punto: stato().punto, inverse: inverse().length };
-      await pressione({ target: gq('[data-gps-button]') });             // su un comando della mappa
+      await pressione({ target: C().querySelector('[data-zone-add]') });  // su un comando della mappa (il «+»)
       const comando = { punto: stato().punto, inverse: inverse().length };
       await pressione({ attendi: 300 });                                // non ancora: il tempo non e' passato
       const presto = { punto: stato().punto };
@@ -232,7 +235,7 @@ def test_b02_pressione_prolungata_solo_ferma_da_touch_e_non_sui_comandi(staged):
       const gesto = { ...stato(), indirizzo: indirizzo(), inverse: inverse(), segnaposto: K()[0].p };
       report({ trascinato, breve, mouse, comando, presto, gesto });
     """
-    pre = HELPERS + "\nconst gq = (s) => C().querySelector('[data-gps]').querySelector(s);\n"
+    pre = HELPERS
     out = t2b3._run(staged, pre + scenario, _rotte(), "#/edifici/mappa")
     for nome in ("trascinato", "breve", "mouse", "comando"):
         assert out[nome] == {"punto": False, "inverse": 0}, nome

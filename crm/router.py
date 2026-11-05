@@ -123,6 +123,12 @@ def list_sellers(
                       city=city, search=search, limit=limit, offset=offset)
 
 
+@router.get("/sellers/zone")
+def sellers_zone_summary(ctx: OperatorContext = Depends(legacy_basic_agency_context)):
+    """ZONA-6: ultimo contatto, prossima azione e «Da ricontattare» per la mappa (sola lettura)."""
+    return _venditori(sellers.zone_summary, ctx)
+
+
 @router.post("/sellers")
 def activate_seller(payload: SellerActivate, ctx: OperatorContext = Depends(legacy_basic_agency_context)):
     if payload.lead_id is not None and payload.new_lead:
