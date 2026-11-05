@@ -21,7 +21,7 @@ import json
 import os
 import subprocess
 import uuid
-from datetime import datetime, time, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -66,6 +66,51 @@ def _task(app, titolo, due, *, contatto=None, lead=None, priorita="normal", stat
                due if stato == "completed" else None, json.dumps(metadata or {})))[0][0]
 
 
+def _venditore(app, nome, telefono, agente, *, ricontatto_giorni=None, ultimo_contatto_giorni=None):
+    """Un venditore della worklist: lead SELL con il suo immobile (relazione seller)."""
+    cid = _contatto(app, nome, telefono, agente)
+    lid = _lead(app, cid, "contacted", agente=agente)
+    if ricontatto_giorni is not None:
+        _q(app, "UPDATE leads SET next_action_at = NOW() - make_interval(days => %s) WHERE id = %s",
+           (ricontatto_giorni, lid))
+    pid = _property(app, mandate=False)
+    _q(app, "INSERT INTO property_leads (property_id, lead_id, relation_type) VALUES (%s, %s, 'seller')", (pid, lid))
+    _q(app, "INSERT INTO property_contacts (property_id, contact_id, role) VALUES (%s, %s, 'owner')", (pid, cid))
+    if ultimo_contatto_giorni is not None:
+        _q(app, "INSERT INTO activities (agency_id, contact_id, lead_id, property_id, activity_type, direction, "
+                "description, occurred_at, created_by_user_id) VALUES (%s, %s, %s, %s, 'call', 'out', "
+                "'Telefonata sintetica', NOW() - make_interval(days => %s), %s)",
+           (app["ids"]["a"], cid, lid, pid, ultimo_contatto_giorni, app["ids"][agente]))
+    return cid, lid, pid
+
+
+def _acquisizione(app, owner, nome, agente, giorni_fermo):
+    """Un'acquisizione vera (API), con il sopralluogo fatto e poi ferma da `giorni_fermo` giorni."""
+    pid = _property(app, mandate=False)
+    cid = _contatto(app, nome, "3330001234", agente)
+    r = owner.post(f"/api/property/properties/{pid}/contacts", json={"contact_id": cid, "role": "owner",
+                                                                     "is_primary": True})
+    assert r.status_code == 201, r.text
+    futuro = (datetime.now(timezone.utc) + timedelta(days=40 + giorni_fermo)).replace(minute=0, second=0, microsecond=0)
+    r = owner.post("/api/acquisitions", json={
+        "property_id": pid, "owner_contact_id": cid, "source": "referral",
+        "appointment": {"start_at": futuro.isoformat(), "client_request_id": str(uuid.uuid4()),
+                        "assigned_user_id": app["ids"][agente]}})
+    assert r.status_code == 201, r.text
+    acq = r.json()
+    passato = (datetime.now(timezone.utc) - timedelta(days=giorni_fermo)).replace(minute=0, second=0, microsecond=0)
+    _q(app, "UPDATE appointments SET start_at = %s, end_at = %s WHERE id = %s",
+       (passato, passato + timedelta(hours=1), acq["appointment_id"]))
+    versione = _q(app, "SELECT version FROM appointments WHERE id = %s", (acq["appointment_id"],))[0][0]
+    r = owner.post(f"/api/appointments/{acq['appointment_id']}/complete", json={"version": versione})
+    assert r.status_code == 200, r.text
+    _q(app, "SET session_replication_role = replica; "
+            "UPDATE acquisitions SET updated_at = %s WHERE id = %s; "
+            "UPDATE acquisition_events SET occurred_at = %s WHERE acquisition_id = %s",
+       (passato, acq["id"], passato, acq["id"]))
+    return acq["id"], cid
+
+
 def _appuntamento(app, client, tipo, inizio, minuti, agente, contatto, stato="scheduled", finale=None):
     """Creato con l'API vera nel futuro, poi portato all'orario (e allo stato) del caso."""
     provvisorio = datetime.now(timezone.utc) + timedelta(days=30, hours=len(app.setdefault("_n", [])) * 2)
@@ -90,10 +135,36 @@ SCRIPT = r"""
 const { chromium, devices } = require('playwright');
 const [base, shots, emailOwner, emailAgent, password, t1, t2, oggi, emailAdmin, emailSuper, agenziaA] = process.argv.slice(2);
 (async () => {
-  const out = { errors: [], owner: {}, agent: {}, mobile: {} };
+  const out = { errors: [], owner: {}, agent: {}, mobile: {}, viva: {} };
   const browser = await chromium.launch();
   const pausa = (p, ms) => p.waitForTimeout(ms);
-  async function entra(ctx, email) {
+  // SCRIVANIA VIVA: la pagina come appare all'apertura (foto facoltativa), poi
+  // si aprono «Attivita' e verifiche» per i passi operativi.
+  async function viva(page) {
+    return page.evaluate(() => {
+      const q = (s) => document.querySelector(s);
+      const y = (n) => (n ? Math.round(n.getBoundingClientRect().top + window.scrollY) : null);
+      return {
+        greeting: (q('[data-scrivania-greeting]') || {}).textContent,
+        quote: (q('[data-scrivania-quote] blockquote') || {}).textContent,
+        briefing: [...document.querySelectorAll('[data-scrivania-briefing] .scrivania-briefing-text p')].map((p) => p.textContent),
+        radar: [...document.querySelectorAll('[data-scrivania-radar]')].map((r) => ({
+          key: r.dataset.scrivaniaRadar, text: r.innerText,
+          hrefs: [...r.querySelectorAll('a')].map((a) => [a.textContent.trim(), a.getAttribute('href')]) })),
+        radarFoot: (q('.scrivania-radar-foot') || {}).textContent || '',
+        radarEmpty: (q('.scrivania-radar-empty') || {}).textContent || '',
+        secondaryHidden: !!(q('.scrivania-secondary-body') || {}).hidden,
+        chips: [...document.querySelectorAll('.scrivania-secondary-chips .scrivania-chip')].map((c) => c.textContent),
+        adviceHidden: !!(q('.scrivania-advice-answer') || {}).hidden,
+        y: { hero: y(q('[data-scrivania-hero]')), briefing: y(q('[data-scrivania-briefing]')),
+             radar: y(q('[data-scrivania-section="radar"]')), agenda: y(q('[data-scrivania-section="agenda"]')),
+             advice: y(q('[data-scrivania-advice]')), secondary: y(q('[data-scrivania-secondary]')) },
+        x: { radar: Math.round((q('[data-scrivania-section="radar"]') || { getBoundingClientRect: () => ({ left: 0 }) }).getBoundingClientRect().left),
+             agenda: Math.round((q('[data-scrivania-section="agenda"]') || { getBoundingClientRect: () => ({ left: 0 }) }).getBoundingClientRect().left) },
+      };
+    });
+  }
+  async function entra(ctx, email, chiave = null, foto = null) {
     const page = await ctx.newPage();
     page.on('pageerror', (e) => out.errors.push(String(e)));
     page.on('console', (m) => { if (m.type() === 'error' && !/favicon|Failed to load resource/.test(m.text())) out.errors.push(m.text()); });
@@ -103,6 +174,10 @@ const [base, shots, emailOwner, emailAgent, password, t1, t2, oggi, emailAdmin, 
     await page.click('#login-form button[type=submit]');
     await page.waitForSelector('[data-scrivania-kpi]', { timeout: 20000 });
     await pausa(page, 500);
+    if (chiave) out.viva[chiave] = await viva(page);
+    if (foto) await page.screenshot({ path: `${shots}/${foto}`, fullPage: true });
+    await page.click('[data-scrivania-toggle-tasks]');
+    await pausa(page, 300);
     return page;
   }
   async function leggi(page) {
@@ -144,7 +219,7 @@ const [base, shots, emailOwner, emailAgent, password, t1, t2, oggi, emailAdmin, 
   try {
     // ---- 01 titolare, desktop
     const ctxO = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
-    let page = await entra(ctxO, emailOwner);
+    let page = await entra(ctxO, emailOwner, 'owner', 'viva-titolare-desktop.png');
     if (!(await page.$('[data-scrivania-mode="agency"][aria-pressed="true"]'))) {
       await page.click('[data-scrivania-mode="agency"]');
       await pausa(page, 300);
@@ -203,6 +278,20 @@ const [base, shots, emailOwner, emailAgent, password, t1, t2, oggi, emailAdmin, 
     await page.screenshot({ path: `${shots}/scrivania-apre-agenda.png` });
     await page.keyboard.press('Escape');
 
+    // STIMA360 ti consiglia e il primo collegamento del Radar
+    await page.goto(`${base}/os/#/oggi`);
+    await page.waitForSelector('[data-scrivania-ask]', { timeout: 15000 });
+    await pausa(page, 800);
+    await page.click('[data-scrivania-ask]');
+    await pausa(page, 300);
+    out.owner.advice = await page.$$eval('[data-scrivania-advice-item]', (v) => v.map((x) => ({
+      kind: x.dataset.scrivaniaAdviceItem, text: x.innerText, href: (x.querySelector('a') || { getAttribute: () => null }).getAttribute('href') })));
+    await page.screenshot({ path: `${shots}/viva-consigli.png` });
+    const primoRadar = await page.$eval('[data-scrivania-radar] .scrivania-actions a:not([href^="tel:"])', (a) => a.getAttribute('href'));
+    await page.click('[data-scrivania-radar] .scrivania-actions a:not([href^="tel:"])');
+    await pausa(page, 1500);
+    out.owner.radarLink = { href: primoRadar, url: page.url(), text: (await page.evaluate(() => document.querySelector('#content').innerText)).slice(0, 400) };
+
     // nuovo appuntamento: la creazione dell'Agenda
     await page.goto(`${base}/os/#/oggi`);
     await page.waitForSelector('[data-scrivania-new-appointment]', { timeout: 15000 });
@@ -215,12 +304,20 @@ const [base, shots, emailOwner, emailAgent, password, t1, t2, oggi, emailAdmin, 
 
     // ---- 03 agente, amministratore, Superadmin dentro l'agenzia A
     const ctxA = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
-    page = await entra(ctxA, emailAgent);
+    page = await entra(ctxA, emailAgent, 'agent', 'viva-agente-desktop.png');
     out.agent = await leggi(page);
     await page.screenshot({ path: `${shots}/scrivania-agente.png`, fullPage: true });
+    // il collegamento «Apri acquisizione» del Radar porta alla scheda vera
+    const acq = await page.$('[data-scrivania-radar^="acquisition:"] a');
+    if (acq) {
+      out.agent.acqHref = await acq.getAttribute('href');
+      await acq.click();
+      await pausa(page, 1500);
+      out.agent.acqPage = { url: page.url(), text: (await page.evaluate(() => document.querySelector('#content').innerText)).slice(0, 400) };
+    }
     await ctxA.close();
     const ctxD = await browser.newContext({ viewport: { width: 1280, height: 900 } });
-    page = await entra(ctxD, emailAdmin);
+    page = await entra(ctxD, emailAdmin, 'admin');
     out.admin = await leggi(page);
     await ctxD.close();
     const ctxS = await browser.newContext({ viewport: { width: 1280, height: 900 } });
@@ -253,8 +350,9 @@ const [base, shots, emailOwner, emailAgent, password, t1, t2, oggi, emailAdmin, 
 
     // ---- 04 smartphone (titolare)
     const ctxM = await browser.newContext({ ...devices['iPhone 13'] });
-    page = await entra(ctxM, emailOwner);
+    page = await entra(ctxM, emailOwner, 'mobile', 'viva-mobile.png');
     out.mobile = await leggi(page);
+    out.mobile.radarTap = await page.$$eval('.scrivania-radar-item .scrivania-actions .btn', (b) => b.map((x) => Math.round(x.getBoundingClientRect().height)));
     await page.screenshot({ path: `${shots}/scrivania-mobile.png`, fullPage: true });
     out.mobile.tap = await page.$$eval('.scrivania-task .scrivania-actions .btn', (b) => b.map((x) => Math.round(x.getBoundingClientRect().height)));
     await ctxM.close();
@@ -316,6 +414,14 @@ def test_la_scrivania_nel_browser(app, server, tmp_path):
             "VALUES (%s, %s, 'call', 'out', 'Telefonata sintetica con Mario', NOW()), "
             "(%s, %s, 'system', 'internal', 'Task generato da FLOW-R001 per lead #1', NOW())",
        (ids["a"], c1, ids["a"], c1))
+    # SCRIVANIA VIVA - il Radar: venditori, valutazioni dal sito, acquisizioni
+    c_franco, l_franco, _ = _venditore(app, "Franco Ricontatto", "3331230001", "agent_a", ricontatto_giorni=2)
+    c_giulia, l_giulia, _ = _venditore(app, "Giulia Silenzio", "3331230002", "agent_a", ultimo_contatto_giorni=20)
+    c_carla, l_carla, _ = _venditore(app, "Carla Collega", "3331230003", "agent2_a", ricontatto_giorni=5)
+    c_vera = _contatto(app, "Vera Valutazione", "3331230004")
+    l_vera = _lead(app, c_vera, "new", source="public_stima", pipeline="general")
+    acq_mia, c_gino = _acquisizione(app, owner, "Gino Fermo", "agent_a", 10)
+    acq_collega, c_rita = _acquisizione(app, owner, "Rita Ferma", "agent2_a", 12)
 
     foto = Path(os.environ.get("SCRIVANIA_SHOTS") or tmp_path)
     foto.mkdir(parents=True, exist_ok=True)
@@ -351,11 +457,11 @@ def test_la_scrivania_nel_browser(app, server, tmp_path):
 
     # ---- 01 titolare, Agenzia
     p = out["owner"]["prima"]
-    assert p["title"] == "La tua scrivania" and p["date"].strip()
+    assert p["date"].strip()
     assert "Scrivania" in p["nav"] and "Oggi" not in p["nav"], p["nav"]
     assert p["tabs"][:2] == ["Scrivania", "Attività"], p["tabs"]
     assert p["mode"] == [["mine", "false"], ["agency", "true"]]
-    assert p["kpi"] == {"recuperare": "3", "agenda": "2", "nuovi": "1"}, p["kpi"]
+    assert p["kpi"] == {"radar": "6", "agenda": "2", "recuperare": "3", "nuovi": "2"}, p["kpi"]
     # in ordine di urgenza, raggruppati per cliente, ogni task distinto
     assert [g["tasks"] for g in p["groups"]] == [[str(t2), str(t1)], [str(t7)], [str(t3)]], p["groups"]
     assert [g["client"] for g in p["groups"]] == ["Mario Scaduto", "Sara Doppione", "Lucia Oggi"]
@@ -377,7 +483,9 @@ def test_la_scrivania_nel_browser(app, server, tmp_path):
     assert "Un’attività aperta non ha una scadenza" in p["body"]
     assert "Prendi in carico" not in p["buttons"]
     # nuovi contatti: Paolo si', Sara no (ha gia' un task)
-    assert [x["id"] for x in p["leads"]] == [str(l3)], p["leads"]
+    # Vera (dal sito, senza agente) la vede solo chi vede l'agenzia
+    assert [x["id"] for x in p["leads"]] == [str(l_vera), str(l3)], p["leads"]
+    p["leads"] = [x for x in p["leads"] if x["id"] == str(l3)]
     assert "Paolo Nuovo" in p["leads"][0]["text"] and "Richiesta di valutazione dal sito" in p["leads"][0]["text"]
     assert dict(p["leads"][0]["hrefs"]) == {"Chiama": "tel:3334445555", "Apri contatto": f"#/contatti/{c3}"}
     # agenda di oggi per orario; domani senza l'annullato
@@ -410,7 +518,7 @@ def test_la_scrivania_nel_browser(app, server, tmp_path):
     assert (nuova.date(), nuova.hour, nuova.minute) == (oggi + timedelta(days=7), 9, 0), nuova
     assert stato_db["riprogramma"]["t1"][0] == "open", "riprogrammare non cambia lo stato"
     assert out["owner"]["riprogrammato"]["presente"] is False and out["owner"]["riprogrammato"]["kpi"]["recuperare"] == "2"
-    assert out["owner"]["mie"]["kpi"] == {"recuperare": "0", "agenda": "0", "nuovi": "0"}, out["owner"]["mie"]["kpi"]
+    assert out["owner"]["mie"]["kpi"] == {"radar": "0", "agenda": "0", "recuperare": "0", "nuovi": "0"}, out["owner"]["mie"]["kpi"]
     assert out["owner"]["agenda"]["url"].endswith(f"#/agenda/giorno/{oggi.isoformat()}"), out["owner"]["agenda"]["url"]
     assert "Lucia Oggi" in out["owner"]["agenda"]["drawer"]
     assert out["owner"]["nuovo"]["url"].endswith(f"#/agenda/giorno/{oggi.isoformat()}")
@@ -420,7 +528,7 @@ def test_la_scrivania_nel_browser(app, server, tmp_path):
     g = out["agent"]
     assert g["mode"] == []
     assert [x["tasks"] for x in g["groups"]] == [[str(t2)]], g["groups"]   # t1 riprogrammato, t3/t7 non suoi
-    assert g["kpi"] == {"recuperare": "1", "agenda": "2", "nuovi": "1"}, g["kpi"]
+    assert g["kpi"] == {"radar": "3", "agenda": "2", "recuperare": "1", "nuovi": "1"}, g["kpi"]
     testo_agente = "\n".join(g["taskText"])
     for altrui in ("Inviare la valutazione", "Sentire Sara", "Sara Doppione", "Da assegnare"):
         assert altrui not in testo_agente, altrui
@@ -438,6 +546,64 @@ def test_la_scrivania_nel_browser(app, server, tmp_path):
     s_ = out["super"]
     assert [x["tasks"] for x in s_["groups"]] == [[str(t2)], [str(t7)], [str(t3)]], s_["groups"]
     assert "Bianca" not in s_["body"] and "Task di Beta" not in s_["body"]
+
+    # ---- SCRIVANIA VIVA: benvenuto, frase, briefing, radar, consigli, gerarchia
+    import re as _re
+    frasi_js = (Path(__file__).resolve().parents[1] / "static/os_shell/assets/scrivania/frasi.js").read_text(encoding="utf-8")
+    frasi = _re.findall(r"^  '(.*)',$", frasi_js, _re.M)
+    assert len(frasi) == 30 and frasi[0] == ("È vero che dobbiamo guadagnare, ma se per guadagnare devi essere triste, "
+                                             "licenziati. Meglio felici che ricchi!")
+    giorno = (oggi - date(1970, 1, 1)).days
+    frase_attesa = frasi[giorno % 30]
+    ora = datetime.now(timezone.utc).astimezone(ROMA).hour
+    saluto = "Buongiorno" if ora < 13 else ("Buon pomeriggio" if ora < 18 else "Buonasera")
+    vo, va = out["viva"]["owner"], out["viva"]["agent"]
+    assert vo["greeting"] == f"{saluto}, Olga!" and va["greeting"] == f"{saluto}, Aldo!", (vo["greeting"], va["greeting"])
+    assert vo["quote"] == frase_attesa and va["quote"] == frase_attesa, vo["quote"]
+    # gerarchia: benvenuto, briefing, radar e agenda affiancati, consigli, attivita' in fondo e chiuse
+    yy = vo["y"]
+    assert yy["hero"] < yy["briefing"] < yy["radar"] < yy["advice"] < yy["secondary"], yy
+    assert abs(yy["radar"] - yy["agenda"]) < 5 and vo["x"]["radar"] < vo["x"]["agenda"], (yy, vo["x"])
+    assert vo["secondaryHidden"] is True and vo["adviceHidden"] is True
+    assert "3 scadute" in vo["chips"] and "priorità alta" in vo["chips"], vo["chips"]
+    # briefing: solo conteggi e record veri
+    assert vo["briefing"][0].startswith("Oggi in agenzia ci sono 2 appuntamenti"), vo["briefing"]
+    assert vo["briefing"][1].startswith("Il radar segnala 6 opportunità da seguire: la prima è Carla Collega"), vo["briefing"]
+    assert "3 attività scadute" in vo["briefing"][2] and "3 situazioni da verificare" in vo["briefing"][2], vo["briefing"]
+    assert va["briefing"][0].startswith("Oggi hai 2 appuntamenti") and "Franco Ricontatto" in va["briefing"][1], va["briefing"]
+    # radar del titolare: a turno fra le famiglie, massimo 5, il resto contato
+    assert [r["key"] for r in vo["radar"]] == [f"seller:{l_carla}", f"lead:{l_vera}", f"acquisition:{acq_collega}",
+                                               f"seller:{l_giulia}", f"seller:{l_franco}"], [r["key"] for r in vo["radar"]]
+    assert "Un’altra opportunità nelle pagine dedicate" in vo["radarFoot"], vo["radarFoot"]
+    radar_o = {r["key"]: r for r in vo["radar"]}
+    assert "Richiesta di valutazione dal sito, senza agente assegnato" in radar_o[f"lead:{l_vera}"]["text"]
+    assert "fermo da 12 giorni" in radar_o[f"acquisition:{acq_collega}"]["text"]
+    # radar dell'agente: solo il suo, con motivo, tempo e collegamenti veri
+    assert [r["key"] for r in va["radar"]] == [f"seller:{l_franco}", f"acquisition:{acq_mia}", f"seller:{l_giulia}"], va["radar"]
+    radar_a = {r["key"]: r for r in va["radar"]}
+    franco = radar_a[f"seller:{l_franco}"]
+    assert "Ricontatto previsto e non ancora fatto" in franco["text"] and "in ritardo di 2 giorni" in franco["text"]
+    assert dict(franco["hrefs"])["Chiama"] == "tel:3331230001" and dict(franco["hrefs"])["Apri contatto"] == f"#/contatti/{c_franco}"
+    assert "Nessuna prossima azione definita" in radar_a[f"seller:{l_giulia}"]["text"]
+    assert "ultimo contatto 20 giorni fa" in radar_a[f"seller:{l_giulia}"]["text"]
+    gino = radar_a[f"acquisition:{acq_mia}"]
+    assert "nessun aggiornamento" in gino["text"] and "fermo da 10 giorni" in gino["text"], gino["text"]
+    assert dict(gino["hrefs"])["Apri acquisizione"] == f"#/acquisizioni/{acq_mia}"
+    testo_agente = json.dumps(va, ensure_ascii=False)
+    for altrui in ("Carla Collega", "Rita Ferma", "Vera Valutazione"):
+        assert altrui not in testo_agente and altrui not in out["agent"]["body"], altrui
+    # i collegamenti funzionano: radar del titolare e acquisizione dell'agente
+    assert out["owner"]["radarLink"]["href"] == f"#/contatti/{c_carla}"
+    assert out["owner"]["radarLink"]["url"].endswith(f"#/contatti/{c_carla}") and "Carla Collega" in out["owner"]["radarLink"]["text"]
+    assert out["agent"]["acqPage"]["url"].endswith(f"#/acquisizioni/{acq_mia}") and "Gino Fermo" in out["agent"]["acqPage"]["text"]
+    # STIMA360 ti consiglia: regole fisse, con motivo e collegamento
+    consigli = out["owner"]["advice"]
+    assert consigli and any(c["kind"] == "opportunity" and c["href"] == f"#/contatti/{c_carla}" for c in consigli), consigli
+    assert all("Perché:" in c["text"] for c in consigli), consigli
+    # smartphone: tutto in colonna
+    vm = out["viva"]["mobile"]
+    assert vm["y"]["radar"] < vm["y"]["agenda"] < vm["y"]["advice"] < vm["y"]["secondary"], vm["y"]
+    assert out["mobile"]["radarTap"] and min(out["mobile"]["radarTap"]) >= 44, out["mobile"]["radarTap"]
 
     # ---- 04 smartphone
     m = out["mobile"]

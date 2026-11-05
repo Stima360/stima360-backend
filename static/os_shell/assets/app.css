@@ -2221,3 +2221,108 @@ a.scrivania-mini:hover { color: var(--primary); }
   .sheets-filters [data-sheets-search] { grid-column: 1 / -1; }
   .sheets-row-actions .btn { min-height: 44px; }
 }
+
+/* ===========================================================================
+   SCRIVANIA VIVA (Fase A) — benvenuto, briefing, radar protagonista, consigli,
+   attività in secondo piano. Nessuna animazione oltre a un leggero passaggio
+   di colore; i colori sono quelli del tema STIMA360 (Aurora).
+   =========================================================================== */
+.scrivania .scrivania-hero {
+  position: relative; overflow: hidden; align-items: flex-start;
+  padding: 26px 28px; border-radius: 22px; border: 1px solid var(--border);
+  background:
+    radial-gradient(120% 140% at 0% 0%, rgba(124, 58, 237, .14), transparent 55%),
+    radial-gradient(120% 140% at 100% 0%, rgba(6, 182, 212, .14), transparent 55%),
+    radial-gradient(140% 120% at 50% 120%, rgba(16, 185, 129, .10), transparent 60%),
+    var(--panel);
+}
+.scrivania .scrivania-hero::after {
+  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 4px;
+  background: linear-gradient(90deg, #7c3aed, #2563eb 22%, #06b6d4 42%, #10b981 60%, #f59e0b 80%, #f43f5e);
+}
+.scrivania-hero .scrivania-titles { flex: 1 1 420px; min-width: 0; }
+.scrivania-greeting { font-size: 30px; letter-spacing: -.01em; }
+.scrivania-hero .scrivania-date { margin: 6px 0 0; color: var(--muted); font-size: 15px; }
+.scrivania-quote { margin: 16px 0 0; padding: 12px 16px; border-left: 4px solid #7c3aed; border-radius: 12px;
+  background: rgba(255, 255, 255, .72); max-width: 720px; }
+.scrivania-quote-label { display: block; font-size: 11px; font-weight: 700; letter-spacing: .08em;
+  text-transform: uppercase; color: #6d28d9; margin-bottom: 4px; }
+.scrivania-quote-text { margin: 0; font-size: 17px; line-height: 1.5; font-style: italic; color: var(--text); }
+.scrivania-hero .scrivania-commands { align-self: flex-start; }
+
+.scrivania-briefing { display: flex; flex-direction: column; gap: 12px; }
+.scrivania-briefing-text p { margin: 0 0 6px; font-size: 16px; line-height: 1.55; }
+.scrivania-briefing-text p:first-child { font-weight: 600; }
+.scrivania-briefing .scrivania-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.scrivania-briefing .scrivania-kpi { padding: 8px 12px; }
+.scrivania-briefing .scrivania-kpi-value { font-size: 22px; }
+.scrivania-kpi-brand { border-left-color: #7c3aed; }
+.scrivania-kpi-info { border-left-color: #2563eb; }
+
+.scrivania-viva-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.scrivania-viva-main, .scrivania-viva-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+@media (min-width: 1100px) {
+  .scrivania-viva-grid { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+}
+.scrivania .scrivania-radar { border: 1px solid rgba(124, 58, 237, .28);
+  box-shadow: 0 10px 30px rgba(91, 63, 214, .10); }
+.scrivania-radar .scrivania-section-title { font-size: 21px; }
+.scrivania-radar-list { display: flex; flex-direction: column; gap: 10px; }
+.scrivania-radar-item {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 14px 16px; border-radius: 16px; border: 1px solid var(--border); background: var(--panel);
+  border-left: 5px solid #7c3aed;
+}
+.scrivania-radar-seller_overdue { border-left-color: #f43f5e; }
+.scrivania-radar-valuation_unassigned { border-left-color: #f59e0b; }
+.scrivania-radar-acquisition_idle { border-left-color: #2563eb; }
+.scrivania-radar-seller_no_action { border-left-color: #10b981; }
+.scrivania-radar-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 260px; }
+.scrivania-radar-kind { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.scrivania-radar-title { font-size: 17px; overflow-wrap: anywhere; }
+.scrivania-radar-place { font-size: 13px; overflow-wrap: anywhere; }
+.scrivania-radar-reason { font-size: 14px; }
+.scrivania-radar-since { font-size: 13px; font-weight: 600; color: #6d28d9; }
+.scrivania-radar-foot { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 13px; }
+.scrivania-radar-empty strong { font-size: 16px; }
+
+.scrivania-advice { display: flex; flex-direction: column; gap: 12px;
+  background: linear-gradient(135deg, rgba(37, 99, 235, .06), rgba(124, 58, 237, .06)), var(--panel); }
+.scrivania-advice-head { display: flex; align-items: center; gap: 10px; }
+.scrivania-advice-mark { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
+  border-radius: 50%; background: #ede9fe; color: #6d28d9; font-size: 16px; }
+.scrivania-advice-ask { align-self: flex-start; }
+.scrivania-advice-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; }
+.scrivania-advice-item { padding-left: 4px; }
+.scrivania-advice-item > .btn, .scrivania-advice-item > a { margin-top: 6px; display: inline-flex; text-decoration: none; }
+.scrivania-advice-text { display: flex; flex-direction: column; gap: 2px; }
+.scrivania-advice-text .muted { font-size: 13px; }
+.scrivania-advice-answer p { margin: 0 0 6px; }
+
+.scrivania-secondary { display: flex; flex-direction: column; gap: 12px; }
+.scrivania-secondary-toggle {
+  display: flex; flex-direction: column; gap: 8px; width: 100%; text-align: left; cursor: pointer; font: inherit;
+  padding: 14px 18px; border-radius: 16px; border: 1px dashed var(--border); background: var(--bg); color: var(--text);
+}
+.scrivania-secondary-toggle:hover { border-color: var(--primary); }
+.scrivania-secondary-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 16px; }
+.scrivania-secondary-action { color: var(--primary); font-weight: 600; font-size: 14px; }
+.scrivania-secondary-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.scrivania-chip { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: #eef2f9; color: var(--muted); }
+.scrivania-chip-danger { background: #fdecea; color: var(--danger); }
+.scrivania-chip-warn { background: #fdf3d8; color: #92650a; }
+.scrivania-chip-ok { background: #e3f6e8; color: #1c7a3c; }
+.scrivania-secondary-body { display: flex; flex-direction: column; gap: 16px; }
+
+@media (max-width: 767px) {
+  .scrivania .scrivania-hero { padding: 20px 16px; border-radius: 18px; }
+  .scrivania-greeting { font-size: 24px; }
+  .scrivania-quote-text { font-size: 15px; }
+  .scrivania-briefing .scrivania-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .scrivania-briefing-text p { font-size: 15px; }
+  .scrivania .scrivania-radar-item .scrivania-actions { width: 100%; }
+  .scrivania .scrivania-radar-item .scrivania-actions .btn { flex: 1; justify-content: center; min-height: 44px; }
+  .scrivania .scrivania-advice-ask { width: 100%; min-height: 48px; }
+  .scrivania .scrivania-advice-item > a, .scrivania .scrivania-advice-item > .btn { min-height: 44px; }
+  .scrivania-secondary-toggle { min-height: 56px; }
+}

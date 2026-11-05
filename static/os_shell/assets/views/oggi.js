@@ -1,10 +1,12 @@
-// STIMA360 OS — views/oggi.js — LA SCRIVANIA (#/oggi)
+// STIMA360 OS — views/oggi.js — LA SCRIVANIA VIVA (#/oggi)
 //
-// La pagina di lavoro dell'agente: chi chiamare, dove andare, quali
-// appuntamenti gestire, quali attivita' completare. Le regole di
-// presentazione stanno in scrivania/scrivania-model.js (pure, testate); qui
-// si chiedono i dati e si disegna, con le API GIA' esistenti e i loro
-// permessi. Nessuna API nuova, nessun automatismo, nessun dato inventato.
+// La prima pagina dopo l'accesso. In ordine: il benvenuto con la frase del
+// giorno, il briefing, il Radar opportunita' accanto all'Agenda, «STIMA360 ti
+// consiglia» e, in secondo piano ed espandibili, attivita' e verifiche. Le
+// regole stanno in scrivania/scrivania-model.js e scrivania/viva-model.js
+// (pure, testate); qui si chiedono i dati e si disegna, con le API GIA'
+// esistenti e i loro permessi. Nessuna API nuova, nessun modello esterno,
+// nessun automatismo, nessun dato inventato.
 //
 // LETTURE (tutte in parallelo; una che fallisce non spegne le altre)
 //   GET /api/core/tasks?status=open|in_progress&mistakes=false  task aperti
@@ -12,6 +14,8 @@
 //   GET /api/appointments (passati ancora aperti, richieste)    via agenda-api.js
 //   GET /api/core/leads?status=open                             lead aperti
 //   GET venditori attivi (sellers/sellers-api.js)               immobile dei venditori
+//   GET venditori «overdue» e «no_action» (sellers-api.js)      Radar: ricontatti
+//   GET /api/acquisitions?statuses=<aperti>                     Radar: acquisizioni ferme
 //   GET /api/core/contacts (+ /contacts/{id} per i mancanti)    nome e telefono
 //   GET /api/next-best-action?limit=20                          suggerimenti P23
 //   GET /api/core/activities?limit=20&mistakes=false            storico, a richiesta
@@ -22,6 +26,10 @@
 //   PATCH /api/core/tasks/{id} {due_at}               «Riprogramma»
 // Gli appuntamenti si aprono e si gestiscono nell'Agenda (rotta agenda, giorno, data, id),
 // con le sue azioni: la Scrivania non cambia stati di appuntamenti.
+//
+// NON si leggono: la lista delle valutazioni (dati dell'intera agenzia per un
+// agente), le conversazioni WhatsApp (la lettura scrive), il ricalcolo dei
+// suggerimenti automatici. Il punteggio di intenzione di vendita non si usa.
 //
 // «Prendi in carico» NON c'e': il task ha solo un testo libero
 // `assigned_to`, e scriverci il proprio nome dal browser vorrebbe dire
@@ -40,6 +48,10 @@ import {
   propertyLabel, readableDescription, taskAssignedNote, taskOwner, taskPropertyId, tasksToDo, tasksWithoutDue,
   telHref, toVerify, upcomingOfDay,
 } from '../scrivania/scrivania-model.js';
+import {
+  OPEN_ACQUISITION_STATUSES, advice, briefing, buildRadar, greeting, idleAcquisitionItem, noActionSellerItem,
+  overdueSellerItem, quoteOfDay, reliableName, unassignedValuationItem,
+} from '../scrivania/viva-model.js';
 
 const PAGE = 200;
 const MAX_PAGES = 5;
@@ -145,6 +157,9 @@ async function loadAll(now) {
     }),
     leads: allPages('/api/core/leads?status=open'),
     sellers: listSellers('status=active&limit=200'),
+    sellersOverdue: listSellers('view=overdue&status=active&limit=50'),
+    sellersNoAction: listSellers('view=no_action&status=active&limit=50'),
+    acquisitions: apiGet(`/api/acquisitions?statuses=${OPEN_ACQUISITION_STATUSES.join(',')}&limit=100`),
     contacts: apiGet('/api/core/contacts?limit=200'),
     nba: apiGet('/api/next-best-action?limit=20'),
   };
@@ -231,17 +246,29 @@ export async function renderOggi(container) {
   let modo = 'agency';
   let giro = 0;
   let ultimi = null;
+  // SCRIVANIA VIVA: attivita' e verifiche partono chiuse; il consiglio si apre a richiesta.
+  let attivitaAperte = false;
+  let consigliAperti = false;
+  let mostraAttivita = () => {};
 
   const root = el('div', 'scrivania');
   root.setAttribute('data-scrivania', '');
   container.replaceChildren(root);
   const stale = () => sessionEpoch() !== epoca || root.isConnected === false;
 
-  // -- A. intestazione -------------------------------------------------------
-  const testata = el('header', 'scrivania-head');
+  // -- 1. benvenuto -----------------------------------------------------------
+  // Il saluto segue l'ora di Roma; il nome arriva con l'elenco degli operatori
+  // (riga «sono io») e si mostra solo se e' un nome di persona affidabile.
+  const testata = el('header', 'scrivania-head scrivania-hero');
+  testata.setAttribute('data-scrivania-hero', '');
   const titoli = el('div', 'scrivania-titles');
-  titoli.append(el('h2', 'scrivania-title', 'La tua scrivania'),
-    el('p', 'scrivania-date muted', capitalize(formatDayLong(todayKey()))));
+  const saluto = el('h2', 'scrivania-title scrivania-greeting', `${greeting()}!`);
+  saluto.setAttribute('data-scrivania-greeting', '');
+  const frase = el('figure', 'scrivania-quote');
+  frase.setAttribute('data-scrivania-quote', '');
+  frase.append(el('figcaption', 'scrivania-quote-label', 'La frase del giorno'),
+    el('blockquote', 'scrivania-quote-text', quoteOfDay()));
+  titoli.append(saluto, el('p', 'scrivania-date', capitalize(formatDayLong(todayKey()))), frase);
   const comandi = el('div', 'scrivania-commands');
   const aggiorna = button('Aggiorna', 'btn');
   aggiorna.setAttribute('data-scrivania-refresh', '');
@@ -316,6 +343,9 @@ export async function renderOggi(container) {
       const servono = [
         ...tasksToDo(tasks, now).map((t) => t.contact_id),
         ...newContacts(leads, tasks, { sellersByLead }).map((x) => x.lead.contact_id),
+        // Radar del titolare: i nomi delle richieste di valutazione senza agente
+        ...(vedeAgenzia ? leads.filter((l) => l.source === 'public_stima' && !l.assigned_agent_id)
+          .map((l) => l.contact_id) : []),
       ];
       await fillMissingContacts(contactsById, servono, superato);
       if (superato()) return;
@@ -326,6 +356,9 @@ export async function renderOggi(container) {
         pastOpen: (dati.pastOpen && dati.pastOpen.items) || [],
         requested: (dati.requested && dati.requested.items) || [],
         nba: (dati.nba && dati.nba.items) || [],
+        sellersOverdue: (dati.sellersOverdue && dati.sellersOverdue.items) || [],
+        sellersNoAction: (dati.sellersNoAction && dati.sellersNoAction.items) || [],
+        acquisitions: (dati.acquisitions && dati.acquisitions.items) || [],
       };
       disegna(ultimi);
       avvisi.replaceChildren();
@@ -392,36 +425,188 @@ export async function renderOggi(container) {
     const mancanti = [];
     const nomi = { tasks: 'attività', calendar: 'agenda', pastOpen: 'appuntamenti da verificare',
       requested: 'richieste di appuntamento', leads: 'nuovi contatti', sellers: 'immobili dei venditori',
-      contacts: 'contatti', nba: 'suggerimenti' };
+      contacts: 'contatti', nba: 'suggerimenti', sellersOverdue: 'venditori da ricontattare',
+      sellersNoAction: 'venditori senza prossima azione', acquisitions: 'acquisizioni' };
     for (const k of Object.keys(d.errori)) mancanti.push(nomi[k] || k);
     if (mancanti.length) {
       corpo.appendChild(el('div', 'error-box',
         `Alcuni dati non sono disponibili al momento (${mancanti.join(', ')}). Il resto della scrivania è utilizzabile.`));
     }
 
-    // -- B. riepilogo ------------------------------------------------------
+    // Il radar: solo fonti gia' ristrette dal server; il titolare in «Le mie»
+    // vede solo le sue voci; le valutazioni senza agente solo in «Agenzia».
+    const mio = (agentId) => !mie || agentId === meId;
+    const radar = buildRadar({
+      overdue: d.sellersOverdue.map((x) => overdueSellerItem(x, now)).filter((x) => x && mio(x.agentId)),
+      valuations: vedeAgenzia && !mie
+        ? d.leads.map((l) => unassignedValuationItem(l, d.contactsById.get(l.contact_id), now)).filter(Boolean) : [],
+      acquisitions: d.acquisitions.map((x) => idleAcquisitionItem(x, now)).filter((x) => x && mio(x.agentId)),
+      noAction: d.sellersNoAction.map((x) => noActionSellerItem(x, now)).filter((x) => x && mio(x.agentId)),
+    });
+    const radarNonDisponibile = d.errori.sellersOverdue && d.errori.sellersNoAction && d.errori.acquisitions;
+    const oggiInScadenza = daFare.filter((t) => dueState(t, now) === 'today');
+    const urgente = daFare.find((t) => dueState(t, now) === 'overdue') || null;
+    const nomeIo = io ? reliableName(io.name) : '';
+    saluto.textContent = nomeIo ? `${greeting(now)}, ${nomeIo}!` : `${greeting(now)}!`;
     const sezioni = {};
+
+    // -- 2. briefing -------------------------------------------------------------
+    const brief = el('section', 'card scrivania-briefing');
+    brief.setAttribute('data-scrivania-briefing', '');
+    const frasi = briefing({
+      agendaToday: d.errori.calendar ? [] : agendaOggi, radar: radarNonDisponibile ? { items: [], total: 0 } : radar,
+      overdue: d.errori.tasks ? 0 : scaduti.length, today: d.errori.tasks ? 0 : oggiInScadenza.length,
+      toVerify: verifiche.length, agency: vedeAgenzia && !mie, now, typeLabel, timeLabel: formatTime,
+    });
+    if (d.errori.calendar) frasi[0] = 'L’agenda non è disponibile in questo momento.';
+    if (radarNonDisponibile) frasi[1] = 'Il radar non è disponibile in questo momento.';
+    const testoBrief = el('div', 'scrivania-briefing-text');
+    for (const f of frasi) testoBrief.appendChild(el('p', '', f));
+    brief.appendChild(testoBrief);
     const riepilogo = el('div', 'scrivania-summary');
     const kpi = [
-      ['recuperare', 'Da recuperare', d.errori.tasks ? '—' : scaduti.length, 'attività scadute', scaduti.length ? 'danger' : 'ok'],
-      ['agenda', 'Appuntamenti di oggi', d.errori.calendar ? '—' : agendaOggi.length, 'in agenda oggi', 'info'],
-      ['nuovi', 'Nuovi contatti da gestire', d.errori.leads ? '—' : nuovi.length, 'senza un’attività aperta', nuovi.length ? 'warn' : 'ok'],
+      ['radar', 'Opportunità', radarNonDisponibile ? '—' : radar.total, radar.total ? 'brand' : 'ok'],
+      ['agenda', 'Appuntamenti oggi', d.errori.calendar ? '—' : agendaOggi.length, 'info'],
+      ['recuperare', 'Attività scadute', d.errori.tasks ? '—' : scaduti.length, scaduti.length ? 'danger' : 'ok'],
+      ['nuovi', 'Nuovi contatti', d.errori.leads ? '—' : nuovi.length, nuovi.length ? 'warn' : 'ok'],
     ];
-    for (const [chiave, etichetta, valore, sotto, tono] of kpi) {
+    for (const [chiave, etichetta, valore, tono] of kpi) {
       const b = button('', `scrivania-kpi scrivania-kpi-${tono}`);
       b.setAttribute('data-scrivania-kpi', chiave);
-      b.append(el('span', 'scrivania-kpi-value', valore), el('span', 'scrivania-kpi-label', etichetta),
-        el('span', 'scrivania-kpi-sub', sotto));
-      b.addEventListener('click', () => scrollTo(sezioni[chiave]));
+      b.append(el('span', 'scrivania-kpi-value', valore), el('span', 'scrivania-kpi-label', etichetta));
+      b.addEventListener('click', () => {
+        if (['recuperare', 'nuovi'].includes(chiave) && !attivitaAperte) apriAttivita(true);
+        scrollTo(sezioni[chiave]);
+      });
       riepilogo.appendChild(b);
     }
-    corpo.appendChild(riepilogo);
+    brief.appendChild(riepilogo);
+    corpo.appendChild(brief);
 
-    const griglia = el('div', 'scrivania-grid');
-    const principale = el('div', 'scrivania-main');
-    const laterale = el('div', 'scrivania-side');
-    griglia.append(principale, laterale);
+    // -- 3. radar opportunita' e agenda, affiancati ------------------------------
+    const griglia = el('div', 'scrivania-viva-grid');
+    const colonnaRadar = el('div', 'scrivania-viva-main');
+    const colonnaAgenda = el('div', 'scrivania-viva-side');
+    griglia.append(colonnaRadar, colonnaAgenda);
     corpo.appendChild(griglia);
+
+    const radarSez = sezione('Radar opportunità', 'Clienti e trattative che aspettano una tua mossa, con il motivo.', 'radar');
+    radarSez.box.className += ' scrivania-radar';
+    sezioni.radar = radarSez.box;
+    if (radarNonDisponibile) {
+      radarSez.body.appendChild(el('p', 'muted', 'Il radar non è disponibile in questo momento. Premi «Aggiorna» per riprovare.'));
+    } else if (!radar.items.length) {
+      const vuoto = el('div', 'scrivania-empty scrivania-radar-empty');
+      vuoto.append(el('strong', '', 'Nessun cliente in attesa: tutto in ordine!'),
+        el('p', 'muted', 'I tuoi venditori hanno una prossima azione e le acquisizioni sono in movimento. '
+          + 'È il momento giusto per coltivare nuovi contatti.'));
+      vuoto.appendChild(link('#/venditori', 'Apri Venditori'));
+      radarSez.body.appendChild(vuoto);
+    } else {
+      const lista = el('div', 'scrivania-radar-list');
+      for (const voce of radar.items) lista.appendChild(schedaRadar(voce));
+      radarSez.body.appendChild(lista);
+      const altri = radar.total - radar.items.length;
+      const piede = el('div', 'scrivania-radar-foot');
+      piede.appendChild(el('span', 'muted', altri > 1 ? `Altre ${altri} opportunità nelle pagine dedicate.`
+        : (altri === 1 ? 'Un’altra opportunità nelle pagine dedicate.' : 'Sono tutte le opportunità trovate.')));
+      piede.append(link('#/venditori', 'Venditori', 'scrivania-link'), link('#/acquisizioni', 'Acquisizioni', 'scrivania-link'));
+      radarSez.body.appendChild(piede);
+    }
+    colonnaRadar.appendChild(radarSez.box);
+
+    // -- D. agenda della giornata -------------------------------------------
+    const agendaSez = sezione('Agenda di oggi', '', 'agenda');
+    sezioni.agenda = agendaSez.box;
+    agendaSez.actions.appendChild(link(agendaHref(oggi), 'Apri Agenda'));
+    if (d.errori.calendar) {
+      agendaSez.body.appendChild(el('p', 'muted', 'L’agenda non è disponibile in questo momento.'));
+    } else {
+      if (!agendaOggi.length) {
+        const vuoto = el('div', 'scrivania-empty');
+        vuoto.append(el('strong', '', 'Nessun appuntamento oggi.'));
+        const crea = button('Nuovo appuntamento', 'btn btn-small');
+        crea.addEventListener('click', () => navigate('agenda', ['giorno', oggi, 'nuovo']));
+        vuoto.appendChild(crea);
+        agendaSez.body.appendChild(vuoto);
+      } else {
+        const lista = el('div', 'scrivania-list');
+        for (const a of agendaOggi) lista.appendChild(rigaAppuntamento(a, oggi, now, vedeAgenzia));
+        agendaSez.body.appendChild(lista);
+      }
+      const domaniBox = el('div', 'scrivania-tomorrow');
+      const testa = el('div', 'scrivania-tomorrow-head');
+      testa.append(el('h4', '', `Domani · ${agendaDomani.length} ${agendaDomani.length === 1 ? 'appuntamento' : 'appuntamenti'}`),
+        link(agendaHref(domani), 'Vedi domani', 'scrivania-link'));
+      domaniBox.appendChild(testa);
+      for (const a of agendaDomani.slice(0, 4)) {
+        const r = link(agendaHref(domani, a.id), '', 'scrivania-mini');
+        r.append(el('span', 'scrivania-time', formatTime(a.start_at)),
+          el('span', '', [typeLabel(a.type) || 'Appuntamento', a.contact_name].filter(Boolean).join(' · ')));
+        domaniBox.appendChild(r);
+      }
+      if (agendaDomani.length > 4) domaniBox.appendChild(el('p', 'muted', `e altri ${agendaDomani.length - 4}.`));
+      agendaSez.body.appendChild(domaniBox);
+    }
+    // FIRMA SEMPLIFICATA: le firme dei fogli visita stanno con l'Agenda (riguardano le visite).
+    colonnaAgenda.append(agendaSez.box, firme);
+
+
+    // -- 4. STIMA360 ti consiglia ---------------------------------------------------
+    const consigli = advice({
+      agendaToday: d.errori.calendar ? [] : agendaOggi, radar, now, typeLabel, timeLabel: formatTime,
+      agendaHref: (a) => agendaHref(oggi, a.id),
+      urgentTask: urgente ? {
+        title: friendlyTaskTitle(urgente),
+        reason: [dueText(urgente, now), urgente.priority ? `priorità ${(PRIORITY_LABELS[urgente.priority] || urgente.priority).toLowerCase()}` : '']
+          .filter(Boolean).join(' · '),
+        href: urgente.contact_id && d.contactsById.get(urgente.contact_id) ? `#/contatti/${encodeURIComponent(urgente.contact_id)}` : '',
+      } : null,
+      verify: verifiche.length ? {
+        title: [typeLabel(verifiche[0].appointment.appointment_type) || 'Appuntamento', verifiche[0].appointment.contact_name].filter(Boolean).join(' con '),
+        reason: verifiche[0].appointment.start_at ? `Era previsto il ${formatDateTime(verifiche[0].appointment.start_at)}` : '',
+        href: agendaHref(todayKey(new Date(verifiche[0].appointment.start_at || now)), verifiche[0].appointment.id),
+      } : null,
+    });
+    corpo.appendChild(pannelloConsigli(consigli));
+
+    // -- 5. attivita' e verifiche, in secondo piano ------------------------------
+    const secondaria = el('section', 'scrivania-secondary');
+    secondaria.setAttribute('data-scrivania-secondary', '');
+    const apri = button('', 'scrivania-secondary-toggle');
+    apri.setAttribute('data-scrivania-toggle-tasks', '');
+    apri.setAttribute('aria-expanded', String(attivitaAperte));
+    const testaApri = el('span', 'scrivania-secondary-head');
+    testaApri.append(el('strong', '', 'Attività e verifiche'), el('span', 'scrivania-secondary-action', attivitaAperte ? 'Nascondi' : 'Mostra'));
+    const sintesi = el('span', 'scrivania-secondary-chips');
+    const chip = (testo, tono) => sintesi.appendChild(el('span', `scrivania-chip scrivania-chip-${tono}`, testo));
+    if (d.errori.tasks) chip('Attività non disponibili', 'gray');
+    else {
+      if (scaduti.length) chip(`${scaduti.length} ${scaduti.length === 1 ? 'scaduta' : 'scadute'}`, 'danger');
+      if (urgente && ['urgent', 'high'].includes(urgente.priority)) chip('priorità alta', 'danger');
+      if (oggiInScadenza.length) chip(`${oggiInScadenza.length} di oggi`, 'warn');
+      if (nuovi.length) chip(`${nuovi.length} ${nuovi.length === 1 ? 'nuovo contatto' : 'nuovi contatti'}`, 'gray');
+      if (verifiche.length) chip(`${verifiche.length} da verificare`, 'gray');
+      if (!scaduti.length && !oggiInScadenza.length && !nuovi.length && !verifiche.length) chip('tutto in ordine', 'ok');
+    }
+    apri.append(testaApri, sintesi);
+    const contenuto = el('div', 'scrivania-secondary-body');
+    contenuto.hidden = !attivitaAperte;
+    apri.addEventListener('click', () => apriAttivita(!attivitaAperte));
+    function apriAttivita(aperte) {
+      attivitaAperte = aperte;
+      contenuto.hidden = !aperte;
+      apri.setAttribute('aria-expanded', String(aperte));
+      testaApri.lastChild.textContent = aperte ? 'Nascondi' : 'Mostra';
+    }
+    mostraAttivita = () => { apriAttivita(true); scrollTo(sezioni.recuperare); };
+    secondaria.append(apri, contenuto);
+    const grigliaSec = el('div', 'scrivania-grid');
+    const principale = el('div', 'scrivania-main');
+    const secondaria2 = el('div', 'scrivania-side');
+    grigliaSec.append(principale, secondaria2);
+    contenuto.appendChild(grigliaSec);
+    corpo.appendChild(secondaria);
 
     // -- C. da fare prima ----------------------------------------------------
     const daFareSez = sezione('Da fare prima', 'Attività scadute e di oggi, dalla più urgente.', 'da-fare');
@@ -468,62 +653,31 @@ export async function renderOggi(container) {
     }
     principale.appendChild(nuoviSez.box);
 
-    // -- D. agenda della giornata -------------------------------------------
-    const agendaSez = sezione('Agenda di oggi', '', 'agenda');
-    sezioni.agenda = agendaSez.box;
-    agendaSez.actions.appendChild(link(agendaHref(oggi), 'Apri Agenda'));
-    if (d.errori.calendar) {
-      agendaSez.body.appendChild(el('p', 'muted', 'L’agenda non è disponibile in questo momento.'));
-    } else {
-      if (!agendaOggi.length) {
-        const vuoto = el('div', 'scrivania-empty');
-        vuoto.append(el('strong', '', 'Nessun appuntamento oggi.'));
-        const crea = button('Nuovo appuntamento', 'btn btn-small');
-        crea.addEventListener('click', () => navigate('agenda', ['giorno', oggi, 'nuovo']));
-        vuoto.appendChild(crea);
-        agendaSez.body.appendChild(vuoto);
-      } else {
+
+    {
+      // dentro l'area secondaria, la colonna di destra: verifiche e storico
+      const secondaria = secondaria2;
+      // -- F. da verificare ------------------------------------------------------
+      const verificaSez = sezione('Da verificare', 'Situazioni che aspettano una tua decisione.', 'verificare');
+      const errVerifica = d.errori.pastOpen || d.errori.requested;
+      if (errVerifica) verificaSez.body.appendChild(el('p', 'muted', 'Alcune verifiche non sono disponibili in questo momento.'));
+      if (verifiche.length) {
         const lista = el('div', 'scrivania-list');
-        for (const a of agendaOggi) lista.appendChild(rigaAppuntamento(a, oggi, now, vedeAgenzia));
-        agendaSez.body.appendChild(lista);
+        for (const v of verifiche) lista.appendChild(rigaVerifica(v));
+        verificaSez.body.appendChild(lista);
+      } else if (!errVerifica) {
+        verificaSez.body.appendChild(el('p', 'muted', 'Nessun appuntamento passato senza esito e nessuna richiesta da confermare.'));
       }
-      const domaniBox = el('div', 'scrivania-tomorrow');
-      const testa = el('div', 'scrivania-tomorrow-head');
-      testa.append(el('h4', '', `Domani · ${agendaDomani.length} ${agendaDomani.length === 1 ? 'appuntamento' : 'appuntamenti'}`),
-        link(agendaHref(domani), 'Vedi domani', 'scrivania-link'));
-      domaniBox.appendChild(testa);
-      for (const a of agendaDomani.slice(0, 4)) {
-        const r = link(agendaHref(domani, a.id), '', 'scrivania-mini');
-        r.append(el('span', 'scrivania-time', formatTime(a.start_at)),
-          el('span', '', [typeLabel(a.type) || 'Appuntamento', a.contact_name].filter(Boolean).join(' · ')));
-        domaniBox.appendChild(r);
+      if (suggerimenti.length) {
+        verificaSez.body.appendChild(el('h4', 'scrivania-subtitle', 'Suggerimenti del sistema'));
+        const lista = el('div', 'scrivania-list');
+        for (const n of suggerimenti.slice(0, 5)) lista.appendChild(rigaSuggerimento(n));
+        verificaSez.body.appendChild(lista);
       }
-      if (agendaDomani.length > 4) domaniBox.appendChild(el('p', 'muted', `e altri ${agendaDomani.length - 4}.`));
-      agendaSez.body.appendChild(domaniBox);
-    }
-    laterale.appendChild(agendaSez.box);
+      secondaria.appendChild(verificaSez.box);
 
-    // -- F. da verificare ------------------------------------------------------
-    const verificaSez = sezione('Da verificare', 'Situazioni che aspettano una tua decisione.', 'verificare');
-    const errVerifica = d.errori.pastOpen || d.errori.requested;
-    if (errVerifica) verificaSez.body.appendChild(el('p', 'muted', 'Alcune verifiche non sono disponibili in questo momento.'));
-    if (verifiche.length) {
-      const lista = el('div', 'scrivania-list');
-      for (const v of verifiche) lista.appendChild(rigaVerifica(v));
-      verificaSez.body.appendChild(lista);
-    } else if (!errVerifica) {
-      verificaSez.body.appendChild(el('p', 'muted', 'Nessun appuntamento passato senza esito e nessuna richiesta da confermare.'));
+      secondaria.appendChild(storico());
     }
-    if (suggerimenti.length) {
-      verificaSez.body.appendChild(el('h4', 'scrivania-subtitle', 'Suggerimenti del sistema'));
-      const lista = el('div', 'scrivania-list');
-      for (const n of suggerimenti.slice(0, 5)) lista.appendChild(rigaSuggerimento(n));
-      verificaSez.body.appendChild(lista);
-    }
-    laterale.appendChild(verificaSez.box);
-
-    // -- G. storico ------------------------------------------------------------
-    laterale.appendChild(storico());
   }
 
   function sezione(titolo, sottotitolo, chiave) {
@@ -538,6 +692,79 @@ export async function renderOggi(container) {
     const body = el('div', 'scrivania-section-body');
     box.append(testa, body);
     return { box, body, actions };
+  }
+
+  // -- radar e consigli ------------------------------------------------------
+  const ETICHETTE_RADAR = {
+    seller_overdue: 'Ricontatto scaduto',
+    seller_no_action: 'Senza prossima azione',
+    acquisition_idle: 'Acquisizione da riprendere',
+    valuation_unassigned: 'Valutazione da assegnare',
+  };
+
+  function schedaRadar(v) {
+    const card = el('article', `scrivania-radar-item scrivania-radar-${v.kind}`);
+    card.setAttribute('data-scrivania-radar', v.key);
+    const testo = el('div', 'scrivania-radar-text');
+    testo.append(el('span', 'scrivania-radar-kind', ETICHETTE_RADAR[v.kind] || 'Opportunità'),
+      el('strong', 'scrivania-radar-title', v.title));
+    if (v.place) testo.appendChild(el('span', 'muted scrivania-radar-place', v.place));
+    testo.appendChild(el('span', 'scrivania-radar-reason', v.reason));
+    if (v.since) testo.appendChild(el('span', 'scrivania-radar-since', v.since));
+    const azioni = el('div', 'scrivania-actions');
+    const tel = telHref(v.phone);
+    if (tel) {
+      const chiama = link(tel, 'Chiama', 'btn btn-small primary');
+      chiama.setAttribute('data-scrivania-call', '');
+      azioni.appendChild(chiama);
+    }
+    azioni.appendChild(link(v.href, v.hrefLabel, tel ? 'btn btn-small' : 'btn btn-small primary'));
+    if (v.propertyHref) azioni.appendChild(link(v.propertyHref, 'Apri immobile'));
+    card.append(testo, azioni);
+    return card;
+  }
+
+  function pannelloConsigli(consigli) {
+    const box = el('section', 'card scrivania-advice');
+    box.setAttribute('data-scrivania-advice', '');
+    const testa = el('div', 'scrivania-advice-head');
+    testa.append(el('span', 'scrivania-advice-mark', '★'), el('h3', 'scrivania-section-title', 'STIMA360 ti consiglia'));
+    const domanda = button('Cosa mi consigli di fare oggi?', 'btn primary scrivania-advice-ask');
+    domanda.setAttribute('data-scrivania-ask', '');
+    domanda.setAttribute('aria-expanded', String(consigliAperti));
+    const risposta = el('div', 'scrivania-advice-answer');
+    risposta.setAttribute('aria-live', 'polite');
+    risposta.hidden = !consigliAperti;
+    if (!consigli.length) {
+      risposta.append(el('p', '', 'Oggi la tua scrivania è in ordine: nessun appuntamento a breve, nessun cliente in attesa, '
+        + 'nessuna attività scaduta.'), el('p', 'muted', 'Un’idea: richiama un proprietario che non senti da tempo.'),
+      link('#/venditori', 'Apri Venditori'));
+    } else {
+      const lista = el('ol', 'scrivania-advice-list');
+      for (const c of consigli) {
+        const voce = el('li', `scrivania-advice-item scrivania-advice-${c.kind}`);
+        voce.setAttribute('data-scrivania-advice-item', c.kind);
+        const testo = el('div', 'scrivania-advice-text');
+        testo.appendChild(el('strong', '', c.title));
+        if (c.reason) testo.appendChild(el('span', 'muted', `Perché: ${c.reason}`));
+        voce.appendChild(testo);
+        if (c.href) voce.appendChild(link(c.href, c.label));
+        else {
+          const b = button(c.label);
+          b.addEventListener('click', () => mostraAttivita());
+          voce.appendChild(b);
+        }
+        lista.appendChild(voce);
+      }
+      risposta.appendChild(lista);
+    }
+    domanda.addEventListener('click', () => {
+      consigliAperti = !consigliAperti;
+      risposta.hidden = !consigliAperti;
+      domanda.setAttribute('aria-expanded', String(consigliAperti));
+    });
+    box.append(testa, domanda, risposta);
+    return box;
   }
 
   // -- righe ----------------------------------------------------------------
