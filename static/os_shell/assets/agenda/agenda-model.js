@@ -22,11 +22,28 @@ export const VIEWPORT_END_HOUR = 20;
 /** Sotto-colonne massime per eventi sovrapposti nello stesso giorno. */
 export const MAX_OVERLAP_COLUMNS = 4;
 
-/** Le viste di A30-4 (piano §3/§4.3): il Mese e' solo desktop/tablet (G3). */
+/** Le quattro viste dell'Agenda. */
 export const VIEWS = Object.freeze(['week', 'day', 'month', 'list']);
-/** Su smartphone solo Lista e Giorno: settimana e mese non si comprimono (G3). */
-export const MOBILE_VIEWS = Object.freeze(['list', 'day']);
+/** AGENDA MOBILE: la regola G3 di A30-4 ("su smartphone solo Lista e Giorno")
+ *  e' revocata. Su smartphone ci sono TUTTE le viste e la vista scelta e'
+ *  sempre quella mostrata: nessuna sostituzione silenziosa. */
+export const MOBILE_VIEWS = VIEWS;
 export const MOBILE_MAX_WIDTH = 767;
+/** La disposizione COMPATTA (testata ridotta, menu, filtri a comando, "+"
+ *  flottante, settimana a colonne strette): smartphone in verticale, oppure
+ *  telefono in orizzontale (poco alto e con puntatore touch). Un solo
+ *  criterio, deciso qui e applicato con una classe sulla pagina: il CSS non
+ *  ripete la media query e non puo' divergere. */
+export const COMPACT_QUERY = '(max-width: 767px), (max-height: 500px) and (pointer: coarse)';
+/** Giorni caricati per volta dalla Lista ("Mostra altri giorni"). */
+export const LIST_CHUNK_DAYS = 14;
+/** Colonne affiancate massime per gli eventi sovrapposti nella disposizione
+ *  compatta: oltre, un "+N" che apre l'elenco (nessun evento irraggiungibile). */
+export const COMPACT_OVERLAP_COLUMNS = Object.freeze({ day: 3, week: 2 });
+/** Specchio di appointments/service.py::DEFAULT_CALENDAR_STATUSES: gli stati
+ *  "predefiniti" sono gli stessi in OGNI vista (Lista compresa). Annullati e
+ *  spostati si vedono solo chiedendoli col filtro Stato. */
+export const DEFAULT_VIEW_STATUSES = Object.freeze(['requested', 'scheduled', 'confirmed', 'completed', 'no_show']);
 export const VIEW_LABELS = Object.freeze({ week: 'Settimana', day: 'Giorno', month: 'Mese', list: 'Lista' });
 /** Il segmento di URL di ogni vista (`#/agenda/<vista>/<data>`). */
 export const VIEW_SLUGS = Object.freeze({ week: 'settimana', day: 'giorno', month: 'mese', list: 'lista' });
@@ -354,11 +371,16 @@ export function formatDuration(minutes) {
 // VISTE E INTERVALLI
 // ---------------------------------------------------------------------------
 
-/** La vista effettiva: su smartphone la settimana non esiste (diventa Lista). */
-export function effectiveView(view, isMobile) {
-  const v = VIEWS.includes(view) ? view : (isMobile ? 'list' : 'week');
-  if (isMobile && !MOBILE_VIEWS.includes(v)) return 'list';
-  return v;
+/**
+ * La vista da mostrare: quella chiesta, se valida, su OGNI dispositivo. Senza
+ * una vista nell'indirizzo: l'ultima scelta dall'utente (`preferred`), se
+ * valida; altrimenti la partenza di sempre (Lista su smartphone, Settimana
+ * altrove). Mai una vista diversa da quella chiesta.
+ */
+export function effectiveView(view, isMobile, preferred = null) {
+  if (VIEWS.includes(view)) return view;
+  if (VIEWS.includes(preferred)) return preferred;
+  return isMobile ? 'list' : 'week';
 }
 
 export function viewFromSlug(slug) {
@@ -384,9 +406,14 @@ export function rangeFor(view, key) {
     for (let g = primo; g.slice(0, 7) === primo.slice(0, 7); g = addDays(g, 1)) giorni.push(g);
     return { from: romeIso(primo), to: romeIso(addDays(giorni[giorni.length - 1], 1)), days: giorni };
   }
-  // lista: il giorno scelto e i sei successivi
-  const giorni = Array.from({ length: 7 }, (_, i) => addDays(key, i));
-  return { from: romeIso(key), to: romeIso(addDays(key, 7)), days: giorni };
+  // lista: il giorno scelto e i successivi (altri si caricano a richiesta)
+  return listRange(key, LIST_CHUNK_DAYS);
+}
+
+/** L'intervallo della Lista: `n` giorni da `key` (incluso). */
+export function listRange(key, n = LIST_CHUNK_DAYS) {
+  const giorni = Array.from({ length: n }, (_, i) => addDays(key, i));
+  return { from: romeIso(key), to: romeIso(addDays(key, n)), days: giorni };
 }
 
 /** Il passo di navigazione (◀ ▶) in giorni (Settimana, Giorno, Lista). */
@@ -534,20 +561,21 @@ export function overlapLayout(items) {
  * columns }` per un evento visibile e `null` per uno nascosto. Ogni indice e'
  * visibile oppure in UN solo gruppo di `overflow`, mai perso.
  */
-export function overflowLayout(items) {
+export function overflowLayout(items, maxColumns = MAX_OVERLAP_COLUMNS) {
   const lista = items || [];
+  const massimo = Math.max(2, Number(maxColumns) || MAX_OVERLAP_COLUMNS);
   const placement = new Array(lista.length).fill(null);
   const overflow = [];
   for (const gruppo of gruppiSovrapposti(lista)) {
     const richieste = Math.max(1, ...gruppo.map((g) => g.column + 1));
-    if (richieste <= MAX_OVERLAP_COLUMNS) {
+    if (richieste <= massimo) {
       for (const g of gruppo) placement[g.i] = { column: g.column, columns: richieste };
       continue;
     }
-    const corsia = MAX_OVERLAP_COLUMNS - 1;
+    const corsia = massimo - 1;
     const nascosti = [];
     for (const g of gruppo) {
-      if (g.column < corsia) placement[g.i] = { column: g.column, columns: MAX_OVERLAP_COLUMNS };
+      if (g.column < corsia) placement[g.i] = { column: g.column, columns: massimo };
       else nascosti.push(g.i);
     }
     nascosti.sort((a, b) => Date.parse(lista[a].start_at) - Date.parse(lista[b].start_at) || a - b);
@@ -556,7 +584,7 @@ export function overflowLayout(items) {
     overflow.push({
       indices: nascosti,
       column: corsia,
-      columns: MAX_OVERLAP_COLUMNS,
+      columns: massimo,
       start_at: new Date(inizio).toISOString(),
       end_at: new Date(fine).toISOString(),
     });
@@ -726,26 +754,42 @@ export function calendarFilterParams(filters, { canAssign = false } = {}) {
   return parametri;
 }
 
-/** I parametri di `getList` (Lista): la lista non ha un filtro agente. */
+/**
+ * I parametri di `getList` (Lista). AGENDA MOBILE: "Stati predefiniti" vuol
+ * dire la STESSA cosa in ogni vista (`DEFAULT_VIEW_STATUSES`, senza annullati
+ * e spostati); la lista dell'API ha come default tutti gli stati, quindi qui
+ * si chiedono esplicitamente. L'agente non e' un parametro dell'API lista: lo
+ * applica `filterListByAgent` sulle righe ricevute.
+ */
 export function listFilterParams(filters) {
   const f = normalizeFilters(filters);
   const parametri = {};
   if (f.type) parametri.types = [f.type];
   const stati = statiDelFiltro(f.status);
-  if (stati) parametri.statuses = stati;
+  parametri.statuses = stati || [...DEFAULT_VIEW_STATUSES];
   if (f.status === MISTAKES_FILTER) parametri.mistakes = true;
   return parametri;
+}
+
+/** Il filtro Agente sulle righe della Lista (solo per chi assegna, come nelle
+ *  altre viste). Un agent vede comunque solo le proprie righe: decide il server. */
+export function filterListByAgent(items, filters, { canAssign = false } = {}) {
+  const f = normalizeFilters(filters);
+  if (!canAssign || !f.agent) return items || [];
+  return (items || []).filter((r) => String(r.assigned_user_id ?? r.agent_id) === f.agent);
 }
 
 /** Quanti filtri stanno cambiando cio' che si vede in questa vista. */
 export function activeFilterCount(filters, { canAssign = false, view = 'week' } = {}) {
   const f = normalizeFilters(filters);
-  const griglia = view !== 'list';
+  // AGENDA MOBILE: il filtro Agente vale in TUTTE le viste; i colleghi
+  // "Occupato" esistono solo nelle viste calendario (la Lista elenca i propri).
+  const calendario = view !== 'list';
   return [
     Boolean(f.type),
     Boolean(f.status),
-    griglia && canAssign && Boolean(f.agent),
-    griglia && !canAssign && !f.colleagues,
+    canAssign && Boolean(f.agent),
+    calendario && !canAssign && !f.colleagues,
   ].filter(Boolean).length;
 }
 
@@ -932,4 +976,122 @@ export function shortcutAction(event, { editing = false, dialogOpen = false, inT
 export function loadedAtLabel(date) {
   if (!(date instanceof Date) || Number.isNaN(date.getTime())) return '';
   return formatTime(date.toISOString());
+}
+
+// ---------------------------------------------------------------------------
+// AGENDA MOBILE: funzioni pure delle nuove viste (mese a indicatori, lista
+// cronologica, mezzanotte, ora corrente, gesti). Nessun DOM, nessun fetch.
+// ---------------------------------------------------------------------------
+
+/** Vero per una visita immobile (l'indicatore del Mese la distingue). */
+export function isVisit(item) {
+  return !!item && item.kind !== 'busy' && (item.type || item.appointment_type) === VISIT_TYPE;
+}
+
+/** L'istante (ms) da cui un elemento occupa il giorno `key`: il suo inizio,
+ *  o la mezzanotte se e' cominciato il giorno prima. Serve all'ordinamento. */
+export function startInDay(item, key) {
+  return Math.max(Date.parse(item.start_at), romeToUtcMs(key));
+}
+
+/** Gli elementi del giorno `key` in ordine cronologico DENTRO quel giorno. */
+export function sortedItemsForDay(items, key) {
+  return itemsForDay(items, key).slice().sort((a, b) =>
+    startInDay(a, key) - startInDay(b, key) || Date.parse(a.end_at) - Date.parse(b.end_at)
+    || String(a.id ?? '').localeCompare(String(b.id ?? '')));
+}
+
+const GIORNO_MESE_BREVE = new Intl.DateTimeFormat('it-IT', { timeZone: TIMEZONE, day: 'numeric', month: 'short' });
+
+/**
+ * L'orario di un elemento visto dal giorno `key`. Un appuntamento che
+ * attraversa la mezzanotte dice da dove viene e dove va: "ieri 23:30 – 02:00",
+ * "22:00 – domani 01:00"; oltre un giorno, con la data.
+ */
+export function dayTimeLabel(item, key) {
+  const inizio = romeDateKey(item.start_at);
+  const fine = romeDateKey(new Date(Date.parse(item.end_at) - 1).toISOString());
+  const etichetta = (giorno, istante) => {
+    if (!key || giorno === key) return formatTime(istante);
+    if (giorno === addDays(key, -1)) return `ieri ${formatTime(istante)}`;
+    if (giorno === addDays(key, 1)) return `domani ${formatTime(istante)}`;
+    return `${GIORNO_MESE_BREVE.format(mezzogiorno(giorno))} ${formatTime(istante)}`;
+  };
+  return {
+    text: `${etichetta(inizio, item.start_at)}–${etichetta(fine, item.end_at)}`,
+    startsBefore: !!key && inizio < key,
+    endsAfter: !!key && fine > key,
+  };
+}
+
+/**
+ * Gli indicatori di una cella del Mese: al massimo `max` puntini e quanti
+ * altri restano; `total` e' il conteggio vero del giorno. Le VISITE IMMOBILE
+ * vengono per prime (si riconoscono a colpo d'occhio anche in un giorno
+ * pieno), poi gli altri appuntamenti in ordine di orario.
+ */
+export function monthDayMarkers(items, key, max = 3) {
+  const delGiorno = sortedItemsForDay(items, key);
+  const ordinati = [...delGiorno.filter(isVisit), ...delGiorno.filter((it) => !isVisit(it))];
+  return {
+    total: delGiorno.length,
+    visits: delGiorno.filter(isVisit).length,
+    dots: ordinati.slice(0, max).map((it) => ({
+      status: it.kind === 'busy' ? 'busy' : (it.status || ''), visit: isVisit(it),
+    })),
+    more: Math.max(0, delGiorno.length - max),
+  };
+}
+
+/**
+ * La Lista cronologica: per ogni giorno con appuntamenti un gruppo; i giorni
+ * vuoti consecutivi diventano UNA riga discreta ("nessun appuntamento").
+ */
+export function listGroups(days, items) {
+  const gruppi = [];
+  for (const key of days || []) {
+    const delGiorno = sortedItemsForDay(items, key);
+    if (delGiorno.length) {
+      gruppi.push({ kind: 'day', key, items: delGiorno });
+      continue;
+    }
+    const ultimo = gruppi[gruppi.length - 1];
+    if (ultimo && ultimo.kind === 'empty') ultimo.to = key;
+    else gruppi.push({ kind: 'empty', from: key, to: key });
+  }
+  return gruppi;
+}
+
+/** "Nessun appuntamento · 6 – 8 novembre 2026" (o un giorno solo). */
+export function emptyRangeLabel(from, to) {
+  return from === to ? formatDayLong(from) : formatRange(from, to);
+}
+
+/** La posizione (px) della linea dell'ora corrente nel giorno `key`, o null
+ *  se `key` non e' oggi a Roma. */
+export function nowLineTop(key, now = new Date(), hourHeight = HOUR_HEIGHT) {
+  if (romeDateKey(now) !== key) return null;
+  const p = romeParts(now);
+  return ((p.hour * 60 + p.minute) / 60) * hourHeight;
+}
+
+/** Soglie del gesto orizzontale. */
+export const SWIPE_MIN_DISTANCE = 60;
+export const SWIPE_MAX_DURATION = 900;
+export const SWIPE_EDGE = 24;
+
+/**
+ * Il gesto di scorrimento: +1 (dito verso sinistra = periodo successivo), -1
+ * (verso destra = precedente), 0 (non e' uno swipe). Uno scorrimento
+ * soprattutto verticale - le ore della griglia, la pagina - non e' mai uno
+ * swipe; nemmeno un tocco partito dal bordo dello schermo (il "torna
+ * indietro" del sistema).
+ */
+export function swipeDirection({ dx, dy, dt, startX = null, width = null } = {}) {
+  if (![dx, dy, dt].every(Number.isFinite)) return 0;
+  if (dt > SWIPE_MAX_DURATION || Math.abs(dx) < SWIPE_MIN_DISTANCE) return 0;
+  if (Math.abs(dx) < 1.5 * Math.abs(dy)) return 0;
+  if (Number.isFinite(startX) && Number.isFinite(width)
+      && (startX < SWIPE_EDGE || startX > width - SWIPE_EDGE)) return 0;
+  return dx < 0 ? 1 : -1;
 }

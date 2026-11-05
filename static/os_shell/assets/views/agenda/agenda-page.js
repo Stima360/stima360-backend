@@ -1,13 +1,17 @@
-// STIMA360 OS — views/agenda/agenda-page.js (A30-4)
+// STIMA360 OS — views/agenda/agenda-page.js (A30-4, AGENDA MOBILE)
 //
-// La pagina Agenda, `#/agenda[/<vista>/<AAAA-MM-GG>]`. Raggiungibile SOLO per
-// indirizzo diretto durante il gate A30-4: nessuna voce nella barra laterale.
+// La pagina Agenda, `#/agenda[/<vista>/<AAAA-MM-GG>]`.
 //
-//   desktop  SETTIMANA (lunedi' -> domenica), piu' Giorno e Lista
-//   tablet   SETTIMANA completa, con scorrimento orizzontale se serve
-//   mobile   LISTA e GIORNO: la settimana non si comprime
+// AGENDA MOBILE: Giorno, Settimana, Mese e Lista su OGNI dispositivo, e la
+// vista scelta e' SEMPRE quella mostrata (la regola G3 "su smartphone solo
+// Lista e Giorno" e' revocata). Sullo schermo stretto (COMPACT_QUERY) la
+// pagina prende la classe `agenda-compact`: testata ridotta, comandi
+// secondari nel menu "⋯", filtri a comando, "+" flottante, settimana a
+// colonne strette, mese a indicatori; un gesto orizzontale cambia periodo.
+// L'ultima vista scelta resta nel browser (agenda/agenda-prefs.js, solo il
+// nome della vista).
 //
-// Nessun Mese, nessun trascinamento, nessun ridimensionamento, nessun Google.
+// Nessun trascinamento, nessun ridimensionamento.
 // I dati vengono SOLO da /api/appointments (agenda/agenda-api.js).
 //
 // Ogni caricamento annota `sessionEpoch()` e la rotta: una risposta arrivata
@@ -17,9 +21,10 @@ import { getSession, sessionEpoch } from '../../core/auth.js';
 import { navigate } from '../../core/router.js';
 import {
   ALL_STATUSES_FILTER,
+  COMPACT_QUERY,
+  LIST_CHUNK_DAYS,
   MISTAKES_FILTER,
   DEFAULT_FILTERS,
-  MOBILE_MAX_WIDTH,
   STATUS_LABELS,
   TYPE_LABELS,
   CREATE_HIDDEN_TYPES,
@@ -27,13 +32,14 @@ import {
   VIEW_SLUGS,
   TIMEZONE_LABEL,
   VIEWS,
-  MOBILE_VIEWS,
   actionSuccessMessage,
+  addDays,
   activeFilterCount,
   calendarFilterParams,
   canAssignRecords,
   effectiveView,
   errorMessage,
+  filterListByAgent,
   formatDateTime,
   formatDayLong,
   formatMonth,
@@ -41,6 +47,7 @@ import {
   isDateKey,
   legendEntries,
   listFilterParams,
+  listRange,
   loadedAtLabel,
   normalizeFilters,
   rangeFor,
@@ -48,6 +55,7 @@ import {
   shiftKey,
   shortcutAction,
   statusLabel,
+  swipeDirection,
   todayKey,
   typeLabel,
   viewFromSlug,
@@ -55,7 +63,10 @@ import {
 import {
   getAgents, getCalendar, getList, syncLegacyRequests,
 } from '../../agenda/agenda-api.js';
-import { renderDay, renderList, renderMonth, renderWeek } from '../../components/agenda/agenda-views.js';
+import {
+  refreshNowLines, renderDay, renderList, renderMonth, renderWeek,
+} from '../../components/agenda/agenda-views.js';
+import { readPreferredView, savePreferredView } from '../../agenda/agenda-prefs.js';
 import { openAppointmentDrawer } from '../../components/agenda/agenda-drawer.js';
 import {
   openActionDialog, openAvailabilityDialog, openBookingLinksDialog, openCreateDialog,
@@ -65,9 +76,7 @@ import { mountCalendarSyncPanel } from '../../components/agenda/agenda-calendar-
 // in piu'): con `speech_input` il dialog «Nuovo appuntamento» offre il microfono.
 import { lastVoiceStatus } from '../../voice/voice-api.js';
 
-const MOBILE_QUERY = `(max-width: ${MOBILE_MAX_WIDTH}px)`;
-
-// Toglie il listener sulla soglia mobile della pagina Agenda montata per
+// Toglie il listener sulla soglia compatta della pagina Agenda montata per
 // ultima (uno solo alla volta, vedi `renderAgenda`).
 let smettiDiSeguireLaSoglia = null;
 
@@ -170,8 +179,21 @@ function erroreGoogleInSospeso() {
   return MESSAGGI_ERRORE_GOOGLE[codice] || 'Collegamento con Google Calendar non riuscito.';
 }
 
-function isMobile() {
-  return typeof window.matchMedia === 'function' && window.matchMedia(MOBILE_QUERY).matches;
+function isCompact() {
+  return typeof window.matchMedia === 'function' && window.matchMedia(COMPACT_QUERY).matches;
+}
+
+// Aggiorna l'indirizzo senza ricostruire la pagina (giorno scelto nel Mese):
+// un ricaricamento ritrova lo stesso giorno, la cronologia non si allunga.
+function sostituisciIndirizzo(view, giorno) {
+  try {
+    const h = window.history;
+    if (h && typeof h.replaceState === 'function') {
+      h.replaceState(null, '', `#/agenda/${VIEW_SLUGS[view]}/${giorno}`);
+    }
+  } catch (_e) {
+    // nessuna cronologia disponibile: resta l'indirizzo di partenza.
+  }
 }
 
 function due(n) {
@@ -192,9 +214,16 @@ function etichettaPeriodo(view, range) {
 }
 
 export async function renderAgenda(container, params = []) {
-  const mobile = isMobile();
-  const view = effectiveView(viewFromSlug(params[0]), mobile);
+  let compatto = isCompact();
+  // La vista chiesta e' quella mostrata; senza vista nell'indirizzo, l'ultima
+  // scelta dall'utente (o la partenza di sempre).
+  const chiesta = viewFromSlug(params[0]);
+  const view = effectiveView(chiesta, compatto, chiesta ? null : readPreferredView());
+  if (chiesta) savePreferredView(view);
   const key = isDateKey(params[1]) ? params[1] : todayKey();
+  // Il giorno "scelto": nel Mese cambia toccando una data; passando a un'altra
+  // vista (o creando un appuntamento) si parte da li'.
+  let chiave = key;
   const range = rangeFor(view, key);
   const epoca = sessionEpoch();
   // La pagina e' viva finche' la sessione e' la stessa e il suo nodo e'
@@ -205,22 +234,23 @@ export async function renderAgenda(container, params = []) {
   const vai = (nuovaVista, nuovaData) => navigate('agenda', [VIEW_SLUGS[nuovaVista], nuovaData]);
 
   container.replaceChildren();
-  pagina = el('div', `agenda-page agenda-view-${view}`);
+  pagina = el('div', `agenda-page agenda-view-${view}${compatto ? ' agenda-compact' : ''}`);
+  pagina.dataset.view = view;
   container.appendChild(pagina);
 
   // -- barra ---------------------------------------------------------------
-  const barra = el('div', 'agenda-toolbar');
+  const barra = el('div', 'agenda-toolbar agenda-main-toolbar');
   const navigazione = el('div', 'agenda-nav');
-  const indietro = el('button', 'btn', '◀');
+  const indietro = el('button', 'btn agenda-prev', '◀');
   indietro.type = 'button';
   const periodo = { day: ['Giorno precedente', 'Giorno successivo'], month: ['Mese precedente', 'Mese successivo'] }[view]
     || ['Settimana precedente', 'Settimana successiva'];
   indietro.setAttribute('aria-label', periodo[0]);
   indietro.addEventListener('click', () => vai(view, shiftKey(view, key, -1)));
-  const oggi = el('button', 'btn', 'Oggi');
+  const oggi = el('button', 'btn agenda-today-btn', 'Oggi');
   oggi.type = 'button';
   oggi.addEventListener('click', () => vai(view, todayKey()));
-  const avanti = el('button', 'btn', '▶');
+  const avanti = el('button', 'btn agenda-next', '▶');
   avanti.type = 'button';
   avanti.setAttribute('aria-label', periodo[1]);
   avanti.addEventListener('click', () => vai(view, shiftKey(view, key, 1)));
@@ -229,12 +259,26 @@ export async function renderAgenda(container, params = []) {
   avanti.setAttribute('aria-keyshortcuts', 'ArrowRight');
   oggi.setAttribute('aria-keyshortcuts', 'T');
   navigazione.append(indietro, oggi, avanti);
-  navigazione.appendChild(el('h2', 'agenda-period', etichettaPeriodo(view, range)));
+  const titoloPeriodo = el('h2', 'agenda-period', etichettaPeriodo(view, range));
+  navigazione.appendChild(titoloPeriodo);
   // §12: il fuso e' scritto, non sottinteso - Roma, qualunque sia il dispositivo.
   const fuso = el('span', 'agenda-tz muted', TIMEZONE_LABEL);
   fuso.dataset.timezone = '';
   fuso.title = 'Date e orari dell’Agenda sono sempre nel fuso di Roma, qualunque sia il fuso del dispositivo.';
   navigazione.appendChild(fuso);
+  // AGENDA MOBILE: sullo schermo stretto filtri e comandi secondari stanno
+  // dietro due pulsanti (visibili solo con `agenda-compact`).
+  const rapidi = el('div', 'agenda-quick');
+  const apriFiltri = el('button', 'btn agenda-filters-toggle', 'Filtri');
+  apriFiltri.type = 'button';
+  apriFiltri.setAttribute('aria-expanded', 'false');
+  const apriMenu = el('button', 'btn agenda-more-toggle', '⋯');
+  apriMenu.type = 'button';
+  apriMenu.setAttribute('aria-label', 'Altri comandi');
+  apriMenu.setAttribute('aria-haspopup', 'true');
+  apriMenu.setAttribute('aria-expanded', 'false');
+  rapidi.append(apriFiltri, apriMenu);
+  navigazione.appendChild(rapidi);
   barra.appendChild(navigazione);
 
   const viste = el('div', 'agenda-views');
@@ -245,9 +289,8 @@ export async function renderAgenda(container, params = []) {
     b.type = 'button';
     b.dataset.view = v;
     b.setAttribute('aria-pressed', v === view ? 'true' : 'false');
-    // La settimana non si offre su smartphone.
-    if (!MOBILE_VIEWS.includes(v)) b.classList.add('agenda-desktop-only');
-    b.addEventListener('click', () => vai(v, key));
+    // Tutte le viste, su ogni dispositivo; si parte dal giorno scelto.
+    b.addEventListener('click', () => vai(v, chiave));
     viste.appendChild(b);
   }
   barra.appendChild(viste);
@@ -273,16 +316,46 @@ export async function renderAgenda(container, params = []) {
     sincronizza.type = 'button';
     comandi.append(sincronizza);
   }
-  comandi.append(nuovo);
+  // AGENDA MOBILE: sullo schermo stretto il riquadro Google Calendar non
+  // occupa stabilmente la pagina; si apre da qui (solo `agenda-compact`).
+  const mostraGoogle = el('button', 'btn agenda-gcal-toggle', 'Google Calendar');
+  mostraGoogle.type = 'button';
+  mostraGoogle.setAttribute('aria-expanded', 'false');
+  comandi.append(mostraGoogle, nuovo);
+  comandi.setAttribute('role', 'group');
+  comandi.setAttribute('aria-label', 'Comandi');
   barra.appendChild(comandi);
   pagina.appendChild(barra);
 
+  const alterna = (classe, pulsante) => {
+    const aperto = !pagina.classList.contains(classe);
+    pagina.classList.toggle(classe, aperto);
+    if (pulsante) pulsante.setAttribute('aria-expanded', aperto ? 'true' : 'false');
+    return aperto;
+  };
+  apriFiltri.addEventListener('click', () => alterna('agenda-filters-open', apriFiltri));
+  apriMenu.addEventListener('click', () => alterna('agenda-menu-open', apriMenu));
+  mostraGoogle.addEventListener('click', () => alterna('agenda-gcal-open', mostraGoogle));
+  // Un comando scelto dal menu lo chiude; anche un tocco altrove sulla pagina.
+  const chiudiMenu = () => {
+    if (!pagina.classList.contains('agenda-menu-open')) return;
+    pagina.classList.toggle('agenda-menu-open', false);
+    apriMenu.setAttribute('aria-expanded', 'false');
+  };
+  comandi.addEventListener('click', chiudiMenu);
+  pagina.addEventListener('click', (evento) => {
+    const bersaglio = evento && evento.target;
+    if (!bersaglio || bersaglio === apriMenu || comandi.contains(bersaglio)) return;
+    chiudiMenu();
+  });
+
   // -- filtri (piano A30-4 congelato: §3 AgendaFilters, §4.1, §7) ------------
-  // Agente: solo a chi assegna (owner, admin, Supreme in acting) e solo dove
-  // l'API lo accetta (Settimana, Giorno). Un agent vede comunque solo i propri
-  // appuntamenti: per lui c'e' l'interruttore dei colleghi "Occupato".
-  // Tipo e Stato in ogni vista. "Stati predefiniti" non manda nulla: ogni
-  // vista tiene il default del server.
+  // Agente: solo a chi assegna (owner, admin, Supreme in acting), in OGNI
+  // vista (AGENDA MOBILE: nella Lista lo applica il client sulle righe). Un
+  // agent vede comunque solo i propri appuntamenti: per lui c'e'
+  // l'interruttore dei colleghi "Occupato" nelle viste calendario.
+  // Tipo e Stato in ogni vista, con lo STESSO significato: "Stati
+  // predefiniti" = senza annullati e spostati, ovunque.
   const puoAssegnare = canAssignRecords(getSession());
   const griglia = view !== 'list';
   let filtri = normalizeFilters(leggiFiltri());
@@ -306,7 +379,7 @@ export async function renderAgenda(container, params = []) {
     s.value = valore;
     return s;
   };
-  const selAgente = puoAssegnare && griglia
+  const selAgente = puoAssegnare
     ? selezione('agent', [['', 'Tutti gli agenti']], filtri.agent) : null;
   let spuntaColleghi = null;
   if (!puoAssegnare && griglia) {
@@ -324,7 +397,9 @@ export async function renderAgenda(container, params = []) {
   const azzera = el('button', 'btn', 'Azzera filtri');
   azzera.type = 'button';
   const aggiornaAzzera = () => {
-    azzera.hidden = activeFilterCount(filtri, { canAssign: puoAssegnare, view }) === 0;
+    const attivi = activeFilterCount(filtri, { canAssign: puoAssegnare, view });
+    azzera.hidden = attivi === 0;
+    apriFiltri.textContent = attivi ? `Filtri (${attivi})` : 'Filtri';
   };
   if (selAgente) barraFiltri.appendChild(campoFiltro('Agente', selAgente));
   if (spuntaColleghi) {
@@ -404,30 +479,40 @@ export async function renderAgenda(container, params = []) {
   drawer.setAttribute('aria-modal', 'true');
   const dialogo = el('dialog', 'modal modal-wide agenda-dialog');
   dialogo.setAttribute('aria-modal', 'true');
-  pagina.append(drawer, dialogo);
+  // AGENDA MOBILE: il "+" flottante dello schermo stretto (stesso dialog del
+  // pulsante "+ Nuovo appuntamento", sul giorno scelto).
+  const piu = el('button', 'agenda-fab', '+');
+  piu.type = 'button';
+  piu.setAttribute('aria-label', 'Nuovo appuntamento');
+  piu.dataset.fab = '';
+  pagina.append(drawer, dialogo, piu);
 
-  // Se la finestra passa sotto la soglia mobile con la settimana (o il mese)
-  // aperta, si torna alla Lista: la settimana non si comprime. Ma tornare alla
-  // Lista ricostruisce la pagina, e con lei i dialog: con un pannello o un
-  // dialog aperto (dettaglio, nuovo appuntamento, Disponibilita', Link
-  // prenotazione, "+N") non si ricostruisce nulla - il pannello resta vivo coi
-  // suoi dati non salvati - e la vista si adegua quando l'ultimo si chiude
-  // (`close` non risale: lo si ascolta in cattura sulla pagina). Un solo
-  // listener sulla soglia per volta: quello della pagina precedente si toglie
-  // quando se ne monta una nuova.
+  const pannelloAperto = () => drawer.open === true || dialogo.open === true
+    || (typeof pagina.querySelector === 'function' && !!pagina.querySelector('dialog[open]'));
+
+  // AGENDA MOBILE: attraversando la soglia compatta la vista NON cambia mai.
+  // Cambia solo la disposizione (classe `agenda-compact`) e l'area si
+  // ridisegna con i dati gia' caricati - nessuna navigazione, nessuna
+  // richiesta. Con un pannello o un dialog aperto (dettaglio, nuovo
+  // appuntamento, Disponibilita', Link prenotazione, "+N") non si ridisegna
+  // nulla - il pannello resta vivo coi suoi dati non salvati - e l'area si
+  // adegua quando l'ultimo si chiude (`close` non risale: lo si ascolta in
+  // cattura sulla pagina). Un solo listener sulla soglia per volta: quello
+  // della pagina precedente si toglie quando se ne monta una nuova.
   if (smettiDiSeguireLaSoglia) smettiDiSeguireLaSoglia();
   if (typeof window.matchMedia === 'function') {
-    const mq = window.matchMedia(MOBILE_QUERY);
-    const pannelloAperto = () => drawer.open === true || dialogo.open === true
-      || (typeof pagina.querySelector === 'function' && !!pagina.querySelector('dialog[open]'));
+    const mq = window.matchMedia(COMPACT_QUERY);
     const adegua = () => {
       if (!pagina.isConnected) {
         smetti();
         return;
       }
       if (pannelloAperto()) return;
-      const giusta = effectiveView(view, mq.matches);
-      if (giusta !== view) vai(giusta, key);
+      const ora = mq.matches === true;
+      if (ora === compatto) return;
+      compatto = ora;
+      pagina.classList.toggle('agenda-compact', ora);
+      disegna();
     };
     const smetti = () => {
       if (mq.removeEventListener) mq.removeEventListener('change', adegua);
@@ -439,6 +524,10 @@ export async function renderAgenda(container, params = []) {
   }
 
   let listaAgenti = [];
+  // Gli ultimi elementi caricati (per ridisegnare senza richieste) e, per la
+  // Lista, i giorni gia' caricati (crescono con "Mostra altri giorni").
+  let ultimiItems = null;
+  let giorniLista = view === 'list' ? range.days.slice() : null;
 
   // Piano A30-4 §1.6: vince l'ultima richiesta. Due filtri cambiati in fretta
   // fanno partire due caricamenti; una risposta superata non si disegna.
@@ -457,15 +546,8 @@ export async function renderAgenda(container, params = []) {
       riempiFiltroAgenti(listaAgenti);
       let items;
       if (view === 'list') {
-        const esito = await getList({
-          from: range.from, to: range.to, limit: 200, ...listFilterParams(filtri),
-        });
-        // La lista porta le righe, senza il nome dell'agente: lo si prende
-        // dall'elenco /agents del server, mai inventato.
-        const nomi = new Map(listaAgenti.map((a) => [Number(a.id), a.name]));
-        items = ((esito && esito.items) || []).map((r) => ({
-          ...r, agent_name: nomi.get(Number(r.assigned_user_id)) || null,
-        }));
+        giorniLista = range.days.slice();
+        items = await righeLista(range.from, range.to);
       } else {
         const esito = await getCalendar({
           from: range.from, to: range.to,
@@ -474,20 +556,8 @@ export async function renderAgenda(container, params = []) {
         items = (esito && esito.items) || [];
       }
       if (superata()) return;
-      area.replaceChildren();
-      const argomenti = {
-        days: range.days,
-        items,
-        onOpen: (item) => apri(item.id),
-        // A30-13B.1: un click su un'ora vuota apre lo stesso dialog del
-        // pulsante "+ Nuovo appuntamento", precompilato su quel giorno e ora.
-        onSlotClick: (giorno, ora) => apriCreazione({ dateKey: giorno, startTime: `${due(ora)}:00` }),
-      };
-      if (view === 'week') renderWeek(area, argomenti);
-      else if (view === 'day') renderDay(area, argomenti);
-      // Piano §4.3: una cella del Mese porta al Giorno, niente altro.
-      else if (view === 'month') renderMonth(area, { dayKey: key, items, onDay: (giorno) => vai('day', giorno) });
-      else renderList(area, argomenti);
+      ultimiItems = items;
+      disegna();
       caricatoAlle = new Date();
       avviso.replaceChildren();
       if (messaggio) avviso.appendChild(el('div', 'success-box', messaggio));
@@ -509,6 +579,107 @@ export async function renderAgenda(container, params = []) {
       box.appendChild(riprova);
       avviso.replaceChildren(box);
     }
+  }
+
+  // La Lista: le righe dell'API lista con gli STESSI stati predefiniti delle
+  // altre viste, il filtro Agente applicato qui, il nome dell'agente preso
+  // dall'elenco /agents del server (mai inventato).
+  async function righeLista(from, to) {
+    const esito = await getList({ from, to, limit: 200, ...listFilterParams(filtri) });
+    const nomi = new Map(listaAgenti.map((a) => [Number(a.id), a.name]));
+    const righe = ((esito && esito.items) || []).map((r) => ({
+      ...r, agent_name: nomi.get(Number(r.assigned_user_id)) || r.agent_name || null,
+    }));
+    return filterListByAgent(righe, filtri, { canAssign: puoAssegnare });
+  }
+
+  // "Mostra altri giorni": i LIST_CHUNK_DAYS successivi, aggiunti in fondo.
+  async function altriGiorni(pulsante) {
+    if (!giorniLista || !giorniLista.length || pulsante.disabled) return;
+    pulsante.disabled = true;
+    const giro = giroCarica;
+    const da = addDays(giorniLista[giorniLista.length - 1], 1);
+    const altro = listRange(da, LIST_CHUNK_DAYS);
+    try {
+      const righe = await righeLista(altro.from, altro.to);
+      if (stale() || giro !== giroCarica) return;
+      const viste = new Set((ultimiItems || []).map((r) => r.id));
+      ultimiItems = [...(ultimiItems || []), ...righe.filter((r) => !viste.has(r.id))];
+      giorniLista = [...giorniLista, ...altro.days];
+      disegna();
+    } catch (errore) {
+      if (stale()) return;
+      pulsante.disabled = false;
+      avviso.replaceChildren(el('div', 'error-box', errorMessage(errore)));
+    }
+  }
+
+  // Disegna l'area con gli elementi gia' caricati (anche dopo un cambio di
+  // disposizione, senza nuove richieste).
+  function disegna() {
+    if (!ultimiItems) return;
+    const items = ultimiItems;
+    area.replaceChildren();
+    const argomenti = {
+      days: range.days,
+      items,
+      compact: compatto,
+      onOpen: (item) => apri(item.id),
+      // A30-13B.1: un click su un'ora vuota apre lo stesso dialog del
+      // pulsante "+ Nuovo appuntamento", precompilato su quel giorno e ora.
+      onSlotClick: (giorno, ora) => apriCreazione({ dateKey: giorno, startTime: `${due(ora)}:00` }),
+    };
+    if (view === 'week') renderWeek(area, { ...argomenti, onDayOpen: (giorno) => vai('day', giorno) });
+    else if (view === 'day') renderDay(area, argomenti);
+    else if (view === 'month') {
+      // AGENDA MOBILE: un tocco su una data la sceglie e mostra i suoi
+      // appuntamenti sotto la griglia; "Apri giorno" porta al Giorno.
+      renderMonth(area, {
+        dayKey: key,
+        items,
+        selectedKey: chiave,
+        onSelect: (giorno) => { chiave = giorno; sostituisciIndirizzo('month', giorno); },
+        onOpen: (item) => apri(item.id),
+        onDay: (giorno) => vai('day', giorno),
+        onCreate: (giorno) => apriCreazione({ dateKey: giorno }),
+        onOutside: (giorno) => vai('month', giorno),
+      });
+    } else {
+      renderList(area, {
+        ...argomenti,
+        days: giorniLista || range.days,
+        onMore: altriGiorni,
+        moreLabel: `Mostra altri ${LIST_CHUNK_DAYS} giorni`,
+      });
+      const giorni = giorniLista || range.days;
+      titoloPeriodo.textContent = formatRange(giorni[0], giorni[giorni.length - 1]);
+    }
+    misuraTestata();
+  }
+
+  // Sullo schermo stretto la testata resta in alto, SOTTO le barre fisse
+  // orizzontali della Shell (la barra in alto dello smartphone, la barra del
+  // titolo e quella Superadmin del desktop; mai la colonna laterale), e la
+  // griglia oraria occupa il resto dello schermo: due misure in variabili
+  // CSS, nient'altro.
+  function misuraTestata() {
+    if (!compatto || typeof requestAnimationFrame !== 'function') return;
+    requestAnimationFrame(() => {
+      if (stale() || !pagina.style || typeof pagina.style.setProperty !== 'function') return;
+      if (typeof document.querySelector !== 'function' || typeof getComputedStyle !== 'function') return;
+      let alto = 0;
+      for (const selettore of ['.acting-bar', '.sidebar', '.topbar']) {
+        const barraShell = document.querySelector(selettore);
+        if (!barraShell || barraShell.hidden) continue;
+        const stile = getComputedStyle(barraShell);
+        if ((stile.position !== 'sticky' && stile.position !== 'fixed') || stile.display === 'none') continue;
+        const r = barraShell.getBoundingClientRect();
+        if (r.height <= 0 || r.width < window.innerWidth * 0.5) continue;
+        alto = Math.max(alto, Math.ceil((parseFloat(stile.top) || 0) + r.height));
+      }
+      pagina.style.setProperty('--agenda-sticky-top', `${alto}px`);
+      pagina.style.setProperty('--agenda-bar-h', `${Math.ceil(barra.getBoundingClientRect().height)}px`);
+    });
   }
 
   async function apri(appointmentId) {
@@ -586,7 +757,7 @@ export async function renderAgenda(container, params = []) {
     if (stale()) return;
     openCreateDialog(dialogo, {
       agents: listaAgenti,
-      dateKey: giornoIniziale || key,
+      dateKey: giornoIniziale || chiave,
       startTime,
       session: getSession(),
       voice: lastVoiceStatus(),
@@ -605,6 +776,42 @@ export async function renderAgenda(container, params = []) {
     });
   }
   nuovo.addEventListener('click', () => apriCreazione());
+  piu.addEventListener('click', () => apriCreazione());
+
+  // AGENDA MOBILE: un gesto orizzontale sull'area cambia periodo (dito verso
+  // sinistra = successivo). Ascoltatori passivi: lo scorrimento verticale
+  // delle ore e della pagina non viene mai trattenuto, e un gesto
+  // soprattutto verticale non e' mai uno swipe (`swipeDirection`).
+  let tocco = null;
+  area.addEventListener('touchstart', (evento) => {
+    const t = evento.touches && evento.touches.length === 1 ? evento.touches[0] : null;
+    tocco = t ? { x: t.clientX, y: t.clientY, t: Date.now() } : null;
+  }, { passive: true });
+  area.addEventListener('touchcancel', () => { tocco = null; }, { passive: true });
+  area.addEventListener('touchend', (evento) => {
+    const inizio = tocco;
+    tocco = null;
+    const t = evento.changedTouches && evento.changedTouches[0];
+    if (!inizio || !t || pannelloAperto()) return;
+    const verso = swipeDirection({
+      dx: t.clientX - inizio.x, dy: t.clientY - inizio.y, dt: Date.now() - inizio.t,
+      startX: inizio.x, width: window.innerWidth,
+    });
+    if (verso) vai(view, shiftKey(view, key, verso));
+  }, { passive: true });
+
+  // La linea dell'ora corrente segue l'orologio (un controllo al minuto, che
+  // si ferma da solo quando la pagina non c'e' piu').
+  if (view === 'day' || view === 'week') {
+    const orologio = setInterval(() => {
+      if (!pagina.isConnected) {
+        clearInterval(orologio);
+        return;
+      }
+      refreshNowLines(area);
+    }, 60000);
+    if (orologio && typeof orologio.unref === 'function') orologio.unref();
+  }
   disponibilita.addEventListener('click', async () => {
     try {
       listaAgenti = await agenti();

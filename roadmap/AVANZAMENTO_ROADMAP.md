@@ -149,5 +149,6 @@ le variabili del servizio serve anche una chiave API Render tra i segreti dell'a
 
 - **Risposte automatiche:** spente. In TEST, al massimo in simulazione; l'invio reale richiede due variabili, il modo `send` dell'agenzia e il trasporto Meta del 4B acceso.
 - **Firma:** FIRMA OTP STIMA360 (firma elettronica semplice, sistema proprietario, `roadmap/FIRMA_OTP.md`): attiva solo con `ESIGN_PROVIDER=stima360_otp` e le sue chiavi; l'agente invia collegamento e codice a qualsiasi email valida del cliente (nessuna whitelist; restano limiti di frequenza, tentativi e divieto di contatto). Il webhook e la riconciliazione dei fornitori esterni descritti sopra (punto 5) non esistono più; l'integrazione Documenso è stata rimossa.
+- **Agenda mobile:** Giorno, Settimana, Mese e Lista su ogni dispositivo, con disposizione compatta per smartphone (`roadmap/AGENDA_MOBILE.md`). Verificata nel browser locale (Chromium, 6 dimensioni); da collaudare a mano su iPhone reale su Render TEST.
 - **Invio manuale WhatsApp (4B):** spento su TEST (`WHATSAPP_OUTBOUND_MODE` assente).
 - **Collegamento del numero operativo:** solo pianificato.

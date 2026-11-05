@@ -56,6 +56,9 @@ VISIT_SECTIONS = ASSETS / "components" / "agenda" / "agenda-visit.js"
 
 AGENDA_FILES = (MODEL, API, LOOKUP, PAGE, VIEWS_JS, DRAWER, DIALOGS, VISIT_SECTIONS)
 AGENDA_FILES_GOOGLE = (CALENDAR_SYNC_API, CALENDAR_SYNC_PANEL)
+# AGENDA MOBILE: l'unico modulo della Shell con uno storage del browser, per
+# la sola ultima vista scelta (sentinella dedicata in test_agenda_mobile_ui).
+PREFS = ASSETS / "agenda" / "agenda-prefs.js"
 NODE = shutil.which("node")
 
 
@@ -214,7 +217,9 @@ def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_a
         # A30-9B: i due file nuovi vivono anche loro sotto "agenda/" (uno e'
         # `agenda/calendar-sync-api.js`, l'altro importa da li'): non sono
         # una vista ESTERNA all'Agenda che la importa, sono l'Agenda stessa.
-        if f in AGENDA_FILES or f in AGENDA_FILES_GOOGLE or f == MAIN_JS:
+        # SENTINELLA AGGIORNATA (AGENDA MOBILE): `agenda/agenda-prefs.js` e'
+        # anch'esso l'Agenda stessa (ultima vista scelta), non una vista esterna.
+        if f in AGENDA_FILES or f in AGENDA_FILES_GOOGLE or f == MAIN_JS or f == PREFS:
             continue
         testo = _testo(f)
         if f in A31_4_VISTE_CON_DIALOG_AGENDA:
@@ -244,34 +249,36 @@ def test_04_solo_main_js_importa_la_pagina_e_nessuna_vista_esistente_importa_l_a
 # COSA NON C'E'
 # ---------------------------------------------------------------------------
 
-def test_05_mese_solo_desktop_senza_trascinamento_ne_modifica_dalla_cella():
-    """SENTINELLA AGGIORNATA (autorizzata, dichiarata): il piano A30-4 congelato
-    prevede il Mese su desktop/tablet (§3, §4.3) e NON su smartphone (G3).
+def test_05_mese_su_ogni_dispositivo_senza_trascinamento_ne_scritture_dalla_cella():
+    """SENTINELLA AGGIORNATA (AGENDA MOBILE, approvata dal titolare): la regola
+    G3 del piano A30-4 ("su smartphone solo Lista e Giorno") e' revocata. Il
+    Mese c'e' su OGNI dispositivo e la vista scelta e' sempre quella mostrata.
 
-    * desktop: esattamente week, day, month, list; mobile: esattamente list, day
-      (la prova di esecuzione e' in test_20: VIEWS, MOBILE_VIEWS, effectiveView);
-    * il pulsante del Mese e' `agenda-desktop-only` come quello della Settimana
-      (stessa riga di test_14) e il CSS mobile lo nasconde (test_13);
+    * VIEWS = week, day, month, list; MOBILE_VIEWS = VIEWS (prova di esecuzione
+      in test_20: effectiveView non sostituisce mai una vista valida);
+    * nessun pulsante `agenda-desktop-only` (test_14) e nessuna regola CSS che
+      nasconda una vista (test_13);
     * trascinamento e ridimensionamento restano vietati OVUNQUE (test_06);
-    * dalla cella del Mese NON si modifica nulla: `renderMonth` riceve solo
-      `onDay` (vai al Giorno) - nessun `onOpen`, nessun `onSlotClick`, nessun
-      dialog, nessuna scrittura."""
+    * dalla cella del Mese NON si scrive nulla: un tocco sceglie il giorno e ne
+      mostra gli appuntamenti (le stesse card della Lista, che aprono la
+      scheda); creare passa dalla pagina (`onCreate`), mai da qui: nessun
+      dialog aperto qui, nessuna richiesta, nessun metodo HTTP."""
     modello = _senza_commenti(_testo(MODEL))
     assert "export const VIEWS = Object.freeze(['week', 'day', 'month', 'list']);" in modello
-    assert "export const MOBILE_VIEWS = Object.freeze(['list', 'day']);" in modello
+    assert "export const MOBILE_VIEWS = VIEWS;" in modello
     viste = _senza_commenti(_testo(VIEWS_JS))
     corpo = viste[viste.index("export function renderMonth("):]
     fine = corpo.find("\n}\n")
     corpo = corpo if fine < 0 else corpo[:fine + 2]
-    assert corpo.startswith("export function renderMonth(target, { dayKey, items, onDay })")
-    for vietato in ("onOpen", "onSlotClick", "renderCard", "openCreate", "openAction",
-                    "showModal", "fetch(", "request(", "method"):
+    assert corpo.startswith("export function renderMonth(target, {")
+    for vietato in ("onSlotClick", "openCreate", "openAction", "showModal", "fetch(", "request(",
+                    "method", "draggable", "dragstart"):
         assert vietato not in corpo, vietato
     riga = viste[viste.index("function rigaMese("):]
     riga = riga[:riga.index("\n}\n") + 2]
     assert "addEventListener" not in riga                 # le righe del Mese non sono cliccabili
     pagina = _senza_commenti(_testo(PAGE))
-    assert "renderMonth(area, { dayKey: key, items, onDay: (giorno) => vai('day', giorno) })" in pagina
+    assert "renderMonth(area, {" in pagina and "onDay: (giorno) => vai('day', giorno)," in pagina
 
 
 def test_06_nessun_trascinamento_ne_ridimensionamento():
@@ -486,22 +493,29 @@ def test_12_rendering_con_dom_e_textcontent():
 # UX: SETTIMANA, DOMENICA, MOBILE, VIEWPORT 08-20
 # ---------------------------------------------------------------------------
 
-def test_13_css_mobile_nasconde_solo_la_settimana_e_tablet_scorre():
+def test_13_css_nessuna_vista_nascosta_e_settimana_sempre_nello_schermo():
+    """SENTINELLA AGGIORNATA (AGENDA MOBILE): niente piu' `.agenda-desktop-only`
+    (aurora.css la annullava con `.btn`: i pulsanti si vedevano e portavano alla
+    Lista) e niente larghezza minima della settimana (a 768px la domenica
+    usciva dallo schermo): sette colonne `minmax(0, 1fr)`."""
     css = _agenda_css()
-    mobile = css[css.index("@media (max-width: 767px)"):]
-    assert ".agenda-desktop-only { display: none; }" in mobile
-    tablet = css[css.index("@media (min-width: 768px) and (max-width: 1199px)"):
-                 css.index("@media (max-width: 767px)")]
-    assert ".agenda-grid-week { min-width: 880px; }" in tablet
+    assert "agenda-desktop-only {" not in css and "agenda-desktop-only{" not in css
+    assert "min-width: 880px" not in css
+    assert "grid-template-columns: 56px repeat(7, minmax(0, 1fr));" in css
+    assert "grid-template-columns: 34px repeat(7, minmax(0, 1fr));" in css      # settimana compatta
     assert "overflow: auto" in css
     # nessuna regola che nasconda una colonna (la domenica resta)
     assert "nth-child" not in css and "nth-of-type" not in css
 
 
-def test_14_la_pagina_non_offre_la_settimana_su_mobile():
-    pagina = _testo(PAGE)
-    assert "if (!MOBILE_VIEWS.includes(v)) b.classList.add('agenda-desktop-only');" in pagina
-    assert "effectiveView(viewFromSlug(params[0]), mobile)" in pagina
+def test_14_la_pagina_offre_tutte_le_viste_su_ogni_dispositivo():
+    """SENTINELLA AGGIORNATA (AGENDA MOBILE): nessun pulsante di vista e'
+    marcato per il solo desktop; la vista chiesta nell'indirizzo e' quella
+    mostrata; senza vista, l'ultima scelta (agenda-prefs.js) o la partenza."""
+    pagina = _senza_commenti(_testo(PAGE))
+    assert "agenda-desktop-only" not in pagina and "MOBILE_VIEWS" not in pagina
+    assert "effectiveView(chiesta, compatto, chiesta ? null : readPreferredView())" in pagina
+    assert "b.addEventListener('click', () => vai(v, chiave));" in pagina
 
 
 def test_15_le_etichette_sono_quelle_del_backend():
@@ -624,7 +638,9 @@ def test_20_modello_puro_uguale_in_ogni_fuso_del_browser(tmp_path, tz):
     assert o["rangeDst"]["to"] == "2026-03-30T00:00:00+02:00"
     assert o["rangeDay"] == {"from": "2026-10-25T00:00:00+02:00",
                              "to": "2026-10-26T00:00:00+01:00", "days": ["2026-10-25"]}
-    assert len(o["rangeList"]["days"]) == 7
+    # SENTINELLA AGGIORNATA (AGENDA MOBILE): la Lista parte da 14 giorni e ne
+    # carica altri a richiesta.
+    assert len(o["rangeList"]["days"]) == 14
     assert o["isoWinter"] == "2026-10-26T09:30:00+01:00"
     assert o["isoSummer"] == "2026-10-24T09:30:00+02:00"
     assert o["dateKey"] == "2026-09-25"                  # 22:30Z e' gia' domani a Roma
@@ -636,8 +652,10 @@ def test_20_modello_puro_uguale_in_ogni_fuso_del_browser(tmp_path, tz):
     assert o["scroll"] == 8 * 64 and o["viewport"] == [8, 20]
     # SENTINELLA AGGIORNATA (autorizzata): Mese solo desktop (piano §4.3, G3)
     assert o["views"] == ["week", "day", "month", "list"]
-    assert o["mobile"] == ["list", "day"]                # su smartphone niente Mese
-    assert o["eff"] == ["list", "day", "list", "week", "month", "list", "list"]
+    # SENTINELLA AGGIORNATA (AGENDA MOBILE): su smartphone TUTTE le viste, e una
+    # vista valida non viene mai sostituita (prima week/month diventavano list).
+    assert o["mobile"] == ["week", "day", "month", "list"]
+    assert o["eff"] == ["week", "day", "list", "week", "month", "list", "month"]
     assert o["slug"] == ["week", "month"]
     assert o["dateOk"] == [False, True, False]
     # un impegno di collega mostra SOLO cio' che il server gli ha dato

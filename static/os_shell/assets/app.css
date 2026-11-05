@@ -710,16 +710,17 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
 .agenda-lookup-item { text-align: left; white-space: normal; }
 .agenda-lookup-selected { display: flex; flex-wrap: wrap; gap: 4px 10px; align-items: center; margin-top: 4px; }
 
-/* Tablet: settimana completa, scorrimento orizzontale. */
+/* Tablet: pannello piu' largo. AGENDA MOBILE: la settimana non ha piu' una
+   larghezza minima (la domenica restava fuori a 768px): sette colonne sempre
+   nello schermo, vedi la sezione AGENDA MOBILE in fondo. */
 @media (min-width: 768px) and (max-width: 1199px) {
-  .agenda-grid-week { min-width: 880px; }
   dialog.modal.agenda-drawer { width: 60vw; }
 }
 
-/* Smartphone: Lista e Giorno; la settimana non si offre; pannello e dialog
-   a tutta pagina; bersagli da almeno 44px. */
+/* Smartphone: pannello e dialog a tutta pagina; bersagli da almeno 44px.
+   AGENDA MOBILE: tutte e quattro le viste anche qui (niente piu'
+   `.agenda-desktop-only`, che aurora.css annullava con `.btn`). */
 @media (max-width: 767px) {
-  .agenda-desktop-only { display: none; }
   .agenda-toolbar { flex-direction: column; align-items: stretch; }
   .agenda-commands .btn, .agenda-views .btn, .agenda-nav .btn { min-height: 44px; }
   .agenda-period { font-size: 15px; margin: 6px 0 0; flex-basis: 100%; }
@@ -758,7 +759,7 @@ dialog.modal.agenda-drawer { margin: 0 0 0 auto; height: 100vh; max-height: 100v
 .agenda-badge-busy { background: repeating-linear-gradient(45deg, #eef2f9, #eef2f9 4px, #e2e8f0 4px, #e2e8f0 8px); color: var(--muted); }
 .agenda-notice .error-box [data-retry] { margin-left: 8px; }
 .agenda-stale { color: var(--muted); }
-/* A30-4 §4.3 Mese (solo desktop/tablet: il pulsante e' .agenda-desktop-only) e badge "Online" (A30-12). */
+/* A30-4 §4.3 Mese (AGENDA MOBILE: anche su smartphone, a indicatori) e badge "Online" (A30-12). */
 .agenda-badge-online { background: #e6f6f4; color: #0f6b5e; }
 .agenda-month { border: 1px solid var(--border); border-radius: var(--radius); overflow: hidden; background: var(--panel); }
 .agenda-month-row { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
@@ -1777,3 +1778,168 @@ a.census-unit-main { text-decoration: none; }
 /* BLOCCO-6B: richieste di firma (simulazione). */
 .visit-sign { display: grid; gap: 4px; padding-left: 12px; border-left: 2px dashed var(--border); }
 .visit-sign-form { display: grid; gap: 6px; max-width: 420px; }
+
+/* =========================================================================
+   AGENDA MOBILE - quattro viste vere su ogni dispositivo.
+   La disposizione compatta dipende dalla classe `.agenda-compact` che la
+   pagina mette quando vale COMPACT_QUERY (agenda-model.js): smartphone in
+   verticale e telefono in orizzontale. Nessuna media query ripetuta qui.
+   Specificita' voluta: `.agenda-page ...` (almeno due classi), cosi' nessuna
+   regola a una classe di aurora.css (caricato DOPO, es. `.btn`) le annulla.
+   ========================================================================= */
+
+/* Comandi dello schermo stretto: nascosti altrove. */
+.agenda-page .agenda-quick,
+.agenda-page .agenda-gcal-toggle,
+.agenda-page .agenda-fab,
+.agenda-page .agenda-month-markers,
+.agenda-page .agenda-month-key { display: none; }
+
+/* Settimana: sette colonne sempre nello schermo (tablet compreso). */
+.agenda-page .agenda-grid-week .agenda-grid-head,
+.agenda-page .agenda-grid-week .agenda-grid-body { grid-template-columns: 56px repeat(7, minmax(0, 1fr)); }
+.agenda-page button.agenda-day-head { font: inherit; font-size: 13px; font-weight: 600; color: inherit; background: transparent; border: 0; border-right: 1px solid var(--border); cursor: pointer; min-height: 40px; }
+.agenda-page button.agenda-day-head:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.agenda-page .agenda-day-head.agenda-today { color: var(--primary); }
+
+/* Linea dell'ora corrente. */
+.agenda-page .agenda-now { position: absolute; left: 0; right: 0; height: 0; border-top: 2px solid var(--danger); z-index: 3; pointer-events: none; }
+.agenda-page .agenda-now::before { content: ""; position: absolute; left: -4px; top: -5px; width: 8px; height: 8px; border-radius: 50%; background: var(--danger); }
+
+/* Appuntamenti oltre la mezzanotte e luogo. */
+.agenda-page .agenda-card[data-starts-before] { border-top-style: dashed; }
+.agenda-page .agenda-card[data-ends-after] { border-bottom-style: dashed; }
+.agenda-card-place { color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* Lista cronologica. */
+.agenda-page .agenda-list-empty { margin: 0; font-size: 13px; padding: 2px 2px; }
+.agenda-page .agenda-list-more { align-self: center; min-height: 44px; }
+.agenda-page .agenda-list-day.agenda-today .agenda-list-day-title { color: var(--primary); font-weight: 700; }
+
+/* Mese: indicatori, giorno scelto, riquadro del giorno. */
+.agenda-page .agenda-month-layout { display: grid; gap: 12px; }
+.agenda-page .agenda-month-selected { box-shadow: inset 0 0 0 2px var(--primary); }
+.agenda-page .agenda-month-day-panel { display: flex; flex-direction: column; gap: 8px; padding: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
+.agenda-page .agenda-month-day-panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.agenda-page .agenda-month-day-panel-actions { display: flex; gap: 6px; }
+.agenda-page .agenda-month-day-panel .agenda-card { font-size: 14px; padding: 10px 12px; min-height: 44px; }
+.agenda-page .agenda-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: #5b7bd5; }
+.agenda-page .agenda-dot-visit { border-radius: 2px; }
+.agenda-page .agenda-dot-requested { background: transparent; box-shadow: inset 0 0 0 2px #c98a0a; }
+.agenda-page .agenda-dot-scheduled { background: #5b7bd5; }
+.agenda-page .agenda-dot-confirmed { background: var(--primary); }
+.agenda-page .agenda-dot-completed { background: #1c7a3c; }
+.agenda-page .agenda-dot-no_show { background: var(--danger); }
+.agenda-page .agenda-dot-cancelled,
+.agenda-page .agenda-dot-rescheduled,
+.agenda-page .agenda-dot-busy { background: #94a3b8; }
+/* La visita immobile: quadratino verde acqua, qualunque sia lo stato (lo
+   stato e' scritto nell'elenco del giorno). Dopo le regole degli stati. */
+.agenda-page .agenda-dot.agenda-dot-visit { border-radius: 2px; background: #0f9d8a; box-shadow: none; }
+.agenda-page .agenda-month-count { font-size: 11px; font-weight: 700; color: var(--muted); margin-left: 1px; }
+@media (min-width: 1024px) {
+  .agenda-page:not(.agenda-compact) .agenda-month-layout.agenda-month-selectable { grid-template-columns: minmax(0, 1fr) 300px; align-items: start; }
+}
+
+/* Touch: bersagli da 44px anche su tablet e telefono in orizzontale; niente
+   evidenziazioni "appiccicose" dopo un tocco. */
+@media (pointer: coarse) {
+  .agenda-page .agenda-nav .btn, .agenda-page .agenda-views .btn, .agenda-page .agenda-commands .btn { min-height: 44px; }
+  .agenda-drawer .agenda-drawer-actions .btn, .agenda-drawer .agenda-drawer-links .btn { min-height: 44px; }
+}
+@media (hover: none) {
+  .agenda-page .agenda-month-cell:hover, .agenda-page button.agenda-day-head:hover { background: transparent; }
+}
+
+/* ---- disposizione compatta ------------------------------------------------ */
+.agenda-page.agenda-compact { gap: 8px; padding-bottom: 88px; }
+
+/* Testata: periodo; frecce, Oggi, Filtri, "⋯"; le quattro viste. Resta in
+   alto (sotto la barra della Shell, misurata dalla pagina). */
+.agenda-page.agenda-compact .agenda-main-toolbar { position: sticky; top: var(--agenda-sticky-top, 0px); z-index: 20; display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin: 0 -4px; padding: 6px 4px 8px; background: rgba(248, 250, 255, .97); -webkit-backdrop-filter: blur(10px); backdrop-filter: blur(10px); border-bottom: 1px solid var(--border); }
+.agenda-page.agenda-compact .agenda-nav { display: grid; grid-template-columns: 44px auto 44px minmax(0, 1fr) auto; grid-template-areas: "period period period period tz" "prev today next . quick"; align-items: center; gap: 6px; }
+.agenda-page.agenda-compact .agenda-period { grid-area: period; margin: 0; font-size: 17px; line-height: 1.25; }
+.agenda-page.agenda-compact .agenda-tz { grid-area: tz; margin: 0; font-size: 11px; white-space: nowrap; }
+.agenda-page.agenda-compact .agenda-prev { grid-area: prev; }
+.agenda-page.agenda-compact .agenda-today-btn { grid-area: today; }
+.agenda-page.agenda-compact .agenda-next { grid-area: next; }
+.agenda-page.agenda-compact .agenda-nav .btn { min-height: 44px; min-width: 44px; padding: 0 10px; justify-content: center; }
+.agenda-page.agenda-compact .agenda-quick { grid-area: quick; display: flex; gap: 6px; }
+.agenda-page.agenda-compact .agenda-more-toggle { font-size: 20px; letter-spacing: 1px; }
+
+/* Telefono in orizzontale (compatto ma largo): frecce, periodo e viste su
+   meno righe, perche' l'altezza e' poca. */
+@media (min-width: 600px) {
+  .agenda-page.agenda-compact .agenda-main-toolbar { flex-direction: row; flex-wrap: wrap; align-items: center; }
+  .agenda-page.agenda-compact .agenda-nav { flex: 1 1 100%; grid-template-columns: 44px auto 44px minmax(0, 1fr) auto auto; grid-template-areas: "prev today next period tz quick"; }
+  .agenda-page.agenda-compact .agenda-views { flex: 1 1 100%; }
+}
+
+/* Le quattro viste: un selettore a segmenti, sempre a portata di dito. */
+.agenda-page.agenda-compact .agenda-views { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; padding: 2px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.agenda-page.agenda-compact .agenda-views .btn { min-height: 44px; padding: 0 2px; border: 0; border-radius: 10px; box-shadow: none; font-size: 14px; justify-content: center; background: transparent; }
+.agenda-page.agenda-compact .agenda-views .btn.active { background: var(--au-primary-grad, var(--primary)); color: #fff; }
+
+/* Comandi secondari: nel menu "⋯". */
+.agenda-page.agenda-compact .agenda-commands { display: none; }
+.agenda-page.agenda-compact.agenda-menu-open .agenda-commands { display: flex; flex-direction: column; align-items: stretch; position: absolute; right: 4px; top: 100%; z-index: 30; width: min(280px, calc(100vw - 32px)); padding: 8px; gap: 6px; background: var(--panel); border: 1px solid var(--border); border-radius: 14px; box-shadow: 0 16px 36px -14px rgba(15, 27, 51, .45); }
+.agenda-page.agenda-compact .agenda-commands .btn { width: 100%; min-height: 44px; justify-content: flex-start; }
+.agenda-page.agenda-compact .agenda-gcal-toggle { display: inline-flex; }
+
+/* Filtri e legenda: dietro "Filtri"; Google Calendar: dal menu. */
+.agenda-page.agenda-compact .agenda-filters,
+.agenda-page.agenda-compact .agenda-legend,
+.agenda-page.agenda-compact .gcal-panel-slot { display: none; }
+.agenda-page.agenda-compact.agenda-filters-open .agenda-filters { display: flex; flex-direction: column; align-items: stretch; gap: 8px; padding: 10px 12px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); }
+.agenda-page.agenda-compact.agenda-filters-open .agenda-legend { display: flex; }
+.agenda-page.agenda-compact.agenda-gcal-open .gcal-panel-slot { display: block; }
+.agenda-page.agenda-compact .agenda-filter { display: grid; grid-template-columns: 64px minmax(0, 1fr); align-items: center; gap: 8px; }
+.agenda-page.agenda-compact .agenda-filter .input { width: 100%; max-width: none; min-height: 44px; }
+
+/* Un elemento portato in vista (tastiera, lettore di schermo, "vai a") si
+   ferma SOTTO la testata fissa, mai coperto da lei. */
+.agenda-compact .agenda-area .agenda-card,
+.agenda-compact .agenda-area .agenda-more,
+.agenda-compact .agenda-area .agenda-month-cell,
+.agenda-compact .agenda-area .agenda-list-more,
+.agenda-compact .agenda-area .agenda-month-day-panel,
+.agenda-compact .agenda-area .agenda-hour-slot { scroll-margin-top: calc(var(--agenda-sticky-top, 0px) + var(--agenda-bar-h, 120px) + 8px); }
+
+/* "+" flottante. */
+.agenda-page.agenda-compact .agenda-fab { display: flex; align-items: center; justify-content: center; position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 24; width: 56px; height: 56px; padding: 0; border: 0; border-radius: 50%; font-size: 30px; line-height: 1; color: #fff; background: var(--au-primary-grad, var(--primary)); box-shadow: 0 12px 26px -10px rgba(36, 69, 212, .8); cursor: pointer; }
+.agenda-page.agenda-compact .agenda-fab:focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
+
+/* Griglia oraria: occupa lo schermo sotto la testata, un solo riquadro. */
+.agenda-page.agenda-compact .agenda-scroll { min-height: 220px; max-height: calc(100vh - var(--agenda-sticky-top, 0px) - var(--agenda-bar-h, 120px) - 16px); max-height: calc(100dvh - var(--agenda-sticky-top, 0px) - var(--agenda-bar-h, 120px) - 16px); overscroll-behavior: contain; }
+.agenda-page.agenda-compact .agenda-grid-day .agenda-grid-head,
+.agenda-page.agenda-compact .agenda-grid-day .agenda-grid-body { grid-template-columns: 44px minmax(0, 1fr); }
+.agenda-page.agenda-compact .agenda-grid-week .agenda-grid-head,
+.agenda-page.agenda-compact .agenda-grid-week .agenda-grid-body { grid-template-columns: 34px repeat(7, minmax(0, 1fr)); }
+.agenda-page.agenda-compact .agenda-hour-label { font-size: 10px; padding: 2px 3px 0 0; }
+.agenda-page.agenda-compact .agenda-grid-week .agenda-day-head { padding: 4px 1px; font-size: 11px; line-height: 1.15; min-height: 44px; white-space: normal; overflow-wrap: anywhere; }
+
+/* Settimana stretta: blocchi colorati con l'ora d'inizio; il resto nel pannello. */
+.agenda-page.agenda-compact .agenda-grid-compact .agenda-card { padding: 2px 2px 2px 3px; border-left-width: 3px; border-radius: 5px; font-size: 10px; line-height: 1.15; }
+.agenda-compact .agenda-grid-compact .agenda-card-head { display: block; overflow: hidden; }
+.agenda-compact .agenda-grid-compact .agenda-card-time { font-size: 10px; font-weight: 700; white-space: nowrap; overflow: hidden; text-overflow: clip; display: block; }
+.agenda-page.agenda-compact .agenda-grid-compact .agenda-card-to,
+.agenda-page.agenda-compact .agenda-grid-compact .agenda-badge,
+.agenda-page.agenda-compact .agenda-grid-compact .agenda-card-type,
+.agenda-page.agenda-compact .agenda-grid-compact .agenda-card-title,
+.agenda-page.agenda-compact .agenda-grid-compact .agenda-card-place,
+.agenda-page.agenda-compact .agenda-grid-compact .agenda-card-meta { display: none; }
+.agenda-page.agenda-compact .agenda-grid-compact .agenda-more { min-height: 0; padding: 0; font-size: 11px; font-weight: 700; border-radius: 5px; justify-content: center; }
+.agenda-page.agenda-compact .agenda-grid-compact .agenda-is-visit { box-shadow: inset 0 -3px 0 #0f9d8a; }
+
+/* Mese a indicatori; l'elenco del giorno scelto sotto la griglia. */
+.agenda-page.agenda-compact .agenda-month-weekday { padding: 6px 0; text-align: center; font-size: 11px; }
+.agenda-page.agenda-compact .agenda-month-cell { min-height: 56px; padding: 4px 1px 6px; align-items: center; gap: 4px; }
+.agenda-page.agenda-compact .agenda-month-day { align-self: center; min-width: 28px; height: 28px; line-height: 28px; padding: 0; text-align: center; border-radius: 999px; font-size: 14px; }
+.agenda-page.agenda-compact .agenda-month-busy .agenda-month-day { font-weight: 800; }
+.agenda-page.agenda-compact .agenda-month-chip,
+.agenda-page.agenda-compact .agenda-month-more { display: none; }
+.agenda-page.agenda-compact .agenda-month-markers { display: flex; align-items: center; justify-content: center; gap: 2px; min-height: 10px; flex-wrap: wrap; }
+.agenda-page.agenda-compact .agenda-month-selected { box-shadow: none; background: rgba(36, 69, 212, .08); }
+.agenda-page.agenda-compact .agenda-month-selected .agenda-month-day { box-shadow: 0 0 0 2px var(--primary); }
+.agenda-page.agenda-compact .agenda-month-key { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: -4px 2px 0; font-size: 12px; color: var(--muted); }
+.agenda-page.agenda-compact .agenda-month-key .agenda-dot { display: inline-block; margin-right: 4px; vertical-align: middle; }

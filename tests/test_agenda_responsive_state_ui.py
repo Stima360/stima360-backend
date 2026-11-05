@@ -10,10 +10,14 @@ al cambio di soglia successivo.
 
 Comportamento voluto (e provato qui, sulla pagina VERA nello stub di DOM):
   * con un pannello/dialog aperto la pagina NON si ricostruisce: stesso nodo,
-    stessi valori, stessa scheda; la vista si adegua (Lista) quando l'ultimo
+    stessi valori, stessa scheda; la disposizione si adegua quando l'ultimo
     dialog si chiude;
-  * senza pannelli Settimana/Mese -> Lista come prima; mobile -> desktop non
-    ridisegna nulla e non riapre pannelli chiusi;
+  * SENTINELLA AGGIORNATA (AGENDA MOBILE): attraversare la soglia NON cambia
+    mai la vista (la regola G3 "su smartphone solo Lista e Giorno" e'
+    revocata): Settimana e Mese restano Settimana e Mese, stessa pagina,
+    nessuna navigazione e nessuna nuova richiesta; cambia solo la classe
+    `agenda-compact` e l'area si ridisegna con i dati gia' caricati;
+  * mobile -> desktop non riapre pannelli chiusi;
   * UN solo listener sulla soglia per volta, anche dopo molti cambi e molte
     navigazioni.
 
@@ -233,8 +237,10 @@ def test_desktop_mobile_pannello_aperto_resta_vivo_coi_suoi_dati(staged, nome, v
         assert fase["v"] == prima["v"], (prima["v"], fase["v"])   # valori, scheda, agente intatti
         assert fase["s"]["hash"] == f"#/agenda/{vista}/2026-09-28"
     _valori_scritti(nome, prima["v"])
-    # si chiude sul mobile: la vista si adegua ADESSO, una pagina, nessun dialog
-    assert chiuso["hash"] == "#/agenda/lista/2026-09-28", chiuso
+    # SENTINELLA AGGIORNATA (AGENDA MOBILE): si chiude sul mobile e la vista
+    # RESTA quella scelta, sulla stessa pagina; nessun dialog aperto.
+    assert chiuso["hash"] == f"#/agenda/{vista}/2026-09-28", chiuso
+    assert chiuso["pagina"] == prima["s"]["pagina"], chiuso
     assert chiuso["aperti"] == [] and chiuso["pagine"] == 1 and chiuso["listener"] == 1
 
 
@@ -280,7 +286,9 @@ def test_dettaglio_poi_azione_poi_chiusura_non_ricostruisce_a_meta(staged):
     assert len(out["due"]["aperti"]) == 2 and out["due"]["hash"].startswith("#/agenda/settimana/")
     assert out["soloPannello"]["aperti"] == ["modal agenda-drawer"]
     assert out["soloPannello"]["pagina"] == out["due"]["pagina"]
-    assert out["fine"]["hash"] == "#/agenda/lista/2026-09-28" and out["fine"]["aperti"] == []
+    # SENTINELLA AGGIORNATA (AGENDA MOBILE): chiuso tutto, resta la Settimana.
+    assert out["fine"]["hash"] == "#/agenda/settimana/2026-09-28" and out["fine"]["aperti"] == []
+    assert out["fine"]["pagina"] == out["due"]["pagina"]
 
 
 # ---------------------------------------------------------------------------
@@ -288,15 +296,22 @@ def test_dettaglio_poi_azione_poi_chiusura_non_ricostruisce_a_meta(staged):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("vista", ["settimana", "mese"])
-def test_H_senza_pannelli_desktop_mobile_va_in_lista_e_non_torna_indietro(staged, vista):
+def test_H_senza_pannelli_la_vista_resta_e_cambia_solo_la_disposizione(staged, vista):
+    """SENTINELLA AGGIORNATA (AGENDA MOBILE): prima desktop -> mobile portava
+    Settimana e Mese alla Lista. Ora la vista resta, la pagina e' la stessa,
+    nessuna nuova richiesta: cambia solo la classe `agenda-compact`."""
     out = run(staged, """
-      const d = stato();
-      await __resize(true); const m = stato();
-      await __resize(false); const d2 = stato();
-      report({ d, m, d2 });
+      const compatta = () => pagina().classList.contains('agenda-compact');
+      const letture = () => __calls.length;
+      const d = { ...stato(), c: compatta() }; const n = letture();
+      await __resize(true); const m = { ...stato(), c: compatta() };
+      await __resize(false); const d2 = { ...stato(), c: compatta() };
+      report({ d, m, d2, nuove: letture() - n });
     """, hash=f"#/agenda/{vista}/2026-09-28")
-    assert out["m"]["hash"] == "#/agenda/lista/2026-09-28" and out["m"]["pagina"] != out["d"]["pagina"]
-    assert out["d2"]["hash"] == "#/agenda/lista/2026-09-28" and out["d2"]["pagina"] == out["m"]["pagina"]
+    assert out["m"]["hash"] == f"#/agenda/{vista}/2026-09-28" and out["m"]["pagina"] == out["d"]["pagina"]
+    assert out["d2"]["hash"] == f"#/agenda/{vista}/2026-09-28" and out["d2"]["pagina"] == out["d"]["pagina"]
+    assert (out["d"]["c"], out["m"]["c"], out["d2"]["c"]) == (False, True, False)
+    assert out["nuove"] == 0
     assert out["m"]["aperti"] == [] and out["d2"]["aperti"] == []
 
 

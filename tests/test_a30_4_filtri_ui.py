@@ -143,14 +143,19 @@ def test_01_valori_di_partenza_richiesta_calendario_identica(staged, sessione, h
     assert out["f"]["gruppo"] == "Filtri"
 
 
-def test_02_valori_di_partenza_lista_identica(staged):
+def test_02_valori_di_partenza_lista_stati_come_le_altre_viste(staged):
+    """SENTINELLA AGGIORNATA (AGENDA MOBILE): "Stati predefiniti" vuol dire la
+    STESSA cosa in ogni vista. La lista dell'API ha come default tutti gli
+    stati, quindi la Lista chiede esplicitamente quelli del calendario (senza
+    annullati e spostati). Il filtro Agente c'e' anche nella Lista (per chi
+    assegna): lo applica il client sulle righe, l'API lista non lo conosce."""
     out = run(staged, "report({ f: statoFiltri() });", _rotte(),
               hash="#/agenda/lista/2026-09-28")
     lista = _get(out, "/api/appointments?")
-    assert len(lista) == 1 and set(lista[0]) == {"from", "to", "limit", "offset"}
+    assert len(lista) == 1 and set(lista[0]) == {"from", "to", "limit", "offset", "statuses"}
     assert lista[0]["limit"] == "200" and lista[0]["offset"] == "0"
-    # nella Lista l'API non ha il filtro agente: non lo si offre
-    assert out["f"]["agente"] is None and out["f"]["colleghi"] is None
+    assert lista[0]["statuses"].split(",") == ["requested", "scheduled", "confirmed", "completed", "no_show"]
+    assert out["f"]["agente"] is not None and out["f"]["colleghi"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -293,6 +298,10 @@ def test_11_funzioni_pure_dei_filtri():
         agentIgnoraAgente: m.calendarFilterParams({ agent: '4' }, { canAssign: false }),
         ownerIgnoraColleghi: m.calendarFilterParams({ colleagues: false }, { canAssign: true }),
         listaSenzaAgente: m.listFilterParams({ agent: '4', type: 'call', colleagues: false }),
+        listaAgente: m.filterListByAgent([{ id: 1, assigned_user_id: 4 }, { id: 2, assigned_user_id: 5 }],
+                                         { agent: '4' }, { canAssign: true }).map((r) => r.id),
+        listaAgenteAgent: m.filterListByAgent([{ id: 1, assigned_user_id: 4 }, { id: 2, assigned_user_id: 5 }],
+                                              { agent: '4' }, { canAssign: false }).map((r) => r.id),
         tutti: m.calendarFilterParams({ status: 'all' }).statuses,
         conta: [m.activeFilterCount(D),
                 m.activeFilterCount({ agent: '4', type: 'call' }, { canAssign: true }),
@@ -302,12 +311,18 @@ def test_11_funzioni_pure_dei_filtri():
         congelato: Object.isFrozen(D),
       }));
     """)
-    assert out["partenza"] == [{}, {}, {}]
+    # SENTINELLA AGGIORNATA (AGENDA MOBILE): la Lista chiede gli stati
+    # predefiniti del calendario (stesso significato in ogni vista).
+    predefiniti = ["requested", "scheduled", "confirmed", "completed", "no_show"]
+    assert out["partenza"] == [{}, {}, {"statuses": predefiniti}]
     assert out["sporco"] == {"agent": "", "type": "", "status": "", "colleagues": True}
     assert out["agenteNegativo"] == ""
     assert out["agentIgnoraAgente"] == {}
     assert out["ownerIgnoraColleghi"] == {}
-    assert out["listaSenzaAgente"] == {"types": ["call"]}
+    assert out["listaSenzaAgente"] == {"types": ["call"], "statuses": predefiniti}
+    assert out["listaAgente"] == [1] and out["listaAgenteAgent"] == [1, 2]
     assert out["tutti"] == TUTTI_GLI_STATI
-    assert out["conta"] == [0, 2, 1, 1, 0]
+    # SENTINELLA AGGIORNATA (AGENDA MOBILE): il filtro Agente conta anche nella
+    # Lista (prima: 1); i colleghi "Occupato" restano delle viste calendario.
+    assert out["conta"] == [0, 2, 2, 1, 0]
     assert out["congelato"] is True

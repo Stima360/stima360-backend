@@ -480,12 +480,23 @@ def test_E_nessun_appuntamento_perso_e_celle_corrette(staged):
     assert m["chipCliccabili"] == 0                          # nessuna modifica dalla cella
 
 
-def test_F_click_sul_giorno_porta_al_giorno(staged):
+def test_F_click_sul_giorno_lo_sceglie_e_apri_giorno_porta_al_giorno(staged):
+    """SENTINELLA AGGIORNATA (AGENDA MOBILE): un tocco su una data del Mese la
+    SCEGLIE e mostra i suoi appuntamenti sotto la griglia (come le app
+    calendario); "Apri giorno" porta alla vista Giorno di quella data."""
     rt = a30_5._rt()
     out = _run_mese(staged, """
-      cella('2026-10-14').dispatch('click'); await window._fire('hashchange'); await __settle(40);
-      report({ m: statoMese(), u: statoUx() });
+      cella('2026-10-14').dispatch('click'); await __settle(40);
+      const riquadro = C().querySelector('[data-selected-day]');
+      const scelto = { hash: window.location.hash, giorno: riquadro.dataset.selectedDay,
+                       card: riquadro.querySelectorAll('[data-appointment-id]').map((c) => c.dataset.appointmentId),
+                       selezionate: C().querySelectorAll('.agenda-month-selected').map((c) => c.dataset.day) };
+      riquadro.querySelector('[data-open-day]').dispatch('click'); await window._fire('hashchange'); await __settle(40);
+      report({ scelto, m: statoMese(), u: statoUx() });
     """, _rotte(calendario=(rt.ok(MESE_ITEMS),)))
+    assert out["scelto"]["hash"] == "#/agenda/mese/2026-10-17"          # nessuna navigazione
+    assert out["scelto"]["giorno"] == "2026-10-14" and out["scelto"]["selezionate"] == ["2026-10-14"]
+    assert out["scelto"]["card"] == [str(810 + i) for i in range(5)]    # i 5 del giorno, in ordine
     assert out["u"]["hash"] == "#/agenda/giorno/2026-10-14" and out["m"]["vista"] == "day"
 
 
@@ -531,12 +542,15 @@ def test_G_oggi(staged, via):
 MOBILE = "window.matchMedia = () => ({ matches: true, addEventListener() {}, removeEventListener() {} });\n"
 
 
-def test_I_su_smartphone_il_mese_non_esiste(staged):
-    out = _run_mese(staged, "report({ m: statoMese(), u: statoUx() });",
+def test_I_su_smartphone_il_mese_esiste(staged):
+    """SENTINELLA AGGIORNATA (AGENDA MOBILE): la regola G3 e' revocata. Su
+    smartphone il Mese si vede (griglia, disposizione compatta) e chiede i
+    suoi dati; il pulsante non e' piu' "solo desktop"."""
+    out = _run_mese(staged, "report({ m: statoMese(), u: statoUx(), c: C().querySelector('.agenda-page').classList.contains('agenda-compact') });",
                     MOBILE + _rotte(), hash="#/agenda/mese/2026-10-17")
-    assert out["m"]["righe"] == 0 and out["m"]["vista"] == "list"   # degrada alla Lista
-    assert out["m"]["meseDesktopOnly"] is True                       # il pulsante e' solo desktop
-    assert out["u"]["letture"] == []                                 # nessuna richiesta del mese
+    assert out["m"]["righe"] >= 4 and out["m"]["vista"] == "month"
+    assert out["m"]["meseDesktopOnly"] is False and out["c"] is True
+    assert out["u"]["letture"] and out["u"]["letture"][-1].startswith("/api/appointments/calendar?")
 
 
 @pytest.mark.parametrize("sessione", ["agency_owner", "agent"])
@@ -651,12 +665,14 @@ def test_mut_senza_month_nel_modello_il_mese_sparisce(tmp_path, staged):  # noqa
     assert out["m"]["vista"] != "month" and out["m"]["righe"] == 0      # test_E fallirebbe
 
 
-def test_mut_mese_su_smartphone_viene_scoperto(tmp_path, staged):  # noqa: F811
+def test_mut_mese_tolto_su_smartphone_viene_scoperto(tmp_path, staged):  # noqa: F811
+    """SENTINELLA AGGIORNATA (AGENDA MOBILE): il mutante reintroduce la
+    sostituzione silenziosa del Mese su smartphone; test_I lo scopre."""
     copia = _mutante(tmp_path, staged, "agenda/agenda-model.js",
-                     "export const MOBILE_VIEWS = Object.freeze(['list', 'day']);",
-                     "export const MOBILE_VIEWS = Object.freeze(['list', 'day', 'month']);")
+                     "  if (VIEWS.includes(view)) return view;",
+                     "  if (VIEWS.includes(view) && !(isMobile && view === 'month')) return view;")
     out = _run_mese(copia, "report({ m: statoMese() });", MOBILE + _rotte())
-    assert out["m"]["righe"] > 0 and out["m"]["vista"] == "month"      # test_I fallirebbe
+    assert out["m"]["vista"] != "month"                                # test_I fallirebbe
 
 
 def test_mut_badge_a_tutte_le_source_viene_scoperto(tmp_path, staged):  # noqa: F811
