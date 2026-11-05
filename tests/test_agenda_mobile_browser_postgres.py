@@ -544,6 +544,10 @@ const misura = (page) => page.evaluate(() => {
     await page.fill('#login-password', password);
     await page.click('#login-form button[type=submit]');
     await pausa(page, 1500);
+    // SENTINELLA AGGIORNATA DALLA SCRIVANIA: dopo l'accesso si arriva sulla Scrivania
+    // (#/oggi), che legge anche lei l'agenda di oggi e domani. Si contano le richieste
+    // dell'AGENDA: il contatore riparte quando si apre la pagina Agenda.
+    richieste = 0;
     await page.goto(`${base}/os/#/agenda/settimana/${oggi}`);
     await carica(page);
     r.dopoApertura = richieste;

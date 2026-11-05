@@ -364,11 +364,14 @@ def test_03_storico_permessi_e_agenzie(k):
                            json={"match_id": mid, "interaction_type": "interested"}).status_code == 201
     r = _codice(_check(k, rid, "agent_a"), 200)
     assert r["can_trash"] is False and _codici(_check(k, rid, "agent_a")) == ["HISTORY_REQUIRES_ADMIN"]
-    assert [h["code"] for h in r["history"]] == ["BUYER_INTERACTION_HISTORY"]
+    # SENTINELLA AGGIORNATA DALLA SCRIVANIA (decisione del titolare): stessa
+    # protezione; all'agente lo storico arriva come UNA voce generica, senza quantita'.
+    assert [h["code"] for h in r["history"]] == ["HISTORY_PRESENT"] and "count" not in str(r)
     assert _codice(_sposta(k, rid, "agent_a"), 403)["code"] == "HISTORY_REQUIRES_ADMIN"
-    # una richiesta conclusa e' storico
+    # una richiesta conclusa e' storico (il dettaglio lo legge il titolare)
     chiusa = _richiesta(k, cid, status="closed")
-    assert [h["code"] for h in _codice(_check(k, chiusa, "agent_a"), 200)["history"]] == ["REQUEST_CONCLUDED"]
+    assert [h["code"] for h in _codice(_check(k, chiusa, "agent_a"), 200)["history"]] == ["HISTORY_PRESENT"]
+    assert [h["code"] for h in _codice(_check(k, chiusa), 200)["history"]] == ["REQUEST_CONCLUDED"]
     # il titolare procede; lo storico resta
     r = _codice(_check(k, rid), 200)
     assert r["can_trash"] is True and r["history"][0]["code"] == "BUYER_INTERACTION_HISTORY"

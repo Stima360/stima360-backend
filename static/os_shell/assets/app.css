@@ -1986,3 +1986,129 @@ a.census-unit-main { text-decoration: none; }
 
 /* Settimana stretta: griglia a meta' schermo, cosi' il riepilogo si vede subito. */
 .agenda-page.agenda-compact.agenda-view-week .agenda-scroll { min-height: 240px; max-height: 52vh; max-height: 52dvh; }
+
+/* ===========================================================================
+   SCRIVANIA (#/oggi) — views/oggi.js. Una colonna su smartphone, due da 1100px.
+   Nessuna tabella: righe e schede che vanno a capo, pulsanti grandi al tocco.
+   =========================================================================== */
+.scrivania { display: flex; flex-direction: column; gap: 16px; }
+.scrivania-head {
+  display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px;
+}
+.scrivania-title { margin: 0; font-size: 24px; line-height: 1.2; }
+.scrivania-date { margin: 4px 0 0; font-size: 14px; }
+.scrivania-commands { display: flex; flex-wrap: wrap; gap: 8px; }
+.scrivania-mode {
+  display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 3px;
+  background: var(--panel); width: 100%; max-width: 320px;
+}
+.scrivania-mode-btn {
+  flex: 1; border: 0; background: transparent; color: var(--muted); border-radius: 999px;
+  padding: 7px 12px; font-size: 14px; cursor: pointer; min-height: 36px;
+}
+.scrivania-mode-btn.active { background: var(--primary); color: #fff; }
+.scrivania-messages:empty { display: none; }
+.scrivania-success { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.scrivania-body { display: flex; flex-direction: column; gap: 16px; }
+
+.scrivania-summary { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.scrivania-kpi {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left;
+  border: 1px solid var(--border); border-left: 4px solid var(--primary); border-radius: var(--radius);
+  background: var(--panel); color: var(--text); padding: 12px 14px; cursor: pointer; font: inherit;
+}
+.scrivania-kpi-danger { border-left-color: var(--danger); }
+.scrivania-kpi-warn { border-left-color: #d08a00; }
+.scrivania-kpi-ok { border-left-color: #1c7a3c; }
+.scrivania-kpi-value { font-size: 28px; font-weight: 700; line-height: 1.1; }
+.scrivania-kpi-label { font-size: 14px; font-weight: 600; }
+.scrivania-kpi-sub { font-size: 12px; color: var(--muted); }
+
+.scrivania-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
+.scrivania-main, .scrivania-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+@media (min-width: 1100px) {
+  .scrivania-grid { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); }
+}
+
+.scrivania-section { display: flex; flex-direction: column; gap: 12px; scroll-margin-top: 80px; }
+.scrivania-section-head { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.scrivania-section-title { margin: 0; font-size: 18px; }
+.scrivania-section-sub { margin: 2px 0 0; font-size: 13px; }
+.scrivania-section-actions { display: flex; gap: 8px; }
+.scrivania-section-body { display: flex; flex-direction: column; gap: 10px; }
+.scrivania-subtitle { margin: 8px 0 0; font-size: 14px; color: var(--muted); }
+.scrivania-empty { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 6px 0; }
+.scrivania-empty p { margin: 0; }
+.scrivania-note { margin: 0; font-size: 13px; }
+.scrivania-link { color: var(--primary); text-decoration: none; font-size: 14px; }
+.scrivania-link:hover { text-decoration: underline; }
+
+.scrivania-group {
+  border: 1px solid var(--border); border-radius: var(--radius); background: var(--panel);
+  display: flex; flex-direction: column; overflow: hidden;
+}
+.scrivania-group-head {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 10px 12px; background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.scrivania-who { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.scrivania-client { font-size: 15px; overflow-wrap: anywhere; }
+.scrivania-who .muted { font-size: 13px; overflow-wrap: anywhere; }
+.scrivania-task {
+  display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: space-between; gap: 10px;
+  padding: 10px 12px; border-left: 3px solid transparent;
+}
+.scrivania-task + .scrivania-task { border-top: 1px solid var(--border); }
+.scrivania-task-overdue { border-left-color: var(--danger); }
+.scrivania-task-today { border-left-color: #d08a00; }
+.scrivania-task-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; flex: 1 1 260px; }
+.scrivania-task-title { font-weight: 600; overflow-wrap: anywhere; }
+.scrivania-task-desc { font-size: 13px; overflow-wrap: anywhere; }
+.scrivania-task-meta { font-size: 12px; }
+.scrivania-badges { display: flex; flex-wrap: wrap; gap: 6px; }
+.scrivania-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.scrivania .scrivania-actions .btn { text-decoration: none; display: inline-flex; align-items: center; min-height: 36px; }
+
+.scrivania-list { display: flex; flex-direction: column; gap: 8px; }
+.scrivania-row, .scrivania-appointment {
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px;
+  border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 12px;
+  background: var(--panel); color: var(--text); text-decoration: none;
+}
+.scrivania-appointment { flex-wrap: nowrap; cursor: pointer; }
+.scrivania-appointment:hover, .scrivania-appointment:focus-visible { border-color: var(--primary); }
+.scrivania-row-text { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 200px; }
+.scrivania-row-text .muted { font-size: 13px; overflow-wrap: anywhere; }
+.scrivania-time { display: flex; flex-direction: column; min-width: 48px; font-variant-numeric: tabular-nums; }
+.scrivania-time .muted { font-size: 12px; }
+.scrivania-tomorrow { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.scrivania-tomorrow-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.scrivania-tomorrow-head h4 { margin: 0; font-size: 14px; }
+.scrivania-mini {
+  display: flex; gap: 10px; align-items: baseline; padding: 6px 2px; color: var(--text);
+  text-decoration: none; font-size: 14px; overflow-wrap: anywhere;
+}
+.scrivania-mini .scrivania-time { display: inline; min-width: 44px; color: var(--muted); }
+a.scrivania-mini:hover { color: var(--primary); }
+
+.scrivania-dialog { border: 1px solid var(--border); border-radius: var(--radius); padding: 0; max-width: 440px; width: calc(100% - 32px); }
+.scrivania-form { display: flex; flex-direction: column; gap: 12px; padding: 18px; }
+.scrivania-form p { margin: 0; }
+.scrivania-quick { display: flex; flex-wrap: wrap; gap: 6px; }
+.scrivania-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.scrivania-fields .form-field { display: flex; flex-direction: column; gap: 4px; }
+
+@media (max-width: 767px) {
+  .scrivania-title { font-size: 21px; }
+  .scrivania-commands { width: 100%; }
+  .scrivania-commands .btn { flex: 1; min-height: 44px; }
+  .scrivania-mode { max-width: none; }
+  .scrivania-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .scrivania-kpi { padding: 10px; }
+  .scrivania-kpi-value { font-size: 24px; }
+  .scrivania-kpi-label { font-size: 12px; }
+  .scrivania-kpi-sub { display: none; }
+  .scrivania .scrivania-actions .btn { min-height: 44px; }
+  .scrivania-task .scrivania-actions { width: 100%; }
+  .scrivania .scrivania-task .scrivania-actions .btn { flex: 1; justify-content: center; }
+}

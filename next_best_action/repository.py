@@ -11,6 +11,9 @@ from typing import Any
 
 from psycopg2.extras import Json
 
+from core.scope import responsible_sql
+from operator_auth import permissions
+
 from .database import next_best_action_cursor
 from .engine import rank_for_display
 
@@ -225,6 +228,17 @@ _SELECT_WITH_CONTACT_LABEL_SCOPED = """
 # escludono le richieste nel Cestino).
 
 
+def _lettore(ctx) -> tuple[str, list]:
+    """SCRIVANIA - PRIVACY FRA OPERATORI: chi vede tutta l'agenzia (titolare,
+    amministratore, Superadmin dentro l'agenzia) legge tutte le azioni; un agente
+    solo quelle dei SUOI clienti e lead, con la stessa regola del responsabile di
+    task e attivita' (core.scope.responsible_sql). Un'azione senza cliente ne'
+    lead (richiesta, abbinamento) non ha responsabile: resta a chi vede l'agenzia."""
+    if permissions.sees_all_agency_records(getattr(ctx, "role", None), getattr(ctx, "is_platform_admin", False)):
+        return "", []
+    return f" AND {responsible_sql('nba')} = %s", [getattr(ctx, "user_id", None)]
+
+
 def list_current_scoped(ctx, limit: int) -> list[dict[str, Any]]:
     """The OGGI list, restricted to the caller's agency.
 
@@ -234,8 +248,9 @@ def list_current_scoped(ctx, limit: int) -> list[dict[str, Any]]:
     here that comes from outside this table, so it is the one that can leak.
     """
     agency_id = ctx.require_agency()
+    filtro, params = _lettore(ctx)
     with next_best_action_cursor() as (_, cur):
-        cur.execute(_SELECT_WITH_CONTACT_LABEL_SCOPED, (agency_id, agency_id))
+        cur.execute(_SELECT_WITH_CONTACT_LABEL_SCOPED + filtro, (agency_id, agency_id, *params))
         rows = [_row(row) for row in cur.fetchall()]
     rows.sort(
         key=lambda r: (
@@ -249,10 +264,11 @@ def list_current_scoped(ctx, limit: int) -> list[dict[str, Any]]:
 
 def get_current_scoped(ctx, subject_type: str, subject_id: int) -> dict[str, Any] | None:
     agency_id = ctx.require_agency()
+    filtro, params = _lettore(ctx)
     with next_best_action_cursor() as (_, cur):
         cur.execute(
-            f"{_SELECT_WITH_CONTACT_LABEL_SCOPED} AND nba.subject_type = %s AND nba.subject_id = %s",
-            (agency_id, agency_id, subject_type, subject_id),
+            f"{_SELECT_WITH_CONTACT_LABEL_SCOPED} AND nba.subject_type = %s AND nba.subject_id = %s{filtro}",
+            (agency_id, agency_id, subject_type, subject_id, *params),
         )
         return _row(cur.fetchone())
 

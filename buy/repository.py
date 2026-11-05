@@ -8,6 +8,9 @@ from core import property_trash as _property_trash
 from core import contact_trash as _contact_trash
 from core import buy_trash as _buy_trash
 from core.exceptions import NotFoundError, ConflictError, ValidationError
+# SCRIVANIA - PRIVACY: i task di una richiesta si leggono con la regola di CORE
+# (un agente: solo quelli di cui e' autore o responsabile).
+from core.scope import scoped_predicate
 
 RELEVANT_FIELDS={'budget_min','budget_target','budget_max','budget_flexibility_percent','includes_agency_fees','includes_renovation','finance_status','mortgage_required','mortgage_preapproved','available_cash','maximum_monthly_payment','property_to_sell_first','surface_min','surface_target','surface_max','rooms_min','bedrooms_min','bathrooms_min','status','urgency','target_purchase_date'}
 FINANCE_FIELDS={'finance_status','mortgage_required','mortgage_preapproved','available_cash','maximum_monthly_payment','property_to_sell_first','finance_review_at','finance_notes'}
@@ -448,6 +451,8 @@ def list_requests_scoped(
     if assigned_to:
         filters.append("b.assigned_to=%s"); params.append(assigned_to)
     params += [limit, offset]
+    task_predicate, task_params = scoped_predicate(ctx, "tasks", "t")
+    params = task_params + params    # il contatore sta nella SELECT, prima del WHERE
     with core_cursor() as (_, cur):
         cur.execute(
             f"""
@@ -471,6 +476,7 @@ def list_requests_scoped(
                 JOIN tasks t ON t.id=lnk.task_id
                WHERE lnk.buy_request_id=b.id
                  AND t.agency_id=b.agency_id
+                 AND {task_predicate}
                  AND t.status IN ('open','in_progress')) open_tasks_count
             FROM buy_requests b
             JOIN contacts c ON c.id=b.contact_id AND c.agency_id=b.agency_id
@@ -1068,8 +1074,9 @@ def list_tasks_scoped(ctx, request_id):
     agency_id = _agency(ctx)
     with core_cursor() as (_, cur):
         _ensure_buy(cur, request_id, agency_id, trashed_ok=True)   # lettura: anche dal Cestino
+        task_predicate, task_params = scoped_predicate(ctx, "tasks", "t")
         cur.execute(
-            """
+            f"""
             SELECT l.id link_id,t.*
             FROM buy_request_task_links l
             JOIN tasks t ON t.id=l.task_id
@@ -1077,11 +1084,12 @@ def list_tasks_scoped(ctx, request_id):
             WHERE l.buy_request_id=%s
               AND b.agency_id=%s
               AND t.agency_id=%s
+              AND {task_predicate}
             ORDER BY CASE t.status WHEN 'open' THEN 1
                                    WHEN 'in_progress' THEN 2 ELSE 3 END,
                      t.due_at NULLS LAST,t.id DESC
             """,
-            (request_id, agency_id, agency_id),
+            (request_id, agency_id, agency_id, *task_params),
         )
         return [dict(x) for x in cur.fetchall()]
 
@@ -1142,21 +1150,25 @@ def workflow_scoped(ctx, request_id):
             (agency_id, request_id),
         )
         data["interactions"] = [dict(x) for x in cur.fetchall()]
+        # SCRIVANIA - PRIVACY: la riga di storico di un task che il lettore non
+        # vede (con il titolo copiato nella descrizione) resta fuori, come gia'
+        # quella di un task di un'altra agenzia.
+        task_predicate, task_params = scoped_predicate(ctx, "tasks", "t")
         cur.execute(
-            """
+            f"""
             SELECT h.*,p.title property_title,t.title task_title
             FROM buy_request_history h
             LEFT JOIN properties p
               ON p.id=h.property_id AND p.agency_id=%s
              AND (to_jsonb(p)->>'deleted_at') IS NULL
             LEFT JOIN tasks t
-              ON t.id=h.task_id AND t.agency_id=%s
+              ON t.id=h.task_id AND t.agency_id=%s AND {task_predicate}
             WHERE h.buy_request_id=%s
               AND (h.property_id IS NULL OR p.id IS NOT NULL)
               AND (h.task_id IS NULL OR t.id IS NOT NULL)
             ORDER BY h.created_at DESC,h.id DESC LIMIT 200
             """,
-            (agency_id, agency_id, request_id),
+            (agency_id, agency_id, *task_params, request_id),
         )
         data["history"] = [dict(x) for x in cur.fetchall()]
     data["matches"] = list_matches_scoped(ctx, request_id)

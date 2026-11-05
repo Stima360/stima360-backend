@@ -61,6 +61,7 @@ from operator_auth.context import SystemAgencyContext
 from .scope import (
     ProgrammingError,
     creator_assignment,
+    responsible_sql,
     scoped_predicate,
     scoped_source,
 )
@@ -1051,7 +1052,10 @@ def list_tasks(ctx, limit: int, offset: int, contact_id: int | None, lead_id: in
     clause = " AND " + " AND ".join(filters) if filters else ""
     params.extend([limit, offset])
     with core_cursor() as (_, cur):
-        cur.execute(f"SELECT * FROM {source}{clause} ORDER BY due_at NULLS LAST, created_at DESC, id DESC LIMIT %s OFFSET %s", params)
+        # SCRIVANIA: `responsible_agent_id`, lo stesso responsabile derivato che
+        # restringe la lettura di un agente (core.scope.responsible_sql). Additivo.
+        cur.execute(f"SELECT t.*, {responsible_sql('t')} AS responsible_agent_id FROM {source}{clause} "
+                    "ORDER BY due_at NULLS LAST, created_at DESC, id DESC LIMIT %s OFFSET %s", params)
         return [dict(row) for row in cur.fetchall()]
 
 

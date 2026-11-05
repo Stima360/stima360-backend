@@ -680,12 +680,15 @@ def test_d6_agent_reads_of_assignable_tables_add_the_assignment_filter(call, tab
     ],
 )
 def test_d6_agent_reads_of_activities_and_tasks_are_agency_only(call, cur):
+    """SENTINELLA AGGIORNATA DALLA SCRIVANIA (privacy fra operatori): un agent non
+    legge piu' task e attivita' di tutta l'agenzia, ma solo quelle di cui e' autore
+    o responsabile (agente del lead, altrimenti del contatto). Mai `assigned_to`."""
     ctx = agent_ctx()
     call(ctx)
     statement = cur.scoped_statements[0]
-    assert "assigned_agent_id" not in statement.sql, statement
+    assert "created_by_user_id = %s OR COALESCE((SELECT rl.assigned_agent_id FROM leads rl" in statement.sql, statement
     assert "assigned_to" not in statement.sql, statement
-    assert statement.bound[0] == AGENCY
+    assert statement.bound[:3] == [AGENCY, AGENT_USER, AGENT_USER], statement
 
 
 def test_d6_an_agent_update_respects_the_same_assignment_filter(cur):

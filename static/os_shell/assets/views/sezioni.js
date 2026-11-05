@@ -5,7 +5,7 @@
 // #/automazioni, #/cestino, #/agenzia, #/stime-dettagliate) restano registrate
 // e valide: qui cambia solo dove si arriva dalla barra laterale.
 //
-//   Oggi          #/oggi            Oggi | Attività          (views/oggi.js, views/attivita.js)
+//   Scrivania     #/oggi            Scrivania | Attività     (views/oggi.js, views/attivita.js)
 //   Richieste     #/acquirenti      Richieste | Abbinamenti  (views/acquirenti.js, views/abbinamenti.js)
 //   Impostazioni  #/impostazioni    Agenzia | Automazioni | Cestino
 //                                   (views/agenzia-dati.js, views/automazioni.js, views/cestino.js)
@@ -58,13 +58,13 @@ async function renderTabbed(container, { route, tabs, active }) {
   await chosen.render(content);
 }
 
-/** Oggi: la pagina di prima piu' la scheda «Attività» (ex voce di menu). */
+/** Scrivania (#/oggi): la pagina di lavoro piu' la scheda «Attività» (ex voce di menu). */
 export async function renderOggiSezione(container, params = []) {
   return renderTabbed(container, {
     route: 'oggi',
     active: params[0],
     tabs: [
-      { key: 'oggi', label: 'Oggi', render: (c) => renderOggi(c) },
+      { key: 'oggi', label: 'Scrivania', render: (c) => renderOggi(c) },
       { key: 'attivita', label: 'Attività', render: (c) => renderAttivita(c) },
     ],
   });

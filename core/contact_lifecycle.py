@@ -45,7 +45,7 @@ from operator_auth.dependencies import OWNER_ADMIN_MIN_ROLE
 from . import property_mandate as _mandato
 from .database import core_cursor
 from .exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
-from .scope import scoped_source
+from .scope import scoped_predicate, scoped_source
 
 log = logging.getLogger("stima360.lifecycle")
 
@@ -204,6 +204,56 @@ def _righe(cur, sql: str, params) -> list[dict]:
 # BLOCCHI: processi aperti (nessuno si chiude da qui)
 # ---------------------------------------------------------------------------
 
+#: SCRIVANIA - PRIVACY: cio' che un agente legge al posto dei dettagli che non
+#: puo' vedere. Nessun titolo, nessun numero, nessun collegamento.
+VOCE_RISERVATA = ("Ci sono attività o opportunità seguite da un altro operatore: "
+                  "chiedi al titolare o all'amministratore dell'agenzia")
+STORICO_RISERVATO = {"code": "HISTORY_PRESENT",
+                     "label": ("Il record ha uno storico operativo: l'eliminazione spetta al titolare "
+                               "o all'amministratore dell'agenzia")}
+
+
+def storico_per_lettore(ctx, voci: list[dict]) -> list[dict]:
+    """SCRIVANIA - PRIVACY: lo storico protetto DECIDE sempre su tutto (chi lo
+    chiama lo valuta prima); a chi non vede tutta l'agenzia si MOSTRA una voce
+    generica, senza etichette di dettaglio e senza quantita'. Vuoto resta vuoto."""
+    if not voci or _vede_tutta_agenzia(ctx):
+        return voci
+    return [dict(STORICO_RISERVATO)]
+
+
+def _righe_leggibili(cur, ctx, tabella: str, righe: list[dict]) -> tuple[list[dict], bool]:
+    """(le righe che il lettore puo' leggere, se ce ne sono altre): stesso scope di CORE."""
+    predicato, params = scoped_predicate(ctx, tabella, "x")
+    cur.execute(f"SELECT x.id FROM {tabella} x WHERE {predicato} AND x.id = ANY(%s)",
+                params + [[r["id"] for r in righe]])
+    visibili = {r["id"] for r in cur.fetchall()}
+    tenute = [r for r in righe if r["id"] in visibili]
+    return tenute, len(tenute) < len(righe)
+
+
+def task_aperti_visibili(cur, ctx, righe: list[dict]) -> list[dict]:
+    """SCRIVANIA - PRIVACY FRA OPERATORI: un blocco del Cestino resta deciso su
+    TUTTI i task aperti (la regola del Cestino non cambia), ma chi legge vede
+    titolo e scadenza solo dei task che puo' leggere (core.scope: per un agente,
+    quelli di cui e' autore o responsabile). Gli altri diventano UNA voce senza
+    titolo, senza numero e senza collegamento."""
+    if not righe:
+        return righe
+    if ctx is None:   # chiamata interna senza lettore: nessun restringimento da applicare
+        for r in righe:
+            r["label"] = (r.get("title") or f"Task #{r['id']}") + (f" · scade il {_data(r['due_at'])}" if r.get("due_at") else "")
+            r["href"] = "#/attivita"
+        return righe
+    tenute, altre = _righe_leggibili(cur, ctx, "tasks", righe)
+    for r in tenute:
+        r["label"] = (r.get("title") or f"Task #{r['id']}") + (f" · scade il {_data(r['due_at'])}" if r.get("due_at") else "")
+        r["href"] = "#/attivita"
+    if altre:
+        tenute.append({"id": None, "label": VOCE_RISERVATA})
+    return tenute
+
+
 def trash_blockers(cur, ctx, agency_id: int, contact: dict) -> list[dict]:
     """Ogni voce: `code`, `label`, `items` (con `label` e, se c'e' una pagina,
     `href` interno della Shell), `link` facoltativo, `action` facoltativa."""
@@ -215,10 +265,16 @@ def trash_blockers(cur, ctx, agency_id: int, contact: dict) -> list[dict]:
     righe = _righe(cur, "SELECT id, pipeline, status, stage FROM leads WHERE agency_id = %s AND contact_id = %s "
                         "AND status = ANY(%s) ORDER BY id", (agency_id, cid, list(LEAD_OPEN)))
     if righe:
+        # SCRIVANIA - PRIVACY: il blocco resta su TUTTE le opportunita' aperte; il
+        # lettore vede il dettaglio solo di quelle che puo' leggere.
+        tutte = righe
+        righe, altre = _righe_leggibili(cur, ctx, "leads", tutte)
         for r in righe:
             r["label"] = f"Lead #{r['id']} · {_PIPELINE.get(r['pipeline'], r['pipeline'])} · {_STATO_LEAD.get(r['status'], r['status'])}"
             r["href"] = "#/venditori" if r["pipeline"] == "sell" else scheda
-        vendita = any(r["pipeline"] == "sell" for r in righe)
+        if altre:
+            righe.append({"id": None, "label": VOCE_RISERVATA})
+        vendita = any(r.get("pipeline") == "sell" for r in righe)
         blocchi.append({
             "code": "LEAD_OPEN",
             "label": ("Opportunità aperte: chiudile prima (Venditori con «Smetti…» per la vendita, "
@@ -336,12 +392,9 @@ def trash_blockers(cur, ctx, agency_id: int, contact: dict) -> list[dict]:
     righe = _righe(cur, "SELECT id, title, status, due_at FROM tasks WHERE agency_id = %s AND contact_id = %s "
                         "AND status = ANY(%s) ORDER BY due_at NULLS LAST, id", (agency_id, cid, list(TASK_OPEN)))
     if righe:
-        for r in righe:
-            r["label"] = (r.get("title") or f"Task #{r['id']}") + (f" · scade il {_data(r['due_at'])}" if r.get("due_at") else "")
-            r["href"] = "#/attivita"
         blocchi.append({"code": "TASK_OPEN",
                         "label": "Task aperti: completali o annullali prima in Attività",
-                        "items": righe, "link": {"href": "#/attivita", "label": "Apri Attività"}})
+                        "items": task_aperti_visibili(cur, ctx, righe), "link": {"href": "#/attivita", "label": "Apri Attività"}})
 
     # 10. accesso al portale proprietario non disattivato: lo si disattiva prima
     #     con «Disattiva» (il comando esistente dell'amministrazione OWNER, che
@@ -453,9 +506,10 @@ def deletion_check(ctx, contact_id: int) -> dict:
             blocchi = trash_blockers(cur, ctx, agency_id, contatto)
             storia = protected_history(cur, ctx, agency_id, contatto)
             if not blocchi and storia and not _vede_tutta_agenzia(ctx):
-                blocchi = [{"code": HISTORY_REQUIRES_ADMIN, "label": HISTORY_REQUIRES_ADMIN_MESSAGE, "items": storia}]
+                blocchi = [{"code": HISTORY_REQUIRES_ADMIN, "label": HISTORY_REQUIRES_ADMIN_MESSAGE,
+                            "items": storico_per_lettore(ctx, storia)}]
             effetti = _effetti_comunicazioni(cur, ctx, contact_id)
-    risposta = {"can_trash": not blocchi, "blockers": blocchi, "history": storia}
+    risposta = {"can_trash": not blocchi, "blockers": blocchi, "history": storico_per_lettore(ctx, storia)}
     if contatto.get("deleted_at") is None:
         risposta["effects"] = effetti
     return risposta
@@ -512,7 +566,8 @@ def trash_contact(ctx, contact_id: int, reason_code, note=None) -> dict:
         if not _vede_tutta_agenzia(ctx):
             storia = protected_history(cur, ctx, agency_id, contatto)
             if storia:
-                raise ContactLifecycleForbidden(HISTORY_REQUIRES_ADMIN_MESSAGE, HISTORY_REQUIRES_ADMIN, history=storia)
+                raise ContactLifecycleForbidden(HISTORY_REQUIRES_ADMIN_MESSAGE, HISTORY_REQUIRES_ADMIN,
+                                                history=storico_per_lettore(ctx, storia))
         comunicazioni = _sospendi_comunicazioni(cur, ctx, contact_id)
         cur.execute("UPDATE contacts SET deleted_at = NOW(), deleted_by_user_id = %s, deleted_reason = %s, "
                     "updated_at = NOW() WHERE id = %s AND agency_id = %s RETURNING *",

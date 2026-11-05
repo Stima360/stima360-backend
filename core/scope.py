@@ -40,15 +40,48 @@ SCOPED_TABLES = frozenset({
     "tasks",
 })
 
-# The subset an agent is narrowed on. activities and tasks are deliberately
-# absent: they have no assigned_agent_id in P26-1 (spec section 3.3), and their
-# existing free-text assignment column is written by automation rather than by
-# a person. An agent therefore sees those two for the whole agency. Stated as a
-# decision rather than left as an omission; narrowing them belongs to P26-2.
+# The subset an agent is narrowed on THROUGH ITS OWN `assigned_agent_id`.
+# activities and tasks are absent: they have no assigned_agent_id (spec
+# section 3.3), and their free-text `assigned_to` is a label written by
+# automation, never an identity.
 AGENT_ASSIGNABLE = frozenset({
     "contacts",
     "leads",
 })
+
+# SCRIVANIA - PRIVACY FRA OPERATORI (decisione del titolare). Until this
+# change an agent read tasks and activities of the WHOLE agency (the P26-1
+# decision recorded above, "narrowing them belongs to P26-2"). An agent must
+# not see another agent's tasks or notes - not in a list, not in a counter,
+# not in a description. These two tables have no owner column of their own,
+# so the agent narrowing is DERIVED from facts the server alone writes:
+#
+#   * the RESPONSIBLE agent of the row: the agent of its lead when the lead
+#     is assigned, otherwise the agent of its contact (`responsible_sql`);
+#   * the AUTHOR of the row: `created_by_user_id`, stamped from the scope by
+#     `_stamp` / the R-4 author, never from a payload.
+#
+# An agent sees a row when he is its responsible agent OR its author. A row
+# with no responsible agent and no agent author (e.g. an automation's task on
+# an unassigned lead) is visible to owner/admin only: it is "da assegnare",
+# and it is assigned by assigning its lead or contact - nothing is assigned
+# automatically. The free-text `assigned_to` and the client-writable
+# `metadata` play no part: they are not identities.
+AGENT_DERIVED = frozenset({
+    "activities",
+    "tasks",
+})
+
+
+def responsible_sql(alias: str) -> str:
+    """The responsible agent of a tasks/activities row: lead first, then contact.
+
+    Both lookups stay inside the row's own agency. `alias` is a developer
+    literal (the caller's table alias), never request input.
+    """
+    return (f"COALESCE((SELECT rl.assigned_agent_id FROM leads rl WHERE rl.id = {alias}.lead_id "
+            f"AND rl.agency_id = {alias}.agency_id), (SELECT rc.assigned_agent_id FROM contacts rc "
+            f"WHERE rc.id = {alias}.contact_id AND rc.agency_id = {alias}.agency_id))")
 
 # The one public function in core/repository.py allowed to build its own scope
 # instead of receiving one (spec section 2.5.1 rule 4, branch b). Exactly one
@@ -139,6 +172,11 @@ def scoped_predicate(ctx: AgencyScope, table: str, alias: str) -> tuple[str, lis
     if _narrowed_to_own_records(ctx, table):
         parts.append(f"{alias}.assigned_agent_id = %s")
         params.append(ctx.user_id)
+    elif _narrowed_by_derivation(ctx, table):
+        # SCRIVANIA - PRIVACY: see AGENT_DERIVED above. `user_id` of an agent
+        # context always exists (an active membership); None would match nothing.
+        parts.append(f"({alias}.created_by_user_id = %s OR {responsible_sql(alias)} = %s)")
+        params.extend([ctx.user_id, ctx.user_id])
 
     return " AND ".join(parts), params
 
@@ -152,7 +190,17 @@ def _narrowed_to_own_records(ctx: AgencyScope, table: str) -> bool:
     two cannot disagree: a narrowed context can never create a row that its
     own predicate would then hide.
     """
-    return ctx.role == "agent" and table in AGENT_ASSIGNABLE
+    return _is_agent(ctx) and table in AGENT_ASSIGNABLE
+
+
+def _is_agent(ctx: AgencyScope) -> bool:
+    """The one statement of the role that is narrowed: shared by both narrowings."""
+    return ctx.role == "agent"
+
+
+def _narrowed_by_derivation(ctx: AgencyScope, table: str) -> bool:
+    """SCRIVANIA: True when ``ctx`` reads ``table`` only as author or responsible."""
+    return _is_agent(ctx) and table in AGENT_DERIVED
 
 
 def creator_assignment(ctx: AgencyScope, table: str) -> int | None:

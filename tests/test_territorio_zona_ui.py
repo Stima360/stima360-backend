@@ -140,7 +140,8 @@ def test_b02_edifici_e_il_pulsante_mappa_come_prima_e_le_altre_sezioni_invariate
     assert e["mappaBtn"] is True and e["href"] == "#/edifici/mappa" and e["nuovo"] == "+ Nuovo"
     assert out["daPulsante"] == {"hash": "#/edifici/mappa", "attiva": ["zona"], "mappe": 1}
     assert out["scheda"] == {"attiva": ["edifici"], "titolo": "Edifici"}
-    assert out["altre"] == {"oggi": ["#/oggi", "oggi", "Oggi"], "agenda": ["#/agenda", "agenda", "Agenda"],
+    # SENTINELLA AGGIORNATA DALLA SCRIVANIA: la voce #/oggi si chiama «Scrivania», la rotta resta.
+    assert out["altre"] == {"oggi": ["#/oggi", "oggi", "Scrivania"], "agenda": ["#/agenda", "agenda", "Agenda"],
                             "contatti": ["#/contatti", "contatti", "Contatti"], "immobili": ["#/immobili", "immobili", "Immobili"],
                             # SENTINELLA AGGIORNATA DA SEMPLIFICAZIONE-NAV-1: il Cestino sta dentro «Impostazioni», ultima voce.
                             "impostazioni": ["#/impostazioni", "impostazioni", "Impostazioni"]}

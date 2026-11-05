@@ -52,6 +52,8 @@ from core.contact_lifecycle import (
     ContactLifecycleInvalid as LifecycleInvalid,
     TRASH_NOTE_MAX, TRASH_REASONS,
     _ConCodice,
+    storico_per_lettore,
+    task_aperti_visibili,
 )
 from core.database import core_cursor
 from core.exceptions import ConflictError, NotFoundError
@@ -172,7 +174,7 @@ def _righe(cur, sql: str, params) -> list[dict]:
 # BLOCCHI: processi aperti (nessuno si chiude da qui)
 # ---------------------------------------------------------------------------
 
-def trash_blockers(cur, richiesta: dict) -> list[dict]:
+def trash_blockers(cur, richiesta: dict, ctx=None) -> list[dict]:
     """Ogni voce: `code`, `label`, `items` (con `label` e `href` interno della
     Shell), `link` facoltativo."""
     rid = richiesta["id"]
@@ -226,11 +228,10 @@ def trash_blockers(cur, richiesta: dict) -> list[dict]:
                         "WHERE l.buy_request_id = %s AND t.status = ANY(%s) ORDER BY t.due_at NULLS LAST, t.id",
                    (rid, list(TASK_OPEN)))
     if righe:
-        for r in righe:
-            r["label"] = (r.get("title") or f"Task #{r['id']}") + (f" · scade il {_data(r['due_at'])}" if r.get("due_at") else "")
-            r["href"] = "#/attivita"
+        # SCRIVANIA - PRIVACY: il blocco resta su tutti i task aperti; titoli solo
+        # di quelli che il lettore puo' leggere (core.contact_lifecycle).
         blocchi.append({"code": "TASK_OPEN", "label": "Task aperti: completali o annullali prima in Attività",
-                        "items": righe, "link": {"href": "#/attivita", "label": "Apri Attività"}})
+                        "items": task_aperti_visibili(cur, ctx, righe), "link": {"href": "#/attivita", "label": "Apri Attività"}})
     return blocchi
 
 
@@ -302,12 +303,13 @@ def deletion_check(ctx, request_id: int) -> dict:
         if richiesta.get("deleted_at") is not None:
             blocchi = [{"code": ALREADY_DELETED, "label": ALREADY_DELETED_MESSAGE, "items": []}]
         else:
-            blocchi = trash_blockers(cur, richiesta)
+            blocchi = trash_blockers(cur, richiesta, ctx)
             storia = protected_history(cur, richiesta)
             if not blocchi and storia and not _vede_tutta_agenzia(ctx):
-                blocchi = [{"code": HISTORY_REQUIRES_ADMIN, "label": HISTORY_REQUIRES_ADMIN_MESSAGE, "items": storia}]
+                blocchi = [{"code": HISTORY_REQUIRES_ADMIN, "label": HISTORY_REQUIRES_ADMIN_MESSAGE,
+                            "items": storico_per_lettore(ctx, storia)}]
             effetti = _effetti(cur, richiesta)
-    risposta = {"can_trash": not blocchi, "blockers": blocchi, "history": storia}
+    risposta = {"can_trash": not blocchi, "blockers": blocchi, "history": storico_per_lettore(ctx, storia)}
     if effetti is not None:
         risposta["effects"] = effetti
     return risposta
@@ -323,13 +325,14 @@ def trash_request(ctx, request_id: int, reason_code, note=None) -> dict:
         richiesta = _richiesta(cur, agency_id, request_id, lock=True)
         if richiesta.get("deleted_at") is not None:
             raise LifecycleConflict(ALREADY_DELETED_MESSAGE, ALREADY_DELETED)
-        blocchi = trash_blockers(cur, richiesta)
+        blocchi = trash_blockers(cur, richiesta, ctx)
         if blocchi:
             raise LifecycleConflict(TRASH_BLOCKED_MESSAGE, TRASH_BLOCKED, blockers=blocchi)
         if not _vede_tutta_agenzia(ctx):
             storia = protected_history(cur, richiesta)
             if storia:
-                raise LifecycleForbidden(HISTORY_REQUIRES_ADMIN_MESSAGE, HISTORY_REQUIRES_ADMIN, history=storia)
+                raise LifecycleForbidden(HISTORY_REQUIRES_ADMIN_MESSAGE, HISTORY_REQUIRES_ADMIN,
+                                         history=storico_per_lettore(ctx, storia))
         effetti = _effetti(cur, richiesta)
         cur.execute("UPDATE buy_requests SET deleted_at = NOW(), deleted_by_user_id = %s, deleted_reason = %s, "
                     "updated_at = NOW() WHERE id = %s AND agency_id = %s RETURNING *",

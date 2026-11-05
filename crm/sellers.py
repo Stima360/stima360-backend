@@ -537,6 +537,9 @@ def list_sellers(ctx, *, view: str = "all", status: str = "active", agent_id: in
     agency_id = ctx.require_agency()
     if view not in VIEWS or status not in STATUS_FILTERS:
         raise ValidationError("Filtro non valido")
+    # SCRIVANIA - PRIVACY: l'«ultima interazione» mostrata e' una che il lettore puo'
+    # leggere (core.scope: per un agente, di cui e' autore o responsabile).
+    interazioni_visibili, interazioni_params = scoped_predicate(ctx, "activities", "a")
     predicato, params = scoped_predicate(ctx, "leads", "l")
     # DELETE-ARCH Fase 0: un immobile archiviato esce dalla worklist.
     filtri = [predicato, "pl.relation_type = 'seller'", "l.pipeline = 'sell'", "p.archived_at IS NULL",
@@ -588,6 +591,7 @@ def list_sellers(ctx, *, view: str = "all", status: str = "active", agent_id: in
               LEFT JOIN LATERAL (
                    SELECT a.id, a.activity_type, a.description, a.occurred_at FROM activities a
                     WHERE a.agency_id = l.agency_id AND a.activity_type = ANY(%s)
+                      AND {interazioni_visibili}
                       AND (a.lead_id = l.id OR (a.property_id = p.id AND a.contact_id = c.id))
                     ORDER BY a.occurred_at DESC, a.id DESC LIMIT 1) la ON TRUE
               LEFT JOIN LATERAL (
@@ -608,7 +612,8 @@ def list_sellers(ctx, *, view: str = "all", status: str = "active", agent_id: in
              ORDER BY COALESCE(nt.due_at, l.next_action_at) ASC NULLS LAST, l.updated_at DESC, l.id DESC
              LIMIT %s OFFSET %s
             """,
-            [list(OWNER_ROLES), list(INTERACTION_TYPES), terminali] + params + extra + [int(limit) + 1, int(offset)])
+            [list(OWNER_ROLES), list(INTERACTION_TYPES)] + interazioni_params + [terminali] + params + extra
+            + [int(limit) + 1, int(offset)])
         righe = [dict(r) for r in cur.fetchall()]
         altri = len(righe) > int(limit)
         righe = righe[: int(limit)]

@@ -173,7 +173,21 @@ from tests.semplificazione_crm_1_diff import (
 # SENTINELLA AGGIORNATA DA STIMA VOICE V8-4 (dichiarata in tests/voice_v8_diff.py): la riga
 # del collegamento «Apri in Agenda» nel modello puro della Voce. Stessa forma chiusa.
 from tests.voice_v8_diff import VISTE_CON_DIALOG_AGENDA as _V8_VISTE
-_ESENZIONI_CHIUSE = {**_SCRM1_VISTE, **_V8_VISTE}
+# SENTINELLA AGGIORNATA DALLA SCRIVANIA (#/oggi, richiesta del titolare): la Scrivania
+# mostra l'agenda di oggi e di domani e gli appuntamenti da verificare con le SOLE
+# letture dell'UNICO client dell'Agenda (`getCalendar`, `getList`: `/api/appointments`
+# resta nominato solo in agenda-api.js) e le date di Roma e la regola del ruolo
+# dall'UNICO modello (`agenda-model.js`). Nessun dialog, nessuna scrittura, nessuna
+# pagina dell'Agenda: un appuntamento si apre NELL'Agenda. Esenzione CHIUSA: una vista,
+# queste due righe esatte.
+_SCRIVANIA_VISTE = {
+    "static/os_shell/assets/views/oggi.js": (
+        "import { getCalendar, getList } from '../agenda/agenda-api.js';",
+        "import { addDays, canAssignRecords, formatDateTime, formatDayLong, formatTime, romeIso, statusLabel, "
+        "todayKey, typeLabel } from '../agenda/agenda-model.js';",
+    ),
+}
+_ESENZIONI_CHIUSE = {**_SCRM1_VISTE, **_V8_VISTE, **_SCRIVANIA_VISTE}
 
 # SENTINELLA AGGIORNATA DA CRM-OPS-1B (autorizzata, dichiarata nel report CRM-OPS-1B): la scheda contatto
 # mostra l'agente assegnato e, a titolare/amministratore, offre il selettore
@@ -1029,7 +1043,8 @@ def test_s5_un_tenant_su_rete_torna_a_oggi_come_prima(shell_staged):
     rt = _shell()
     out = rt.run(shell_staged, rt.REPORT, rt.script(rt.ok(rt.TENANT), *_agenda_ok()),
                  hash="#/rete")
-    assert out["title"] == "Oggi", out["title"]
+    # SENTINELLA AGGIORNATA DALLA SCRIVANIA: la voce #/oggi si chiama «Scrivania».
+    assert out["title"] == "Scrivania", out["title"]
     assert [u for u in out["urls"] if u.startswith("/api/platform")] == []
 
 

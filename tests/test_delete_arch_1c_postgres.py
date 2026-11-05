@@ -232,8 +232,12 @@ def test_s1_s4_scope_ruoli_e_platform(mondo, tipo):
     prima = _riga(mondo, tabella, del_collega["id"])
     # S1: altra agenzia -> 404, nulla cambia
     assert _segna(mondo, tipo, del_collega["id"], chi="owner_b").status_code == 404
-    # S2: un agente non corregge il record di un collega (403); il proprio si'
-    assert _segna(mondo, tipo, del_collega["id"], chi="agent_a").status_code == 403
+    # S2: un agente non corregge il record di un collega; il proprio si'.
+    # SENTINELLA AGGIORNATA DALLA SCRIVANIA (privacy fra operatori): il record di un
+    # collega su un contatto non assegnato non e' piu' LEGGIBILE dall'agente
+    # (core.scope AGENT_DERIVED), quindi la risposta e' 404 e non 403: l'agente non
+    # apprende nemmeno che esiste. Il rifiuto resta, la riga resta com'era.
+    assert _segna(mondo, tipo, del_collega["id"], chi="agent_a").status_code == 404
     # S4: platform admin fuori acting -> 403
     assert _segna(mondo, tipo, del_collega["id"], chi="platform_none").status_code == 403
     assert _riga(mondo, tabella, del_collega["id"]) == prima

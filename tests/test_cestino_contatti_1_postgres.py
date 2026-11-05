@@ -352,11 +352,15 @@ def test_03_storico_agent_si_ferma_titolare_no(k):
     _lead(k, cid, status="closed")
     r = _check(k, cid, "agent_a")
     assert r.json()["can_trash"] is False and _codici(r) == ["HISTORY_REQUIRES_ADMIN"]
-    voci = {v["code"] for v in r.json()["blockers"][0]["items"]}
-    assert voci == {"CONTACT_ACTIVITY", "LEAD_HISTORY"}
+    # SENTINELLA AGGIORNATA DALLA SCRIVANIA (decisione del titolare): la protezione
+    # e' la stessa, ma all'agente lo storico arriva come UNA voce generica, senza
+    # dettagli ne' quantita' (puo' contenere attivita' riservate di altri operatori).
+    assert [v["code"] for v in r.json()["blockers"][0]["items"]] == ["HISTORY_PRESENT"]
+    assert "count" not in r.text
+    voci = {"CONTACT_ACTIVITY", "LEAD_HISTORY"}
     r = _sposta(k, cid, "agent_a")
     assert r.status_code == 403 and r.json()["code"] == "HISTORY_REQUIRES_ADMIN"
-    assert {v["code"] for v in r.json()["history"]} == voci and not _nel_cestino(k, cid)
+    assert [v["code"] for v in r.json()["history"]] == ["HISTORY_PRESENT"] and not _nel_cestino(k, cid)
     # il titolare: puo', e il controllo gli mostra lo storico che resta
     r = _check(k, cid)
     assert r.json()["can_trash"] is True and {v["code"] for v in r.json()["history"]} == voci

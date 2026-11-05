@@ -64,7 +64,9 @@ const SECTIONS = [
   // automazioni, cestino) restano rotte valide e vivono dentro un contenitore
   // (views/sezioni.js) o come filtro della pagina (Stime). `parent` = sottovoce,
   // disegnata rientrata sotto la voce madre.
-  { name: 'oggi', label: 'Oggi' },
+  // SCRIVANIA: la voce si chiama «Scrivania»; la rotta resta #/oggi, per i
+  // collegamenti esistenti. Il pulsante «Oggi» dell'Agenda non cambia.
+  { name: 'oggi', label: 'Scrivania' },
   { name: 'agenda', label: 'Agenda' },
   { name: 'contatti', label: 'Contatti' },
   { name: 'immobili', label: 'Immobili' },

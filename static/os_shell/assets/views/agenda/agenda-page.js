@@ -875,4 +875,15 @@ export async function renderAgenda(container, params = []) {
   const erroreGoogle = erroreGoogleInSospeso();
   await carica(prendiMessaggio());
   if (erroreGoogle && !stale()) avviso.appendChild(el('div', 'error-box', erroreGoogle));
+
+  // SCRIVANIA: `#/agenda/<vista>/<data>/<id>` apre quell'appuntamento e
+  // `#/agenda/<vista>/<data>/nuovo` la creazione, con le stesse funzioni dei
+  // pulsanti. L'indirizzo torna subito `#/agenda/<vista>/<data>`: un
+  // ricaricamento non riapre nulla.
+  const richiesta = params[2];
+  if (richiesta && !stale()) {
+    sostituisciIndirizzo(view, key);
+    if (richiesta === 'nuovo') apriCreazione({ dateKey: key });
+    else if (/^[1-9]\d*$/.test(String(richiesta))) apri(Number(richiesta));
+  }
 }

@@ -1656,13 +1656,20 @@ def test_c9_agent_on_an_assignable_table_gets_both_filters(table):
 
 @pytest.mark.parametrize("table", ["activities", "tasks"])
 def test_c9_agent_on_a_non_assignable_table_gets_the_agency_predicate_only(table):
-    """Spec 9.1, stated as a decision rather than an omission: activities and
-    tasks have no assigned_agent_id, and their free-text assigned_to is written
-    by automation. Narrowing them belongs to P26-2."""
+    """SENTINELLA AGGIORNATA DALLA SCRIVANIA (privacy fra operatori, decisione del
+    titolare). Prima: un agent leggeva task e attivita' di TUTTA l'agenzia (spec
+    9.1, «narrowing them belongs to P26-2»). Ora il restringimento e' DERIVATO da
+    fatti scritti solo dal server: l'agent vede la riga se ne e' l'autore
+    (`created_by_user_id`) o il responsabile (agente del lead, altrimenti del
+    contatto). Mai `assigned_to`, mai `metadata`. Il nome del test resta per la
+    tracciabilita': la tabella resta senza `assigned_agent_id` proprio."""
+    from core.scope import responsible_sql
     source, params = scoped_source(_agent(), table, "t")
-    assert source == f"{table} t WHERE t.agency_id = %s"
-    assert params == [AGENCY]
-    assert "assigned" not in source
+    assert source == (f"{table} t WHERE t.agency_id = %s AND "
+                      f"(t.created_by_user_id = %s OR {responsible_sql('t')} = %s)")
+    assert params == [AGENCY, AGENT_USER, AGENT_USER]
+    assert "t.assigned_agent_id" not in source and "assigned_to" not in source and "metadata" not in source
+    assert "rl.agency_id = t.agency_id" in source and "rc.agency_id = t.agency_id" in source
 
 
 def test_c9_the_agent_branch_never_invents_assigned_to():
@@ -2133,6 +2140,10 @@ def test_c12_the_module_exposes_no_unexpected_public_surface():
         "ProgrammingError", "scoped_predicate", "scoped_source",
         "resolve_default_agency_id", "system_context_for_public_stima",
         "creator_assignment",
+        # SENTINELLA AGGIORNATA DALLA SCRIVANIA: il restringimento derivato di
+        # task e attivita' per un agent (stessa funzione per lettura e per il
+        # responsabile mostrato dalla lista dei task).
+        "AGENT_DERIVED", "responsible_sql",
     }
     assert public <= imported | defined, public - (imported | defined)
     assert defined <= public, defined - public
