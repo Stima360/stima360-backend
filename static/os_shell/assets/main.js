@@ -17,7 +17,6 @@ import {
   sessionEpoch,
 } from './core/auth.js';
 import { registerRoute, initRouter, navigate, renderCurrentRoute, clearRoute } from './core/router.js';
-import { mountEnvBadge } from './core/env-badge.js';
 // SHELL MOBILE (Scrivania Viva): intestazione compatta, barra inferiore, «Altro».
 import { mountMobileShell } from './core/mobile-shell.js';
 import { renderContatti } from './views/contatti.js';
@@ -158,7 +157,6 @@ const logoutBtn = document.getElementById('logout-btn');
 const pageTitle = document.getElementById('page-title');
 const contentEl = document.getElementById('content');
 const navEl = document.getElementById('nav');
-const envBadgeEl = document.getElementById('env-badge');
 const actingBar = document.getElementById('acting-bar');
 const actingText = document.getElementById('acting-text');
 const actingExitBtn = document.getElementById('acting-exit-btn');
@@ -328,7 +326,6 @@ initRouter(contentEl, {
   },
 });
 
-mountEnvBadge(envBadgeEl);
 mountUserMenu();
 const ricercaGlobale = mountGlobalSearch(contentEl.parentElement);
 // SHELL MOBILE: montata dopo la barra laterale (vedi in fondo), da cui legge le voci.

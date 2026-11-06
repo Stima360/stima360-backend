@@ -16,9 +16,14 @@
 // main.js: qui viene solo spostato dentro il menu.
 //
 // Se il documento non porta `#user-menu` il componente non fa nulla.
+//
+// VALE360: il badge d'ambiente non sta piu' nella testata; l'ambiente resta
+// indicato, discreto, in una riga «Ambiente» del menu (stessa regola del badge,
+// `core/env-badge.js`: dall'hostname, nessuna richiesta).
 
 import { getAgents } from '../agenda/agenda-api.js';
 import { canUseTenantSurface, onAuthChange, sessionEpoch } from '../core/auth.js';
+import { computeEnvLabel } from '../core/env-badge.js';
 
 const RUOLI = { agency_owner: 'Owner', agency_admin: 'Admin', agent: 'Agente' };
 
@@ -73,6 +78,17 @@ function iconaPersona() {
 function riga(etichetta, valore) {
   const r = el('div', 'user-menu-row');
   r.append(el('dt', null, etichetta), el('dd', null, valore));
+  return r;
+}
+
+/** VALE360: la riga «Ambiente» (Test / Produzione / Locale), con `data-env` per il colore discreto. */
+function rigaAmbiente() {
+  const etichetta = computeEnvLabel(typeof window !== 'undefined' && window.location ? window.location.hostname : '');
+  const env = etichetta === 'AMBIENTE TEST' ? 'test' : (etichetta === 'AMBIENTE PROD' ? 'prod' : 'local');
+  const r = riga('Ambiente', { test: 'Test', prod: 'Produzione', local: 'Locale' }[env]);
+  r.classList.add('user-menu-env');
+  r.dataset.env = env;
+  r.setAttribute('data-user-menu-env', '');
   return r;
 }
 
@@ -164,6 +180,7 @@ export function mountUserMenu() {
     }
     const fine = scadenza(session.expires_at);
     if (fine) righe.push(riga('Sessione valida fino al', fine));
+    righe.push(rigaAmbiente());
     info.replaceChildren(...righe);
   }
 

@@ -2581,3 +2581,42 @@ a.scrivania-mini:hover { color: var(--primary); }
 @media (max-width: 400px) {
   .mobile-more-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+/* VALE360: il marchio nella fascia alta. Su computer una fascia bianca a tutta larghezza, sopra barra
+   laterale e contenuto, con il solo banner centrato (il fondo bianco del banner si fonde con la fascia);
+   su smartphone il banner sta al centro dell'intestazione compatta, fra ricerca e profilo (colonne
+   uguali: centrato davvero). Nessun vecchio logo, nessun badge d'ambiente. Solo regole nuove. */
+/* la fascia va a capo sopra barra laterale e contenuto SOLO su computer: su smartphone #app-view e' una
+   colonna, e il wrap la spezzerebbe in due colonne affiancate */
+@media (min-width: 861px) { #app-view { flex-wrap: wrap; } }
+.brand-band {
+  position: relative; z-index: 21; flex: 0 0 100%; display: flex; justify-content: center; align-items: center;
+  padding: 12px 24px 14px; background: #fff; border-bottom: 1px solid var(--border);
+  box-shadow: 0 10px 30px -26px rgba(15, 27, 51, .45);
+}
+.brand-band::after {
+  /* filo arcobaleno, la firma del marchio */
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; opacity: .55; pointer-events: none;
+  background: linear-gradient(90deg, #6d28d9, #2563eb, #06b6d4, #16a34a, #f59e0b, #e11d48);
+}
+.brand-band-link { display: inline-flex; max-width: 100%; border-radius: 8px; }
+.brand-band-link:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; }
+.brand-band-logo { display: block; width: auto; height: clamp(64px, 6.8vw, 92px); max-width: 100%; object-fit: contain; }
+
+@media (max-width: 860px) {
+  .brand-band { display: none; }
+  .mobile-head.topbar {
+    display: grid; grid-template-columns: 42px minmax(0, 1fr) 42px; align-items: center; gap: 10px;
+    min-height: 66px; padding: 8px 12px; background: #fff;
+  }
+  .mobile-head .mobile-search-btn { grid-column: 1; }
+  .mobile-head .mobile-brand { grid-column: 2; justify-self: stretch; justify-content: center; order: 0; }
+  .mobile-head .mobile-brand-logo { width: 100%; max-width: 300px; height: auto; max-height: 54px; object-fit: contain; }
+  .mobile-head .mobile-head-actions { grid-column: 3; justify-self: end; margin-left: 0; order: 0; }
+}
+/* VALE360: l'ambiente, discreto, nel menu del profilo (al posto del badge in testata) */
+.user-menu-env dd { display: inline-flex; align-items: center; gap: 6px; }
+.user-menu-env dd::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: #94a3b8; }
+.user-menu-env[data-env="test"] dd { color: #b45309; font-weight: 600; }
+.user-menu-env[data-env="test"] dd::before { background: #f59e0b; }
+.user-menu-env[data-env="prod"] dd::before { background: #16a34a; }

@@ -4,7 +4,7 @@
 // e navigazione: nessuna rotta nuova, nessuna richiesta, nessuna memoria del
 // browser. Su schermi stretti (lo stesso punto di rottura di app.css, 860px):
 //
-//   * un'intestazione compatta: logo, ambiente, ricerca a icona, profilo;
+//   * un'intestazione compatta: ricerca a icona, il marchio VALE360 al centro, profilo;
 //   * una barra inferiore con Scrivania, Agenda, Zona, Contatti e «Altro»;
 //   * «Altro» elenca TUTTE le altre voci che la barra laterale porta in quel
 //     momento (quindi con gli stessi permessi: Rete solo al Superadmin, le
@@ -19,8 +19,6 @@
 // Tutto e' guardato per funzionare anche senza `matchMedia` (i test della
 // Shell girano su un DOM simulato): senza, non si sposta nulla e la barra
 // inferiore esiste ma la decide solo il CSS.
-
-import { mountEnvBadge } from './env-badge.js';
 
 export const PRIMARIE = Object.freeze(['oggi', 'agenda', 'zona', 'contatti']);
 export const ETICHETTE_PRIMARIE = Object.freeze({ oggi: 'Scrivania', agenda: 'Agenda', zona: 'Zona', contatti: 'Contatti' });
@@ -68,19 +66,19 @@ export function mountMobileShell({ appView, navEl, sections = [], icons = {}, na
   // Porta anche la classe `topbar`: l'Agenda misura le barre fisse della Shell
   // cercando `.acting-bar`, `.sidebar` e `.topbar`, e su smartphone questa e' la
   // barra in alto che conta.
+  // VALE360: il marchio al centro, la ricerca a sinistra e il profilo a destra (stessa
+  // larghezza, cosi' il marchio resta centrato davvero); nessun badge d'ambiente.
   const testata = el('header', 'mobile-head topbar');
   testata.setAttribute('data-mobile-head', '');
   const marchio = el('a', 'mobile-brand');
   marchio.setAttribute('href', '#/oggi');
-  marchio.setAttribute('aria-label', 'STIMA360, Scrivania');
+  marchio.setAttribute('aria-label', 'VALE360, Scrivania');
   const logo = el('img', 'mobile-brand-logo');
-  logo.setAttribute('src', '/os/assets/brand/stima360-logo.png');
-  logo.setAttribute('alt', 'STIMA360');
-  logo.setAttribute('width', '1050');
-  logo.setAttribute('height', '600');
+  logo.setAttribute('src', '/os/assets/brand/vale360-banner.png');
+  logo.setAttribute('alt', 'VALE360 — Real Estate Intelligence System, powered by STIMA360');
+  logo.setAttribute('width', '1400');
+  logo.setAttribute('height', '309');
   marchio.appendChild(logo);
-  const ambiente = el('span', 'env-badge mobile-env');
-  mountEnvBadge(ambiente);
   const azioni = el('div', 'mobile-head-actions');
   const cerca = el('button', 'mobile-icon-btn mobile-search-btn');
   cerca.type = 'button';
@@ -90,8 +88,8 @@ export function mountMobileShell({ appView, navEl, sections = [], icons = {}, na
   cerca.appendChild(icona(ICONE.cerca, 'mobile-icon'));
   const profilo = el('div', 'mobile-profile');
   profilo.setAttribute('data-mobile-profile', '');
-  azioni.append(cerca, profilo);
-  testata.append(marchio, ambiente, azioni);
+  azioni.append(profilo);
+  testata.append(cerca, marchio, azioni);
 
   // -- barra inferiore --------------------------------------------------------------
   const barra = el('nav', 'mobile-nav');

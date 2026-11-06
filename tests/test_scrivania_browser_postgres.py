@@ -371,7 +371,9 @@ const [base, shots, emailOwner, emailAgent, password, t1, t2, oggi, emailAdmin, 
         hash: location.hash,
         sidebar: vis(q('#app-view > .sidebar')), topbar: vis(q('.main > .topbar')), head: vis(q('[data-mobile-head]')),
         env: ((q('[data-mobile-head] .env-badge') || {}).textContent || '').trim(),
-        logo: vis(q('[data-mobile-head] .mobile-brand-logo')), profile: vis(q('[data-mobile-profile] #user-menu')),
+        logo: vis(q('[data-mobile-head] .mobile-brand-logo')),
+        logoSrc: q('[data-mobile-head] .mobile-brand-logo') ? q('[data-mobile-head] .mobile-brand-logo').getAttribute('src') : '',
+        profile: vis(q('[data-mobile-profile] #user-menu')),
         searchIcon: vis(q('[data-mobile-search]')), searchBox: vis(q('.main > .card:first-child input[type=search]')),
         navVisible: vis(nav), navTop: nav ? Math.round(r(nav).top) : null, navBottom: nav ? Math.round(r(nav).bottom) : null,
         vh: window.innerHeight, vw: window.innerWidth, scrollW: document.documentElement.scrollWidth,
@@ -500,7 +502,8 @@ def _verifica_shell_mobile(out: dict, oggi: date) -> None:
     # intestazione compatta al posto di barra laterale e barra del titolo; le schede interne sparite
     assert casa["head"] and casa["logo"] and casa["profile"] and casa["searchIcon"], casa
     assert not casa["sidebar"] and not casa["topbar"] and not casa["searchBox"] and not casa["tabs"], casa
-    assert casa["env"], "il badge dell'ambiente (TEST in collaudo, AMBIENTE LOCALE qui) sta nell'intestazione"
+    # SENTINELLA AGGIORNATA DA VALE360: nell'intestazione il solo marchio VALE360, nessun badge d'ambiente
+    assert casa["env"] == "" and casa["logoSrc"] == "/os/assets/brand/vale360-banner.png", casa
     # barra inferiore: cinque voci, tutte toccabili, a filo del fondo, Scrivania accesa
     assert [v[0] for v in casa["nav"]] == ["oggi", "agenda", "zona", "contatti", "altro"], casa["nav"]
     assert [v[1] for v in casa["nav"]] == ["Scrivania", "Agenda", "Zona", "Contatti", "Altro"], casa["nav"]
