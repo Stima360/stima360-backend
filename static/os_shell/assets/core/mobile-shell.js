@@ -77,7 +77,7 @@ export function mountMobileShell({ appView, navEl, sections = [], icons = {}, na
   logo.setAttribute('src', '/os/assets/brand/vale360-banner.png');
   logo.setAttribute('alt', 'VALE360 — Real Estate Intelligence System, powered by STIMA360');
   logo.setAttribute('width', '1400');
-  logo.setAttribute('height', '300');
+  logo.setAttribute('height', '319');
   marchio.appendChild(logo);
   const azioni = el('div', 'mobile-head-actions');
   const cerca = el('button', 'mobile-icon-btn mobile-search-btn');
