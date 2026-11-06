@@ -61,7 +61,7 @@ const ROLE_LABELS = {
   referrer: 'Segnalatore', agency: 'Agenzia', professional: 'Professionista', other: 'Altro',
 };
 
-export async function renderContatti(container) {
+export async function renderContatti(container, { nuovo = false } = {}) {
   container.innerHTML = `
     <div class="card panel">
       <div class="list-toolbar">
@@ -152,6 +152,12 @@ export async function renderContatti(container) {
   });
 
   await load();
+  // SCRIVANIA VIVA (`#/contatti/nuovo`): lo stesso pulsante, premuto per l'operatore;
+  // l'indirizzo torna subito «#/contatti», cosi' un ricaricamento non lo riapre.
+  if (nuovo) {
+    try { if (window.history && typeof window.history.replaceState === 'function') window.history.replaceState(null, '', '#/contatti'); } catch (_e) { /* nessuna cronologia */ }
+    container.querySelector('#contatti-new-btn').click();
+  }
 }
 
 function contactFallbackName(contact) {

@@ -77,4 +77,6 @@ export function mountGlobalSearch(container) {
   // Provato in tests/test_p26_4_shell_runtime.py: senza questa riga la query
   // digitata e i risultati dell'agenzia uscita resterebbero sullo schermo.
   onAuthChange(() => { clear(); input.value = ''; });
+  // SHELL MOBILE: il riquadro, per aprirlo e chiuderlo dall'icona di ricerca.
+  return wrap;
 }

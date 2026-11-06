@@ -119,7 +119,7 @@ const EMPTY_SCOPE = {
   shared: 'Nessun immobile di altre agenzie nel tuo territorio.',
 };
 
-export async function renderImmobili(container, params = []) {
+export async function renderImmobili(container, params = [], { nuovo = false } = {}) {
   const modoIniziale = params[0] === 'censimento' ? 'census' : 'crm';
   container.innerHTML = `
     <div class="tabs census-mode-tabs" id="immobili-mode-tabs">
@@ -284,6 +284,12 @@ export async function renderImmobili(container, params = []) {
     const opzioni = await opzioniCreazione(listArea);
     if (opzioni) startCreation({ wizardDialog: container.querySelector('#census-sheet'), formDialog: dialogEl, options: opzioni, recordKind: 'crm' });
   });
+  // SCRIVANIA VIVA (`#/immobili/nuovo`): lo stesso pulsante, premuto per l'operatore;
+  // l'indirizzo torna subito «#/immobili», cosi' un ricaricamento non lo riapre.
+  if (nuovo) {
+    try { if (window.history && typeof window.history.replaceState === 'function') window.history.replaceState(null, '', '#/immobili'); } catch (_e) { /* nessuna cronologia */ }
+    container.querySelector('#immobili-new').click();
+  }
 
   async function opzioniCreazione(area) {
     try {

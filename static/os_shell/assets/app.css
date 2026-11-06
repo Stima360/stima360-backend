@@ -2223,75 +2223,172 @@ a.scrivania-mini:hover { color: var(--primary); }
 }
 
 /* ===========================================================================
-   SCRIVANIA VIVA (Fase A) — benvenuto, briefing, radar protagonista, consigli,
-   attività in secondo piano. Nessuna animazione oltre a un leggero passaggio
-   di colore; i colori sono quelli del tema STIMA360 (Aurora).
+   SCRIVANIA VIVA — identita' premium, mobile first, sul mockup STIMA360:
+   benvenuto blu con testo bianco, sintesi leggera, quattro tessere colorate,
+   Radar a schede con pillola, Agenda a timeline, assistente in una riga.
+   Transizioni di solo colore (Aurora le azzera con prefers-reduced-motion).
+   Le regole stanno in views/oggi.js.
    =========================================================================== */
+.scrivania { position: relative; }
+.scrivania .card {
+  background: #fff; -webkit-backdrop-filter: none; backdrop-filter: none;
+  border: 1px solid var(--border); box-shadow: var(--au-shadow-sm);
+}
+.scrivania-section-icon { width: 24px; height: 24px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; color: var(--primary); }
+.scrivania-meta-icon { width: 15px; height: 15px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 2;
+  stroke-linecap: round; stroke-linejoin: round; vertical-align: -2px; margin-right: 4px; }
+.scrivania .scrivania-section-title { display: flex; align-items: center; gap: 10px; font-size: 20px; letter-spacing: -.01em; }
+.scrivania-section-head { align-items: center; }
+.scrivania-section-actions .scrivania-link { font-weight: 600; font-size: 14px; white-space: nowrap; }
+.scrivania-link-arrow::after { content: ' →'; }
+
+/* -- benvenuto --------------------------------------------------------------- */
 .scrivania .scrivania-hero {
-  position: relative; overflow: hidden; align-items: flex-start;
-  padding: 26px 28px; border-radius: 22px; border: 1px solid var(--border);
+  position: relative; overflow: hidden; padding: 26px 28px 22px; border-radius: 22px; border: 0;
+  color: #fff; box-shadow: 0 14px 34px -18px rgba(24, 52, 160, .55);
   background:
-    radial-gradient(120% 140% at 0% 0%, rgba(124, 58, 237, .14), transparent 55%),
-    radial-gradient(120% 140% at 100% 0%, rgba(6, 182, 212, .14), transparent 55%),
-    radial-gradient(140% 120% at 50% 120%, rgba(16, 185, 129, .10), transparent 60%),
-    var(--panel);
+    radial-gradient(90% 120% at 100% 0%, rgba(255, 255, 255, .16), transparent 60%),
+    radial-gradient(70% 90% at 90% 110%, rgba(245, 158, 11, .35), transparent 60%),
+    linear-gradient(120deg, #1a3fcf 0%, #2445d4 45%, #1b2f8f 100%);
 }
-.scrivania .scrivania-hero::after {
-  content: ''; position: absolute; left: 0; right: 0; bottom: 0; height: 4px;
-  background: linear-gradient(90deg, #7c3aed, #2563eb 22%, #06b6d4 42%, #10b981 60%, #f59e0b 80%, #f43f5e);
+.scrivania-hero .scrivania-titles { min-width: 0; }
+.scrivania-greeting-row { display: flex; align-items: center; gap: 12px; }
+.scrivania-greeting { margin: 0; font-size: 32px; line-height: 1.15; font-weight: 700; letter-spacing: -.02em; color: #fff; }
+.scrivania-sign { width: 38px; height: 38px; flex: 0 0 auto; padding: 8px; border-radius: 50%; fill: none; stroke: currentColor;
+  stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; background: rgba(255, 255, 255, .16); }
+.scrivania-sign-sole { color: #ffd166; }
+.scrivania-sign-tramonto { color: #ffb088; }
+.scrivania-sign-luna { color: #ffe08a; }
+.scrivania-hero .scrivania-date { margin: 6px 0 0; color: rgba(255, 255, 255, .78); font-size: 15px; }
+.scrivania-quote { position: relative; margin: 16px 0 0; padding: 0; max-width: 640px; }
+.scrivania-quote-text { margin: 0; font-size: 18px; line-height: 1.5; font-style: italic; font-weight: 450; color: #fff; }
+.scrivania-quote-text::before { content: '“'; }
+.scrivania-quote-text::after { content: '”'; }
+.scrivania-quote-label { display: block; margin-top: 12px; padding-top: 10px; font-size: 13px; font-style: italic; font-weight: 500;
+  color: rgba(255, 255, 255, .78); text-transform: none; letter-spacing: 0; position: relative; }
+.scrivania-quote-label::before { content: ''; position: absolute; left: 0; top: 0; width: 48px; height: 3px; border-radius: 3px; background: #f59e0b; }
+
+/* -- barra operativa (secondo piano) ------------------------------------------ */
+.scrivania-toolbar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 14px; padding: 0 2px; }
+.scrivania-toolbar .scrivania-commands { display: flex; flex-wrap: wrap; gap: 8px; }
+.scrivania-toolbar .scrivania-mode { width: auto; max-width: 280px; }
+.scrivania-toolbar .btn.btn-small { min-height: 36px; padding: 6px 14px; font-size: 13px; border-radius: 999px; }
+.scrivania-plus-menu {
+  display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px;
+  border: 1px solid var(--border); border-radius: 18px; background: #fff; box-shadow: var(--au-shadow);
 }
-.scrivania-hero .scrivania-titles { flex: 1 1 420px; min-width: 0; }
-.scrivania-greeting { font-size: 30px; letter-spacing: -.01em; }
-.scrivania-hero .scrivania-date { margin: 6px 0 0; color: var(--muted); font-size: 15px; }
-.scrivania-quote { margin: 16px 0 0; padding: 12px 16px; border-left: 4px solid #7c3aed; border-radius: 12px;
-  background: rgba(255, 255, 255, .72); max-width: 720px; }
-.scrivania-quote-label { display: block; font-size: 11px; font-weight: 700; letter-spacing: .08em;
-  text-transform: uppercase; color: #6d28d9; margin-bottom: 4px; }
-.scrivania-quote-text { margin: 0; font-size: 17px; line-height: 1.5; font-style: italic; color: var(--text); }
-.scrivania-hero .scrivania-commands { align-self: flex-start; }
+.scrivania-plus-menu[hidden] { display: none; }
+.scrivania-plus-item {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; text-align: left; font: inherit;
+  padding: 12px 14px; border-radius: 12px; border: 1px solid var(--border); background: #fff; color: var(--text);
+  cursor: pointer; min-height: 56px; transition: border-color var(--au-fast), background var(--au-fast);
+}
+.scrivania-plus-item:hover, .scrivania-plus-item:focus-visible { border-color: var(--primary); background: #f5f7ff; }
+.scrivania-plus-item strong { font-size: 15px; }
+.scrivania-plus-item .muted { font-size: 12px; }
+.scrivania-fab { display: none; }
 
-.scrivania-briefing { display: flex; flex-direction: column; gap: 12px; }
-.scrivania-briefing-text p { margin: 0 0 6px; font-size: 16px; line-height: 1.55; }
-.scrivania-briefing-text p:first-child { font-weight: 600; }
-.scrivania-briefing .scrivania-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); }
-.scrivania-briefing .scrivania-kpi { padding: 8px 12px; }
-.scrivania-briefing .scrivania-kpi-value { font-size: 22px; }
-.scrivania-kpi-brand { border-left-color: #7c3aed; }
-.scrivania-kpi-info { border-left-color: #2563eb; }
+/* -- la sintesi e le quattro tessere ------------------------------------------ */
+.scrivania .scrivania-briefing { display: flex; flex-direction: column; gap: 6px; background: #f6f8ff; border-color: #e3e8f8; box-shadow: none; }
+.scrivania-briefing-title { display: flex; align-items: center; gap: 10px; margin: 0; font-size: 19px; letter-spacing: -.01em; }
+.scrivania-briefing-icon { color: #f59e0b; }
+.scrivania-briefing-text { padding-left: 34px; }
+.scrivania-briefing-text p { margin: 0 0 4px; font-size: 15px; line-height: 1.5; color: var(--muted); }
+.scrivania-briefing-text p:first-child { color: var(--text); }
+.scrivania .scrivania-summary { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.scrivania .scrivania-kpi-tile {
+  border: 0; border-left: 0; border-radius: 18px; padding: 14px 16px; gap: 6px; box-shadow: none;
+  transition: transform var(--au-fast), box-shadow var(--au-fast);
+}
+.scrivania .scrivania-kpi-tile:hover { box-shadow: var(--au-shadow-sm); }
+.scrivania-kpi-top { display: flex; align-items: center; gap: 10px; }
+.scrivania-kpi-icon { width: 26px; height: 26px; flex: 0 0 auto; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.scrivania .scrivania-kpi-tile .scrivania-kpi-value { font-size: 28px; line-height: 1; color: var(--text); }
+.scrivania .scrivania-kpi-tile .scrivania-kpi-label { font-size: 13px; font-weight: 500; color: #2b3650; }
+.scrivania-kpi-tile-radar { background: #e6f7ec; color: #15803d; }
+.scrivania-kpi-tile-agenda { background: #e4edfd; color: #2445d4; }
+.scrivania-kpi-tile-recuperare { background: #fff2d9; color: #d97706; }
+.scrivania-kpi-tile-nuovi { background: #ede7fc; color: #6d28d9; }
 
+/* -- griglia: Radar e Agenda fianco a fianco da 1100px ------------------------ */
 .scrivania-viva-grid { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-items: start; }
 .scrivania-viva-main, .scrivania-viva-side { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 @media (min-width: 1100px) {
-  .scrivania-viva-grid { grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+  .scrivania-viva-grid { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
 }
-.scrivania .scrivania-radar { border: 1px solid rgba(124, 58, 237, .28);
-  box-shadow: 0 10px 30px rgba(91, 63, 214, .10); }
-.scrivania-radar .scrivania-section-title { font-size: 21px; }
+
+/* -- Radar protagonista ---------------------------------------------------- */
+.scrivania-radar-track-box { display: flex; flex-direction: column; gap: 10px; }
 .scrivania-radar-list { display: flex; flex-direction: column; gap: 10px; }
 .scrivania-radar-item {
   display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px;
-  padding: 14px 16px; border-radius: 16px; border: 1px solid var(--border); background: var(--panel);
-  border-left: 5px solid #7c3aed;
+  padding: 14px 16px; border-radius: 18px; border: 1px solid var(--border); background: #fff;
+  transition: border-color var(--au-fast), background var(--au-fast);
 }
-.scrivania-radar-seller_overdue { border-left-color: #f43f5e; }
-.scrivania-radar-valuation_unassigned { border-left-color: #f59e0b; }
-.scrivania-radar-acquisition_idle { border-left-color: #2563eb; }
-.scrivania-radar-seller_no_action { border-left-color: #10b981; }
-.scrivania-radar-text { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1 1 260px; }
-.scrivania-radar-kind { font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
-.scrivania-radar-title { font-size: 17px; overflow-wrap: anywhere; }
-.scrivania-radar-place { font-size: 13px; overflow-wrap: anywhere; }
-.scrivania-radar-reason { font-size: 14px; }
-.scrivania-radar-since { font-size: 13px; font-weight: 600; color: #6d28d9; }
+.scrivania-radar-item:hover { border-color: #c9d2ee; background: #fbfcff; }
+.scrivania-radar-text { display: flex; flex-direction: column; gap: 5px; min-width: 0; flex: 1 1 260px; }
+.scrivania-radar-headline { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.scrivania-radar-title { font-size: 17px; overflow-wrap: anywhere; letter-spacing: -.01em; }
+.scrivania-radar-kind { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 999px; background: #e4edfd; color: #1f3bb8; white-space: nowrap; }
+.scrivania-radar-seller_overdue .scrivania-radar-kind { background: #fde4e1; color: #9b1c12; }
+.scrivania-radar-valuation_unassigned .scrivania-radar-kind { background: #fdefc8; color: #7a5200; }
+.scrivania-radar-acquisition_idle .scrivania-radar-kind { background: #e4edfd; color: #1f3bb8; }
+.scrivania-radar-seller_no_action .scrivania-radar-kind { background: #ddf5e7; color: #12623a; }
+.scrivania-radar-place, .scrivania-radar-since { display: inline-flex; align-items: center; font-size: 13px; overflow-wrap: anywhere; }
+.scrivania-radar-reason { font-size: 14px; color: var(--text); }
+.scrivania-radar-since { font-weight: 600; color: var(--muted); }
+.scrivania-radar-actions { display: flex; flex-direction: column; align-items: flex-end; gap: 6px; }
+.scrivania .scrivania-radar-actions .scrivania-pill { border-radius: 999px; min-height: 40px; padding: 8px 18px; font-size: 14px; }
+.scrivania-radar-secondary { display: flex; flex-wrap: wrap; gap: 4px 12px; justify-content: flex-end; }
+.scrivania-radar-secondary .scrivania-link { font-size: 13px; }
+.scrivania-radar-nav { display: none; }
+.scrivania-radar-all { border: 0; background: none; cursor: pointer; font: inherit; padding: 0; display: none; }
 .scrivania-radar-foot { display: flex; flex-wrap: wrap; gap: 6px 14px; align-items: center; font-size: 13px; }
 .scrivania-radar-empty strong { font-size: 16px; }
 
-.scrivania-advice { display: flex; flex-direction: column; gap: 12px;
-  background: linear-gradient(135deg, rgba(37, 99, 235, .06), rgba(124, 58, 237, .06)), var(--panel); }
-.scrivania-advice-head { display: flex; align-items: center; gap: 10px; }
-.scrivania-advice-mark { display: inline-flex; align-items: center; justify-content: center; width: 32px; height: 32px;
-  border-radius: 50%; background: #ede9fe; color: #6d28d9; font-size: 16px; }
-.scrivania-advice-ask { align-self: flex-start; }
+/* -- Agenda: timeline compatta --------------------------------------------- */
+.scrivania .scrivania-tl-item {
+  position: relative; display: flex; flex-wrap: nowrap; align-items: flex-start; gap: 10px;
+  padding: 10px 6px 10px 4px; border: 0; border-radius: 12px; background: transparent;
+  transition: background var(--au-fast);
+}
+.scrivania .scrivania-tl-item:hover, .scrivania .scrivania-tl-item:focus-visible { background: var(--au-pearl); border: 0; }
+.scrivania .scrivania-tl-item::before {
+  content: ''; position: absolute; left: 10px; top: 0; bottom: 0; width: 2px; background: var(--border);
+}
+.scrivania .scrivania-tl-item:first-child::before { top: 16px; }
+.scrivania .scrivania-tl-item:last-child::before { bottom: auto; height: 16px; }
+.scrivania .scrivania-tl-item:only-child::before { display: none; }
+.scrivania-tl-rail { position: relative; z-index: 1; width: 14px; flex: 0 0 auto; display: flex; justify-content: center; padding-top: 6px; }
+.scrivania-tl-dot { width: 11px; height: 11px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 0 3px #fff; }
+.scrivania .scrivania-tl-item .scrivania-time { min-width: 46px; line-height: 1.2; }
+.scrivania .scrivania-tl-item .scrivania-time strong { font-size: 15px; font-variant-numeric: tabular-nums; }
+.scrivania .scrivania-tl-item .scrivania-row-text strong { font-size: 15px; }
+.scrivania .scrivania-tl-item .badge { margin-left: auto; align-self: center; white-space: nowrap; }
+.scrivania-tl-chevron { width: 18px; height: 18px; flex: 0 0 auto; align-self: center; margin-left: auto; fill: none; stroke: #9aa6bf; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.scrivania .scrivania-tl-item .badge ~ .scrivania-tl-chevron { margin-left: 2px; }
+.scrivania .scrivania-tl-past .scrivania-tl-dot { background: #c9d2ee; }
+.scrivania .scrivania-tl-past .scrivania-row-text strong, .scrivania .scrivania-tl-past .scrivania-time strong { color: var(--muted); }
+.scrivania-tomorrow-head h4 { font-size: 15px; }
+
+/* -- l'assistente: una riga, simbolo, titolo, domanda, freccia ---------------- */
+.scrivania .scrivania-advice { gap: 12px; background: linear-gradient(135deg, #eef1ff, #f3ecff); border-color: #e2e4f8; box-shadow: none; }
+.scrivania-advice { display: flex; flex-direction: column; }
+.scrivania-advice-head { display: flex; align-items: center; gap: 14px; }
+.scrivania-advice-badge { display: inline-flex; align-items: center; justify-content: center; width: 54px; height: 54px; flex: 0 0 auto;
+  border-radius: 16px; background: linear-gradient(135deg, #2f5bff, #7c3aed); box-shadow: 0 10px 22px -12px rgba(91, 63, 214, .8); }
+.scrivania-advice-mark { width: 38px; height: 38px; object-fit: contain; border-radius: 10px; background: #fff; padding: 3px; }
+.scrivania-advice-titles { display: flex; flex-direction: column; gap: 2px; min-width: 0; flex: 1 1 auto; }
+.scrivania-advice-titles .scrivania-section-title { font-size: 19px; }
+.scrivania-advice-question { font-size: 14px; color: var(--muted); }
+.scrivania-advice-ask { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 44px; flex: 0 0 auto;
+  border-radius: 50%; border: 0; background: #fff; color: var(--primary); cursor: pointer; box-shadow: var(--au-shadow-sm);
+  transition: background var(--au-fast), color var(--au-fast); }
+.scrivania-advice-ask:hover { background: var(--primary); color: #fff; }
+.scrivania-advice-ask[aria-expanded="true"] { background: var(--primary); color: #fff; }
+.scrivania-advice-ask[aria-expanded="true"] .scrivania-advice-chevron { transform: rotate(90deg); }
+.scrivania-advice-chevron { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2.2; stroke-linecap: round; stroke-linejoin: round; }
 .scrivania-advice-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 10px; }
 .scrivania-advice-item { padding-left: 4px; }
 .scrivania-advice-item > .btn, .scrivania-advice-item > a { margin-top: 6px; display: inline-flex; text-decoration: none; }
@@ -2299,10 +2396,12 @@ a.scrivania-mini:hover { color: var(--primary); }
 .scrivania-advice-text .muted { font-size: 13px; }
 .scrivania-advice-answer p { margin: 0 0 6px; }
 
+/* -- attivita' in secondo piano -------------------------------------------- */
 .scrivania-secondary { display: flex; flex-direction: column; gap: 12px; }
 .scrivania-secondary-toggle {
   display: flex; flex-direction: column; gap: 8px; width: 100%; text-align: left; cursor: pointer; font: inherit;
-  padding: 14px 18px; border-radius: 16px; border: 1px dashed var(--border); background: var(--bg); color: var(--text);
+  padding: 14px 18px; border-radius: 16px; border: 1px solid var(--border); background: #fff; color: var(--text);
+  transition: border-color var(--au-fast);
 }
 .scrivania-secondary-toggle:hover { border-color: var(--primary); }
 .scrivania-secondary-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 16px; }
@@ -2313,16 +2412,172 @@ a.scrivania-mini:hover { color: var(--primary); }
 .scrivania-chip-warn { background: #fdf3d8; color: #92650a; }
 .scrivania-chip-ok { background: #e3f6e8; color: #1c7a3c; }
 .scrivania-secondary-body { display: flex; flex-direction: column; gap: 16px; }
+.scrivania-secondary-link { align-self: flex-start; font-weight: 600; }
 
+/* -- smartphone --------------------------------------------------------------- */
 @media (max-width: 767px) {
-  .scrivania .scrivania-hero { padding: 20px 16px; border-radius: 18px; }
-  .scrivania-greeting { font-size: 24px; }
-  .scrivania-quote-text { font-size: 15px; }
-  .scrivania-briefing .scrivania-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .scrivania-briefing-text p { font-size: 15px; }
-  .scrivania .scrivania-radar-item .scrivania-actions { width: 100%; }
-  .scrivania .scrivania-radar-item .scrivania-actions .btn { flex: 1; justify-content: center; min-height: 44px; }
-  .scrivania .scrivania-advice-ask { width: 100%; min-height: 48px; }
+  .scrivania { gap: 14px; }
+  .scrivania .scrivania-hero { padding: 22px 18px 18px; border-radius: 20px; }
+  .scrivania-greeting { font-size: 28px; }
+  .scrivania-sign { width: 34px; height: 34px; padding: 7px; }
+  .scrivania-quote { margin-top: 12px; }
+  .scrivania-quote-text { font-size: 16px; }
+  .scrivania-toolbar { gap: 8px; }
+  .scrivania-toolbar .scrivania-commands { width: 100%; }
+  .scrivania-toolbar .scrivania-commands .btn { flex: 1 1 auto; justify-content: center; min-height: 38px; background: #fff; }
+  .scrivania-toolbar .scrivania-plus { display: none; }
+  .scrivania-toolbar .scrivania-mode { width: 100%; max-width: none; }
+  .scrivania .scrivania-summary { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .scrivania .scrivania-kpi-tile { padding: 12px 14px; }
+  .scrivania-briefing-text { padding-left: 0; }
+  .scrivania .scrivania-section-title { font-size: 19px; }
+  .scrivania-radar .scrivania-section-sub { display: none; }
+
+  /* il tasto «+» fluttua sopra la barra di navigazione, fuori dalla tastiera */
+  .scrivania-fab {
+    display: inline-flex; align-items: center; justify-content: center; position: fixed; z-index: 29;
+    right: 16px; bottom: calc(var(--os-nav-h) + env(safe-area-inset-bottom) + 16px);
+    width: 58px; height: 58px; border-radius: 50%; border: 0; cursor: pointer;
+    background: var(--primary); color: #fff; font-size: 32px; line-height: 1; font-weight: 400;
+    box-shadow: 0 10px 24px -10px rgba(36, 69, 212, .8);
+  }
+  .scrivania-fab[aria-expanded="true"] { background: var(--text); }
+  body.os-keyboard .scrivania-fab, body.os-more-open .scrivania-fab, body.os-search-open .scrivania-fab { display: none; }
+  .scrivania-plus-menu {
+    position: fixed; z-index: 29; left: 12px; right: 12px;
+    bottom: calc(var(--os-nav-h) + env(safe-area-inset-bottom) + 84px);
+    grid-template-columns: minmax(0, 1fr); box-shadow: var(--au-shadow-lg);
+  }
+  .scrivania-plus-item { min-height: 52px; }
+
+  /* Radar: una pista orizzontale con i puntini; «Vedi tutte» accanto al titolo la apre in elenco */
+  .scrivania .scrivania-radar { padding-left: 16px; padding-right: 16px; }
+  .scrivania-radar-all { display: inline; }
+  .scrivania-radar-track {
+    flex-direction: row; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory;
+    margin: 0 -16px; padding: 2px 16px 6px; scrollbar-width: none; -webkit-overflow-scrolling: touch;
+  }
+  .scrivania-radar-track::-webkit-scrollbar { display: none; }
+  .scrivania-radar-track > .scrivania-radar-item { flex: 0 0 84%; scroll-snap-align: start; flex-direction: column; align-items: stretch; }
+  /* in colonna la base flessibile del testo (260px, pensata per la riga) diventerebbe un'altezza minima */
+  .scrivania-radar-track > .scrivania-radar-item > .scrivania-radar-text { flex: 1 1 auto; }
+  .scrivania-radar-track-box.expanded .scrivania-radar-track { flex-direction: column; overflow: visible; margin: 0; padding: 0; scroll-snap-type: none; }
+  .scrivania-radar-track-box.expanded .scrivania-radar-track > .scrivania-radar-item { flex: 1 1 auto; }
+  .scrivania-radar-nav { display: flex; align-items: center; justify-content: center; gap: 10px; }
+  .scrivania-radar-track-box.expanded .scrivania-radar-nav { display: none; }
+  .scrivania-radar-dots { display: flex; gap: 6px; }
+  .scrivania-radar-dot { width: 7px; height: 7px; border-radius: 50%; background: #c9d2ee; transition: background var(--au-fast), width var(--au-fast); }
+  .scrivania-radar-dot.active { width: 18px; border-radius: 4px; background: var(--primary); }
+  .scrivania .scrivania-radar-item .scrivania-actions { width: 100%; align-items: stretch; }
+  .scrivania .scrivania-radar-item .scrivania-actions .btn { justify-content: center; min-height: 44px; }
+  .scrivania-radar-secondary { justify-content: flex-start; }
+  .scrivania-radar-secondary .scrivania-link { min-height: 32px; display: inline-flex; align-items: center; }
+
   .scrivania .scrivania-advice-item > a, .scrivania .scrivania-advice-item > .btn { min-height: 44px; }
   .scrivania-secondary-toggle { min-height: 56px; }
+}
+
+/* ===========================================================================
+   SHELL MOBILE (core/mobile-shell.js) — intestazione compatta, barra inferiore,
+   foglio «Altro», ricerca a icona. Su desktop non esiste: la barra laterale e la
+   barra del titolo restano quelle di sempre.
+   =========================================================================== */
+:root { --os-nav-h: 0px; }
+.mobile-head, .mobile-nav, .mobile-more { display: none; }
+
+@media (max-width: 860px) {
+  :root { --os-nav-h: 62px; }
+  /* la barra laterale e la barra del titolo lasciano il posto all'intestazione compatta */
+  #app-view > .sidebar { display: none; }
+  .main > .topbar { display: none; }
+  .mobile-head.topbar {
+    position: sticky; top: 0; z-index: 26; display: flex; align-items: center; gap: 10px;
+    min-height: 56px; padding: 8px 12px 8px 14px; margin: 0;
+    background: rgba(255, 255, 255, .94); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    border-bottom: 1px solid var(--border); box-shadow: none;
+  }
+  .mobile-head.topbar::after { display: none; }
+  .mobile-brand { display: inline-flex; align-items: center; min-width: 0; text-decoration: none; }
+  .mobile-brand-logo { display: block; width: auto; height: 34px; }
+  .mobile-env { margin: 0 0 0 10px; padding: 4px 9px; font-size: 10px; letter-spacing: .06em; order: 1; }
+  .mobile-brand { order: 0; }
+  .mobile-head-actions { margin-left: auto; display: flex; align-items: center; gap: 6px; order: 2; }
+  .mobile-icon-btn {
+    display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 42px; padding: 0;
+    border: 1px solid var(--border); border-radius: 50%; background: var(--panel); color: var(--text); cursor: pointer;
+  }
+  .mobile-icon-btn[aria-expanded="true"] { background: var(--primary); border-color: var(--primary); color: #fff; }
+  .mobile-icon { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .mobile-profile .user-trigger { min-height: 42px; width: 42px; height: 42px; padding: 0; justify-content: center; }
+  .mobile-profile .user-menu-panel { right: 0; }
+
+  /* ricerca globale: chiusa finche' non si tocca l'icona */
+  .main > .card:first-child { display: none; }
+  body.os-search-open .main > .card:first-child { display: block; margin: 12px 14px 0; }
+
+  /* la barra inferiore, dentro la safe area; si ritira quando la tastiera e' aperta */
+  .mobile-nav {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 27;
+    display: flex; align-items: stretch; justify-content: space-around;
+    min-height: var(--os-nav-h); padding: 4px 4px calc(4px + env(safe-area-inset-bottom, 0px));
+    background: rgba(255, 255, 255, .96); -webkit-backdrop-filter: blur(14px); backdrop-filter: blur(14px);
+    border-top: 1px solid var(--border);
+  }
+  body.os-keyboard .mobile-nav { display: none; }
+  .mobile-nav-item {
+    flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    min-width: 0; min-height: 52px; padding: 4px 2px; border: 0; border-radius: 12px; background: transparent;
+    color: var(--muted); font: inherit; font-size: 11px; font-weight: 600; cursor: pointer;
+  }
+  .mobile-nav-item .mobile-icon { width: 24px; height: 24px; }
+  .mobile-nav-item span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mobile-nav-item.active { color: var(--primary); background: #e4edfd; border-radius: 14px; }
+  .mobile-nav-item.active .mobile-icon { stroke-width: 2.4; }
+
+  /* il contenuto non finisce sotto la barra */
+  /* `.main > .content`: piu' specifico del `.content { padding }` di Aurora, che arriva dopo */
+  .main > .content { padding-bottom: calc(var(--os-nav-h) + env(safe-area-inset-bottom, 0px) + 20px); }
+  /* chi scorre «fino a vedere» un elemento (scrollIntoView, ancore, fuoco da tastiera)
+     lo tiene sopra la barra inferiore e sotto l'intestazione fissa */
+  html { scroll-padding-top: 72px; scroll-padding-bottom: calc(var(--os-nav-h) + env(safe-area-inset-bottom, 0px) + 12px); }
+  .agenda-page.agenda-compact .agenda-fab { bottom: calc(16px + var(--os-nav-h) + env(safe-area-inset-bottom, 0px)); }
+  /* l'area scorrevole dell'Agenda compatta era alta fino al fondo dello schermo: la
+     barra inferiore ne coprirebbe l'ultima riga (es. «Mostra altri giorni») */
+  .agenda-page.agenda-compact { padding-bottom: calc(88px + var(--os-nav-h) + env(safe-area-inset-bottom, 0px)); }
+  .agenda-page.agenda-compact .agenda-scroll {
+    max-height: calc(100vh - var(--agenda-sticky-top, 0px) - var(--agenda-bar-h, 120px) - 16px - var(--os-nav-h) - env(safe-area-inset-bottom, 0px));
+    max-height: calc(100dvh - var(--agenda-sticky-top, 0px) - var(--agenda-bar-h, 120px) - 16px - var(--os-nav-h) - env(safe-area-inset-bottom, 0px));
+  }
+  .census-toast { bottom: calc(20px + var(--os-nav-h) + env(safe-area-inset-bottom, 0px)); }
+  .territorio-place-bar { bottom: calc(var(--os-nav-h) + env(safe-area-inset-bottom, 0px)); }
+
+  /* «Altro»: un foglio dal basso con tutte le altre sezioni */
+  .mobile-more { display: block; position: fixed; inset: 0; z-index: 28; }
+  .mobile-more[hidden] { display: none; }
+  .mobile-more-veil { position: absolute; inset: 0; background: rgba(15, 27, 51, .35); }
+  .mobile-more-sheet {
+    position: absolute; left: 0; right: 0; bottom: 0; max-height: 80vh; max-height: 80dvh; overflow-y: auto;
+    padding: 12px 14px calc(16px + env(safe-area-inset-bottom, 0px)); border-radius: 22px 22px 0 0;
+    background: var(--panel); box-shadow: 0 -10px 30px rgba(15, 27, 51, .18);
+  }
+  .mobile-more-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 2px 4px 10px; font-size: 16px; }
+  .mobile-more-list { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+  .mobile-more-item {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+    min-height: 76px; padding: 10px 6px; border: 1px solid var(--border); border-radius: 14px; background: var(--bg);
+    color: var(--text); font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: center;
+  }
+  .mobile-more-item .mobile-icon { width: 24px; height: 24px; color: var(--primary); }
+  .mobile-more-item.active { border-color: var(--primary); background: #eaf0ff; }
+  body.os-more-open { overflow: hidden; }
+
+  /* la barra del Superadmin resta visibile ma compatta */
+  .acting-bar { padding: 8px 12px; font-size: 13px; gap: 8px; }
+
+  /* Scrivania: le schede «Scrivania | Attività» non precedono piu' il benvenuto;
+     «Attività» si raggiunge da «Altro» e dall'area attivita' della pagina */
+  .sezione[data-sezione="oggi"] > .sezione-tabs { display: none; }
+}
+@media (max-width: 400px) {
+  .mobile-more-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

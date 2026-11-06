@@ -476,7 +476,12 @@ h1, h2, h3 { letter-spacing: -.01em; }
 .user-menu-actions .btn { width: 100%; }
 
 .content { padding: 26px 28px 40px; }
-.content > * { animation: au-rise var(--au-mid) var(--au-ease) both; }
+/* SHELL MOBILE: `backwards`, non `both`. Con `both` Chromium lascia sul contenitore
+   della vista una transform identita' a fine animazione, che ancora a se' ogni
+   elemento `position: fixed` al suo interno (il «+» della Scrivania, quello
+   dell'Agenda, la barra della Zona): finivano fuori dallo schermo. Lo stato
+   finale del fotogramma coincide con quello naturale: niente cambia a vista. */
+.content > * { animation: au-rise var(--au-mid) var(--au-ease) backwards; }
 
 /* 4 — COMPONENTI ----------------------------------------------------------- */
 

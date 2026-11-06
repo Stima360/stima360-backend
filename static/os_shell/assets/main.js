@@ -18,6 +18,8 @@ import {
 } from './core/auth.js';
 import { registerRoute, initRouter, navigate, renderCurrentRoute, clearRoute } from './core/router.js';
 import { mountEnvBadge } from './core/env-badge.js';
+// SHELL MOBILE (Scrivania Viva): intestazione compatta, barra inferiore, «Altro».
+import { mountMobileShell } from './core/mobile-shell.js';
 import { renderContatti } from './views/contatti.js';
 import { renderStime } from './views/stime.js';
 import { renderContattoDettaglio } from './views/contatto-dettaglio.js';
@@ -166,6 +168,8 @@ registerRoute('oggi', (container, params = []) => renderOggiSezione(container, p
 // "contatti" copre sia la lista (#/contatti) sia il dettaglio (#/contatti/{id}):
 // il router passa i segmenti successivi al nome sezione come `params`.
 registerRoute('contatti', (container, params = []) => {
+  // SCRIVANIA VIVA: `#/contatti/nuovo` apre l'elenco con il dialog «Nuovo contatto» di sempre.
+  if (params[0] === 'nuovo') return renderContatti(container, { nuovo: true });
   return params[0] ? renderContattoDettaglio(container, params) : renderContatti(container);
 });
 registerRoute('stime', (container, params = []) => renderStime(container, params, 'all'));
@@ -177,6 +181,8 @@ registerRoute('immobili', (container, params = []) => {
   // "#/immobili/censimento" apre l'elenco sulla tab Censimento.
   if (params[0] === 'edifici') return renderEdificioDettaglio(container, params.slice(1));
   if (params[0] === 'censimento') return renderImmobili(container, params);
+  // SCRIVANIA VIVA: `#/immobili/nuovo` apre l'elenco e avvia la procedura guidata di sempre.
+  if (params[0] === 'nuovo') return renderImmobili(container, [], { nuovo: true });
   return params[0] ? renderImmobileDettaglio(container, params) : renderImmobili(container);
 });
 // EDIFICI-1: "edifici" copre la lista (#/edifici) e la scheda (#/edifici/{id}).
@@ -316,12 +322,17 @@ initRouter(contentEl, {
     for (const btn of navEl.querySelectorAll('[data-route]')) {
       btn.classList.toggle('active', btn.dataset.route === nome);
     }
+    // SHELL MOBILE: la voce accesa segue la rotta; ricerca e «Altro» si chiudono
+    // perche' si e' arrivati da li' (un risultato scelto, una sezione scelta).
+    if (shellMobile) { shellMobile.setActive(nome); shellMobile.closeAll(); }
   },
 });
 
 mountEnvBadge(envBadgeEl);
 mountUserMenu();
-mountGlobalSearch(contentEl.parentElement);
+const ricercaGlobale = mountGlobalSearch(contentEl.parentElement);
+// SHELL MOBILE: montata dopo la barra laterale (vedi in fondo), da cui legge le voci.
+let shellMobile = null;
 
 const NAV_ICON_PATHS = {
   oggi: ['M3 10.5 12 3l9 7.5', 'M5 9.5V21h14V9.5', 'M9 21v-7h6v7'],
@@ -340,6 +351,8 @@ const NAV_ICON_PATHS = {
   acquirenti: ['M3 10l9-7 9 7', 'M5 10v11h14V10', 'M8 17l3 3 5-6'],
   abbinamenti: ['M7 7h4a4 4 0 0 1 4 4v2', 'M17 17h-4a4 4 0 0 1-4-4v-2', 'M12 9l3 4 4-4'],
   attivita: ['M3 12h5l3-7 4 14 3-7h3'],
+  // SHELL MOBILE: «Altro» e le voci senza icona propria.
+  agenzia: ['M3 21h18', 'M5 21V7l7-4 7 4v14', 'M9 21v-6h6v6'],
   automazioni: ['M12 3v3', 'M12 18v3', 'M3 12h3', 'M18 12h3', 'M6 6l2 2', 'M16 16l2 2', 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6'],
   // BLOCCO-4A: un fumetto di conversazione.
   messaggi: ['M21 12a8 8 0 0 1-11.6 7.1L4 20.5l1.4-4.9A8 8 0 1 1 21 12z', 'M8 11h8', 'M8 14h5'],
@@ -374,6 +387,14 @@ function creaVoceNav(section) {
 for (const section of SECTIONS) {
   navEl.appendChild(creaVoceNav(section));
 }
+
+// SHELL MOBILE: legge `#nav` (voci e permessi) e lo rispecchia nella barra
+// inferiore; «Attività» (#/attivita, dentro la Scrivania) si raggiunge da «Altro».
+shellMobile = mountMobileShell({
+  appView, navEl, sections: [...SECTIONS, SEZIONE_RETE, SEZIONE_VOCE], icons: NAV_ICON_PATHS, navigate,
+  searchWrap: ricercaGlobale, userMenuHost: document.getElementById('user-menu'),
+  extraEntries: [{ route: 'attivita', label: 'Attività', after: 'oggi' }],
+});
 
 // P28 - LA NAVIGAZIONE DI TENANT ESISTE SOLO PER CHI HA UN'AGENZIA.
 //
@@ -433,6 +454,7 @@ async function aggiornaVoceVoce(session) {
   if (richiesta !== voceRichiesta || sessionEpoch() !== epoca || !stato.enabled) return;
   if (navEl.querySelector('[data-route="voce"]')) return;
   navEl.insertBefore(creaVoceNav(SEZIONE_VOCE), navEl.querySelector('[data-route="rete"]'));
+  if (shellMobile) shellMobile.refresh();
 }
 
 // P28 - LA BARRA DEL SUPERADMIN.
@@ -476,9 +498,29 @@ actingExitBtn.addEventListener('click', async () => {
   }
 });
 
+// SCRIVANIA VIVA - LA PAGINA INIZIALE. Chi entra dal modulo di accesso arriva
+// sempre sulla Scrivania (#/oggi), su desktop e su smartphone, anche se la
+// sessione precedente era scaduta su un'altra pagina. Non vale per il
+// ripristino della sessione (ricarica, ritorno da Google Calendar) ne' per
+// l'ingresso o l'uscita da un'agenzia: li' si resta dove si e'. Chi non ha una
+// superficie di agenzia viene portato alla Rete dalla guardia, come sempre.
+let accessoDalModulo = false;
+function apriPaginaIniziale() {
+  const iniziale = `#/${ROTTA_TENANT_INIZIALE}`;
+  if (window.location.hash === iniziale) return;
+  try {
+    if (window.history && typeof window.history.replaceState === 'function') {
+      window.history.replaceState(null, '', iniziale);
+      return;
+    }
+  } catch (_e) { /* nessuna cronologia: si scrive l'indirizzo */ }
+  window.location.hash = iniziale;
+}
+
 loginForm.addEventListener('submit', async (event) => {
   event.preventDefault();
   loginError.textContent = '';
+  accessoDalModulo = true;
   const email = document.getElementById('login-email').value;
   const password = document.getElementById('login-password').value;
   const submitBtn = loginForm.querySelector('button[type="submit"]');
@@ -489,6 +531,7 @@ loginForm.addEventListener('submit', async (event) => {
     loginError.textContent = error.message || 'Errore di accesso.';
   } finally {
     submitBtn.disabled = false;
+    accessoDalModulo = false;
   }
 });
 
@@ -531,6 +574,7 @@ onAuthChange((session) => {
   aggiornaNavTenant(session);
   aggiornaBarraActing(session);
   aggiornaVoceVoce(session);
+  if (shellMobile) { shellMobile.refresh(); shellMobile.closeAll(); }
   loginView.hidden = authenticated;
   appView.hidden = !authenticated;
   // Il form viene svuotato appena la sessione esiste: la password non deve
@@ -547,6 +591,7 @@ onAuthChange((session) => {
   clearApplicationSurface();
   if (authenticated) {
     loginError.textContent = '';
+    if (accessoDalModulo) { accessoDalModulo = false; apriPaginaIniziale(); }
     renderCurrentRoute();
   }
 });

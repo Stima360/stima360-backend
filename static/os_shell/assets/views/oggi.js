@@ -50,7 +50,7 @@ import {
 } from '../scrivania/scrivania-model.js';
 import {
   OPEN_ACQUISITION_STATUSES, advice, briefing, buildRadar, greeting, idleAcquisitionItem, noActionSellerItem,
-  overdueSellerItem, quoteOfDay, reliableName, unassignedValuationItem,
+  overdueSellerItem, quoteOfDay, reliableName, timeSign, unassignedValuationItem,
 } from '../scrivania/viva-model.js';
 
 const PAGE = 200;
@@ -89,6 +89,27 @@ function button(text, className = 'btn btn-small') {
 
 function badge(text, tone = 'gray') {
   return el('span', `badge badge-${tone}`, text);
+}
+
+function svg(paths, className) {
+  const nodo = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  nodo.setAttribute('viewBox', '0 0 24 24');
+  nodo.setAttribute('aria-hidden', 'true');
+  if (className) nodo.setAttribute('class', className);
+  for (const d of paths) {
+    const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    path.setAttribute('d', d);
+    nodo.appendChild(path);
+  }
+  return nodo;
+}
+
+/** Il segno dell'ora accanto al saluto: sole, tramonto o luna. */
+function segnoOra(now) {
+  const segno = timeSign(now);
+  const nodo = svg(segno.paths, `scrivania-sign scrivania-sign-${segno.name}`);
+  nodo.setAttribute('data-scrivania-sign', segno.name);
+  return nodo;
 }
 
 function errorText(errore) {
@@ -259,24 +280,68 @@ export async function renderOggi(container) {
   // -- 1. benvenuto -----------------------------------------------------------
   // Il saluto segue l'ora di Roma; il nome arriva con l'elenco degli operatori
   // (riga «sono io») e si mostra solo se e' un nome di persona affidabile.
-  const testata = el('header', 'scrivania-head scrivania-hero');
+  const testata = el('header', 'scrivania-hero');
   testata.setAttribute('data-scrivania-hero', '');
   const titoli = el('div', 'scrivania-titles');
-  const saluto = el('h2', 'scrivania-title scrivania-greeting', `${greeting()}!`);
+  const salutoRiga = el('div', 'scrivania-greeting-row');
+  const saluto = el('h2', 'scrivania-greeting', `${greeting()}!`);
   saluto.setAttribute('data-scrivania-greeting', '');
+  let segno = segnoOra(new Date());
+  salutoRiga.append(saluto, segno);
   const frase = el('figure', 'scrivania-quote');
   frase.setAttribute('data-scrivania-quote', '');
-  frase.append(el('figcaption', 'scrivania-quote-label', 'La frase del giorno'),
-    el('blockquote', 'scrivania-quote-text', quoteOfDay()));
-  titoli.append(saluto, el('p', 'scrivania-date', capitalize(formatDayLong(todayKey()))), frase);
+  frase.append(el('blockquote', 'scrivania-quote-text', quoteOfDay()),
+    el('figcaption', 'scrivania-quote-label', 'Il pensiero del giorno · STIMA360'));
+  titoli.append(salutoRiga, el('p', 'scrivania-date', capitalize(formatDayLong(todayKey()))), frase);
+  testata.appendChild(titoli);
+
+  // -- la barra operativa: comandi e selettore, accessibili ma in secondo piano ----
+  const barra = el('div', 'scrivania-toolbar');
+  barra.setAttribute('data-scrivania-toolbar', '');
   const comandi = el('div', 'scrivania-commands');
-  const aggiorna = button('Aggiorna', 'btn');
+  const aggiorna = button('Aggiorna', 'btn btn-small');
   aggiorna.setAttribute('data-scrivania-refresh', '');
-  const nuovo = button('Nuovo appuntamento', 'btn primary');
+  const nuovo = button('Nuovo appuntamento', 'btn btn-small');
   nuovo.setAttribute('data-scrivania-new-appointment', '');
   nuovo.addEventListener('click', () => navigate('agenda', ['giorno', todayKey(), 'nuovo']));
-  comandi.append(aggiorna, nuovo);
-  testata.append(titoli, comandi);
+  // «+»: solo percorsi che esistono gia' (nessuna valutazione: nasce dalla scheda immobile)
+  const piu = button('+ Nuovo', 'btn btn-small primary scrivania-plus');
+  piu.setAttribute('data-scrivania-plus', '');
+  piu.setAttribute('aria-haspopup', 'menu');
+  piu.setAttribute('aria-expanded', 'false');
+  comandi.append(piu, nuovo, aggiorna);
+  barra.appendChild(comandi);
+  const menuPiu = el('div', 'scrivania-plus-menu');
+  menuPiu.setAttribute('role', 'menu');
+  menuPiu.setAttribute('data-scrivania-plus-menu', '');
+  menuPiu.hidden = true;
+  const VOCI_PIU = [
+    ['appointment', 'Nuovo appuntamento', 'Nell’Agenda, oggi', () => navigate('agenda', ['giorno', todayKey(), 'nuovo'])],
+    ['contact', 'Nuovo contatto', 'La scheda di sempre', () => navigate('contatti', ['nuovo'])],
+    ['property', 'Nuovo immobile', 'La procedura guidata', () => navigate('immobili', ['nuovo'])],
+  ];
+  for (const [chiave, etichetta, nota, azione] of VOCI_PIU) {
+    const b = button('', 'scrivania-plus-item');
+    b.setAttribute('role', 'menuitem');
+    b.setAttribute('data-scrivania-plus-item', chiave);
+    b.append(el('strong', '', etichetta), el('span', 'muted', nota));
+    b.addEventListener('click', () => { apriPiu(false); azione(); });
+    menuPiu.appendChild(b);
+  }
+  const fab = button('+', 'scrivania-fab');
+  fab.setAttribute('aria-label', 'Nuovo');
+  fab.setAttribute('aria-haspopup', 'menu');
+  fab.setAttribute('aria-expanded', 'false');
+  fab.setAttribute('data-scrivania-fab', '');
+  let piuAperto = false;
+  function apriPiu(stato) {
+    piuAperto = stato;
+    menuPiu.hidden = !stato;
+    for (const b of [piu, fab]) b.setAttribute('aria-expanded', String(stato));
+  }
+  piu.addEventListener('click', (e) => { e.stopPropagation(); apriPiu(!piuAperto); });
+  fab.addEventListener('click', (e) => { e.stopPropagation(); apriPiu(!piuAperto); });
+  document.addEventListener('click', (e) => { if (piuAperto && !menuPiu.contains(e.target)) apriPiu(false); });
 
   let selettore = null;
   const pulsantiModo = {};
@@ -296,7 +361,7 @@ export async function renderOggi(container) {
       pulsantiModo[valore] = b;
       selettore.appendChild(b);
     }
-    testata.appendChild(selettore);
+    barra.appendChild(selettore);
   }
   function aggiornaModo() {
     for (const [valore, b] of Object.entries(pulsantiModo)) {
@@ -312,7 +377,7 @@ export async function renderOggi(container) {
   const firme = el('div', 'scrivania-sign-alerts');
   const corpo = el('div', 'scrivania-body');
   corpo.appendChild(el('p', 'muted scrivania-loading', 'Caricamento della scrivania…'));
-  root.append(testata, avvisi, firme, corpo);
+  root.append(testata, barra, menuPiu, avvisi, firme, corpo, fab);
 
   const dialogo = el('dialog', 'scrivania-dialog');
   root.appendChild(dialogo);
@@ -448,21 +513,34 @@ export async function renderOggi(container) {
     const urgente = daFare.find((t) => dueState(t, now) === 'overdue') || null;
     const nomeIo = io ? reliableName(io.name) : '';
     saluto.textContent = nomeIo ? `${greeting(now)}, ${nomeIo}!` : `${greeting(now)}!`;
+    const nuovoSegno = segnoOra(now);
+    salutoRiga.replaceChild(nuovoSegno, segno);
+    segno = nuovoSegno;
     const sezioni = {};
 
     // -- 2. briefing -------------------------------------------------------------
     const brief = el('section', 'card scrivania-briefing');
     brief.setAttribute('data-scrivania-briefing', '');
     const frasi = briefing({
-      agendaToday: d.errori.calendar ? [] : agendaOggi, radar: radarNonDisponibile ? { items: [], total: 0 } : radar,
+      agendaToday: d.errori.calendar ? [] : agendaOggi, agendaTomorrow: d.errori.calendar ? [] : agendaDomani,
+      radar: radarNonDisponibile ? { items: [], total: 0 } : radar,
       overdue: d.errori.tasks ? 0 : scaduti.length, today: d.errori.tasks ? 0 : oggiInScadenza.length,
       toVerify: verifiche.length, agency: vedeAgenzia && !mie, now, typeLabel, timeLabel: formatTime,
     });
     if (d.errori.calendar) frasi[0] = 'L’agenda non è disponibile in questo momento.';
     if (radarNonDisponibile) frasi[1] = 'Il radar non è disponibile in questo momento.';
+    const titoloBrief = el('h3', 'scrivania-briefing-title');
+    titoloBrief.append(svg(ICONE_SEZIONE.sintesi, 'scrivania-section-icon scrivania-briefing-icon'), el('span', '', 'La tua giornata, in sintesi'));
+    brief.appendChild(titoloBrief);
     const testoBrief = el('div', 'scrivania-briefing-text');
     for (const f of frasi) testoBrief.appendChild(el('p', '', f));
     brief.appendChild(testoBrief);
+    // le quattro tessere: fuori dalla scheda del briefing, ognuna con il suo colore e la sua icona
+    const ICONE_KPI = {
+      radar: ICONE_SEZIONE.radar, agenda: ICONE_SEZIONE.agenda,
+      recuperare: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18', 'M8.5 12.5l2.3 2.3 4.7-5'],
+      nuovi: ['M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2', 'M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8', 'M19 8v6', 'M22 11h-6'],
+    };
     const riepilogo = el('div', 'scrivania-summary');
     const kpi = [
       ['radar', 'Opportunità', radarNonDisponibile ? '—' : radar.total, radar.total ? 'brand' : 'ok'],
@@ -471,17 +549,18 @@ export async function renderOggi(container) {
       ['nuovi', 'Nuovi contatti', d.errori.leads ? '—' : nuovi.length, nuovi.length ? 'warn' : 'ok'],
     ];
     for (const [chiave, etichetta, valore, tono] of kpi) {
-      const b = button('', `scrivania-kpi scrivania-kpi-${tono}`);
+      const b = button('', `scrivania-kpi scrivania-kpi-${tono} scrivania-kpi-tile scrivania-kpi-tile-${chiave}`);
       b.setAttribute('data-scrivania-kpi', chiave);
-      b.append(el('span', 'scrivania-kpi-value', valore), el('span', 'scrivania-kpi-label', etichetta));
+      const rigaKpi = el('span', 'scrivania-kpi-top');
+      rigaKpi.append(svg(ICONE_KPI[chiave], 'scrivania-kpi-icon'), el('span', 'scrivania-kpi-value', valore));
+      b.append(rigaKpi, el('span', 'scrivania-kpi-label', etichetta));
       b.addEventListener('click', () => {
         if (['recuperare', 'nuovi'].includes(chiave) && !attivitaAperte) apriAttivita(true);
         scrollTo(sezioni[chiave]);
       });
       riepilogo.appendChild(b);
     }
-    brief.appendChild(riepilogo);
-    corpo.appendChild(brief);
+    corpo.append(brief, riepilogo);
 
     // -- 3. radar opportunita' e agenda, affiancati ------------------------------
     const griglia = el('div', 'scrivania-viva-grid');
@@ -490,7 +569,7 @@ export async function renderOggi(container) {
     griglia.append(colonnaRadar, colonnaAgenda);
     corpo.appendChild(griglia);
 
-    const radarSez = sezione('Radar opportunità', 'Clienti e trattative che aspettano una tua mossa, con il motivo.', 'radar');
+    const radarSez = sezione('Il tuo Radar opportunità', 'Clienti e trattative che aspettano una tua mossa, con il motivo.', 'radar');
     radarSez.box.className += ' scrivania-radar';
     sezioni.radar = radarSez.box;
     if (radarNonDisponibile) {
@@ -503,9 +582,9 @@ export async function renderOggi(container) {
       vuoto.appendChild(link('#/venditori', 'Apri Venditori'));
       radarSez.body.appendChild(vuoto);
     } else {
-      const lista = el('div', 'scrivania-radar-list');
-      for (const voce of radar.items) lista.appendChild(schedaRadar(voce));
-      radarSez.body.appendChild(lista);
+      const pista = pistaRadar(radar.items);
+      radarSez.body.appendChild(pista.box);
+      if (pista.tutte) radarSez.actions.appendChild(pista.tutte);
       const altri = radar.total - radar.items.length;
       const piede = el('div', 'scrivania-radar-foot');
       piede.appendChild(el('span', 'muted', altri > 1 ? `Altre ${altri} opportunità nelle pagine dedicate.`
@@ -518,7 +597,7 @@ export async function renderOggi(container) {
     // -- D. agenda della giornata -------------------------------------------
     const agendaSez = sezione('Agenda di oggi', '', 'agenda');
     sezioni.agenda = agendaSez.box;
-    agendaSez.actions.appendChild(link(agendaHref(oggi), 'Apri Agenda'));
+    agendaSez.actions.appendChild(link(agendaHref(oggi), 'Apri Agenda', 'scrivania-link scrivania-link-arrow'));
     if (d.errori.calendar) {
       agendaSez.body.appendChild(el('p', 'muted', 'L’agenda non è disponibile in questo momento.'));
     } else {
@@ -592,6 +671,7 @@ export async function renderOggi(container) {
     apri.append(testaApri, sintesi);
     const contenuto = el('div', 'scrivania-secondary-body');
     contenuto.hidden = !attivitaAperte;
+    contenuto.appendChild(link('#/oggi/attivita', 'Apri la scheda «Attività» completa', 'scrivania-link scrivania-secondary-link'));
     apri.addEventListener('click', () => apriAttivita(!attivitaAperte));
     function apriAttivita(aperte) {
       attivitaAperte = aperte;
@@ -680,12 +760,21 @@ export async function renderOggi(container) {
     }
   }
 
+  // Le icone dei titoli (24x24, solo tratto): mirino per il Radar, calendario per l'Agenda.
+  const ICONE_SEZIONE = {
+    radar: ['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18', 'M12 7.5a4.5 4.5 0 1 0 0 9 4.5 4.5 0 0 0 0-9', 'M12 11a1 1 0 1 0 0 2 1 1 0 0 0 0-2'],
+    agenda: ['M4 5h16v16H4z', 'M4 9h16', 'M8 3v4', 'M16 3v4'],
+    sintesi: ['M12 3l1.8 5.2L19 10l-5.2 1.8L12 17l-1.8-5.2L5 10l5.2-1.8z', 'M19 16l.8 2.2L22 19l-2.2.8L19 22l-.8-2.2L16 19l2.2-.8z'],
+  };
   function sezione(titolo, sottotitolo, chiave) {
     const box = el('section', 'card scrivania-section');
     box.setAttribute('data-scrivania-section', chiave);
     const testa = el('div', 'scrivania-section-head');
     const t = el('div', '');
-    t.appendChild(el('h3', 'scrivania-section-title', titolo));
+    const h = el('h3', 'scrivania-section-title');
+    if (ICONE_SEZIONE[chiave]) h.appendChild(svg(ICONE_SEZIONE[chiave], 'scrivania-section-icon'));
+    h.appendChild(el('span', '', titolo));
+    t.appendChild(h);
     if (sottotitolo) t.appendChild(el('p', 'muted scrivania-section-sub', sottotitolo));
     const actions = el('div', 'scrivania-section-actions');
     testa.append(t, actions);
@@ -706,32 +795,97 @@ export async function renderOggi(container) {
     const card = el('article', `scrivania-radar-item scrivania-radar-${v.kind}`);
     card.setAttribute('data-scrivania-radar', v.key);
     const testo = el('div', 'scrivania-radar-text');
-    testo.append(el('span', 'scrivania-radar-kind', ETICHETTE_RADAR[v.kind] || 'Opportunità'),
-      el('strong', 'scrivania-radar-title', v.title));
-    if (v.place) testo.appendChild(el('span', 'muted scrivania-radar-place', v.place));
-    testo.appendChild(el('span', 'scrivania-radar-reason', v.reason));
-    if (v.since) testo.appendChild(el('span', 'scrivania-radar-since', v.since));
-    const azioni = el('div', 'scrivania-actions');
-    const tel = telHref(v.phone);
-    if (tel) {
-      const chiama = link(tel, 'Chiama', 'btn btn-small primary');
-      chiama.setAttribute('data-scrivania-call', '');
-      azioni.appendChild(chiama);
+    const riga = el('span', 'scrivania-radar-headline');
+    riga.append(el('strong', 'scrivania-radar-title', v.title), el('span', 'scrivania-radar-kind', ETICHETTE_RADAR[v.kind] || 'Opportunità'));
+    testo.appendChild(riga);
+    if (v.place) {
+      const luogo = el('span', 'muted scrivania-radar-place');
+      luogo.append(svg(['M12 21s-6-5.3-6-10a6 6 0 1 1 12 0c0 4.7-6 10-6 10z', 'M12 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4'], 'scrivania-meta-icon'), el('span', '', v.place));
+      testo.appendChild(luogo);
     }
-    azioni.appendChild(link(v.href, v.hrefLabel, tel ? 'btn btn-small' : 'btn btn-small primary'));
-    if (v.propertyHref) azioni.appendChild(link(v.propertyHref, 'Apri immobile'));
+    testo.appendChild(el('span', 'scrivania-radar-reason', v.reason));
+    if (v.since) {
+      const tempo = el('span', 'scrivania-radar-since');
+      tempo.append(svg(['M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18', 'M12 7v5l3 2'], 'scrivania-meta-icon'), el('span', '', v.since));
+      testo.appendChild(tempo);
+    }
+    const azioni = el('div', 'scrivania-actions scrivania-radar-actions');
+    const tel = telHref(v.phone);
+    const secondarie = el('div', 'scrivania-radar-secondary');
+    // un solo pulsante principale, la scheda; chiamata e immobile restano a portata di dito
+    azioni.appendChild(link(v.href, `${v.hrefLabel} →`, 'btn btn-small primary scrivania-pill'));
+    if (tel) {
+      const chiama = link(tel, 'Chiama', 'scrivania-link');
+      chiama.setAttribute('data-scrivania-call', '');
+      secondarie.appendChild(chiama);
+    }
+    if (v.propertyHref) secondarie.appendChild(link(v.propertyHref, 'Apri immobile', 'scrivania-link'));
+    if (secondarie.childNodes.length) azioni.appendChild(secondarie);
     card.append(testo, azioni);
     return card;
+  }
+
+  /** Le schede del radar: su smartphone una pista scorrevole con i puntini, su desktop un elenco. */
+  function pistaRadar(voci) {
+    const box = el('div', 'scrivania-radar-track-box');
+    const pista = el('div', 'scrivania-radar-list scrivania-radar-track');
+    pista.setAttribute('data-scrivania-radar-track', '');
+    for (const voce of voci) pista.appendChild(schedaRadar(voce));
+    box.appendChild(pista);
+    let tutte = null;
+    if (voci.length > 1) {
+      const piede = el('div', 'scrivania-radar-nav');
+      const punti = el('div', 'scrivania-radar-dots');
+      punti.setAttribute('aria-hidden', 'true');
+      const dots = voci.map((_, i) => {
+        const d = el('span', `scrivania-radar-dot${i === 0 ? ' active' : ''}`);
+        punti.appendChild(d);
+        return d;
+      });
+      tutte = button('Vedi tutte', 'scrivania-link scrivania-radar-all');
+      tutte.setAttribute('data-scrivania-radar-all', '');
+      tutte.setAttribute('aria-pressed', 'false');
+      tutte.addEventListener('click', () => {
+        const aperto = !box.classList.contains('expanded');
+        box.classList.toggle('expanded', aperto);
+        tutte.setAttribute('aria-pressed', String(aperto));
+        tutte.textContent = aperto ? 'Scorri' : 'Vedi tutte';
+      });
+      piede.appendChild(punti);
+      box.appendChild(piede);
+      pista.addEventListener('scroll', () => {
+        // il puntino acceso e' quello della scheda piu' vicina al bordo sinistro
+        const schede = Array.from(pista.children);
+        const base = schede[0].offsetLeft;
+        let indice = 0;
+        schede.forEach((scheda, i) => {
+          if (Math.abs(scheda.offsetLeft - base - pista.scrollLeft) < Math.abs(schede[indice].offsetLeft - base - pista.scrollLeft)) indice = i;
+        });
+        dots.forEach((d, i) => d.classList.toggle('active', i === indice));
+      }, { passive: true });
+    }
+    return { box, tutte };
   }
 
   function pannelloConsigli(consigli) {
     const box = el('section', 'card scrivania-advice');
     box.setAttribute('data-scrivania-advice', '');
     const testa = el('div', 'scrivania-advice-head');
-    testa.append(el('span', 'scrivania-advice-mark', '★'), el('h3', 'scrivania-section-title', 'STIMA360 ti consiglia'));
-    const domanda = button('Cosa mi consigli di fare oggi?', 'btn primary scrivania-advice-ask');
+    const simbolo = el('img', 'scrivania-advice-mark');
+    simbolo.setAttribute('src', '/os/assets/brand/stima360-icon.png');
+    simbolo.setAttribute('alt', '');
+    simbolo.setAttribute('width', '48');
+    simbolo.setAttribute('height', '48');
+    const marchio = el('span', 'scrivania-advice-badge');
+    marchio.appendChild(simbolo);
+    const titoli = el('span', 'scrivania-advice-titles');
+    titoli.append(el('h3', 'scrivania-section-title', 'STIMA360 ti consiglia'), el('span', 'scrivania-advice-question', 'Cosa mi consigli di fare oggi?'));
+    const domanda = button('', 'scrivania-advice-ask');
     domanda.setAttribute('data-scrivania-ask', '');
+    domanda.setAttribute('aria-label', 'Cosa mi consigli di fare oggi?');
     domanda.setAttribute('aria-expanded', String(consigliAperti));
+    domanda.appendChild(svg(['M9 6l6 6-6 6'], 'scrivania-advice-chevron'));
+    testa.append(marchio, titoli, domanda);
     const risposta = el('div', 'scrivania-advice-answer');
     risposta.setAttribute('aria-live', 'polite');
     risposta.hidden = !consigliAperti;
@@ -763,7 +917,7 @@ export async function renderOggi(container) {
       risposta.hidden = !consigliAperti;
       domanda.setAttribute('aria-expanded', String(consigliAperti));
     });
-    box.append(testa, domanda, risposta);
+    box.append(testa, risposta);
     return box;
   }
 
@@ -864,20 +1018,28 @@ export async function renderOggi(container) {
     return riga;
   }
 
+  // La timeline della giornata: ora, cliente, tipo, luogo; lo stato solo quando
+  // dice qualcosa (da verificare, richiesta, fatto, assente). Un tocco apre
+  // il dettaglio vero nell'Agenda.
   function rigaAppuntamento(a, giorno, now, mostraAgente) {
-    const r = link(agendaHref(giorno, a.id), '', 'scrivania-appointment');
+    const stato = effectiveAppointmentState(a, now);
+    const passato = stato === 'to_verify' || ['completed', 'no_show'].includes(a.status);
+    const r = link(agendaHref(giorno, a.id), '', `scrivania-appointment scrivania-tl-item${passato ? ' scrivania-tl-past' : ''}`);
     r.setAttribute('data-scrivania-appointment', String(a.id));
+    const binario = el('span', 'scrivania-tl-rail');
+    binario.appendChild(el('span', 'scrivania-tl-dot'));
     const ore = el('span', 'scrivania-time');
     ore.append(el('strong', '', formatTime(a.start_at)), el('span', 'muted', a.end_at ? formatTime(a.end_at) : ''));
     const testo = el('span', 'scrivania-row-text');
-    testo.appendChild(el('strong', '', typeLabel(a.type) || 'Appuntamento'));
-    const righe = [a.contact_name, a.place].filter(Boolean);
+    testo.appendChild(el('strong', '', a.contact_name || typeLabel(a.type) || 'Appuntamento'));
+    const righe = [a.contact_name ? (typeLabel(a.type) || 'Appuntamento') : '', a.place].filter(Boolean);
     if (righe.length) testo.appendChild(el('span', 'muted', righe.join(' · ')));
     if (mostraAgente && a.agent_name) testo.appendChild(el('span', 'muted scrivania-task-meta', `Agente: ${a.agent_name}`));
-    const stato = effectiveAppointmentState(a, now);
-    const etichetta = stato === 'to_verify' ? 'Da verificare' : (statusLabel(a.status) || a.status);
-    const tono = { to_verify: 'danger', completed: 'ok', confirmed: 'ok', requested: 'warn', no_show: 'danger' }[stato] || 'gray';
-    r.append(ore, testo, badge(etichetta, tono));
+    r.append(binario, ore, testo);
+    const utile = { to_verify: ['Da verificare', 'danger'], to_confirm: ['Richiesta', 'warn'], completed: ['Fatto', 'ok'],
+      no_show: ['Assente', 'danger'] }[stato];
+    if (utile) r.appendChild(badge(utile[0], utile[1]));
+    r.appendChild(svg(['M9 6l6 6-6 6'], 'scrivania-tl-chevron'));
     return r;
   }
 

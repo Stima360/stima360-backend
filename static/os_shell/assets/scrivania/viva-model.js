@@ -50,12 +50,28 @@ export function romeHour(now = new Date()) {
   return Number(ORA_ROMA.format(now)) % 24;
 }
 
+/** 'mattina' fino alle 13, 'pomeriggio' fino alle 18, 'sera' poi (ora di Roma). */
+export function dayPeriod(now = new Date()) {
+  const h = romeHour(now);
+  if (h < 13) return 'mattina';
+  if (h < 18) return 'pomeriggio';
+  return 'sera';
+}
+
 /** Buongiorno fino alle 13, buon pomeriggio fino alle 18, buonasera poi (ora di Roma). */
 export function greeting(now = new Date()) {
-  const h = romeHour(now);
-  if (h < 13) return 'Buongiorno';
-  if (h < 18) return 'Buon pomeriggio';
-  return 'Buonasera';
+  return { mattina: 'Buongiorno', pomeriggio: 'Buon pomeriggio', sera: 'Buonasera' }[dayPeriod(now)];
+}
+
+/** Il segno dell'ora: sole, tramonto, luna (nome e tracciati SVG, 24x24). */
+export function timeSign(now = new Date()) {
+  return {
+    mattina: { name: 'sole', paths: ['M12 7a5 5 0 1 0 0 10 5 5 0 0 0 0-10', 'M12 2v2', 'M12 20v2', 'M4.9 4.9l1.4 1.4',
+      'M17.7 17.7l1.4 1.4', 'M2 12h2', 'M20 12h2', 'M4.9 19.1l1.4-1.4', 'M17.7 6.3l1.4-1.4'] },
+    pomeriggio: { name: 'tramonto', paths: ['M7 16a5 5 0 0 1 10 0', 'M12 4v3', 'M3 16h2', 'M19 16h2', 'M5.6 9.6l1.4 1.4',
+      'M17 11l1.4-1.4', 'M2 20h20'] },
+    sera: { name: 'luna', paths: ['M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5', 'M17 3l.6 1.4L19 5l-1.4.6L17 7l-.6-1.4L15 5l1.4-.6z'] },
+  }[dayPeriod(now)];
 }
 
 /** La frase del giorno: cambia ogni giorno di Roma, resta la stessa per tutta la giornata. */
@@ -229,43 +245,75 @@ export function nextAppointment(agendaToday, now = new Date()) {
 }
 
 /**
- * Due o tre frasi sulla giornata, solo da conteggi e record della pagina.
- * `agency` = il titolare guarda l'agenzia (si parla dell'agenzia, non di «tu»).
+ * Due o tre frasi sulla giornata, in tono naturale e secondo l'ora, ma SOLO da
+ * conteggi e record della pagina. Mai «tutto concluso» se restano appuntamenti
+ * o attivita' aperte. `agency` = il titolare guarda l'agenzia.
  */
-export function briefing({ agendaToday = [], radar = { items: [], total: 0 }, overdue = 0, today = 0,
+export function briefing({ agendaToday = [], agendaTomorrow = [], radar = { items: [], total: 0 }, overdue = 0, today = 0,
   toVerify = 0, agency = false, now = new Date(), typeLabel = () => '', timeLabel = () => '' } = {}) {
+  const periodo = dayPeriod(now);
   const frasi = [];
   const visite = agendaToday.filter((a) => a.type === 'buyer_visit').length;
+  const prossimo = nextAppointment(agendaToday, now);
+  const restanti = agendaToday.filter((a) => !CHIUSI.includes(a.status) && (ms(a.start_at) ?? 0) > now.getTime()).length;
+  const soggetto = agency ? 'in agenzia' : '';
+  const hai = agency ? (agendaToday.length === 1 ? 'in agenzia c’è' : 'in agenzia ci sono') : 'hai';
+  const domani = agendaTomorrow.length
+    ? ` Domani ${agency ? (agendaTomorrow.length === 1 ? 'è già in agenda' : 'sono già in agenda') : 'hai già'} ${plurale(agendaTomorrow.length, 'appuntamento', 'appuntamenti')}.`
+    : '';
+
+  // 1. l'agenda, secondo l'ora
   if (!agendaToday.length) {
-    frasi.push(agency ? 'Oggi in agenda non ci sono appuntamenti.' : 'Oggi non hai appuntamenti in agenda.');
-  } else {
-    let s = agency
-      ? `Oggi in agenzia ${agendaToday.length === 1 ? 'c’è' : 'ci sono'} ${plurale(agendaToday.length, 'appuntamento', 'appuntamenti')}`
-      : `Oggi hai ${plurale(agendaToday.length, 'appuntamento', 'appuntamenti')}`;
-    if (visite) s += `, di cui ${plurale(visite, 'visita', 'visite')}`;
-    const prossimo = nextAppointment(agendaToday, now);
-    if (prossimo) {
-      const chi = prossimo.contact_name ? ` con ${prossimo.contact_name}` : '';
-      s += `: il prossimo è alle ${timeLabel(prossimo.start_at)}, ${(typeLabel(prossimo.type) || 'appuntamento').toLowerCase()}${chi}.`;
+    if (periodo === 'sera') {
+      frasi.push(`La giornata è finita${soggetto ? ' ' + soggetto : ''}, senza appuntamenti in agenda.${domani || ' Domani ci aspettano nuove opportunità.'}`);
+    } else if (periodo === 'mattina') {
+      frasi.push(`Oggi l’agenda ${agency ? 'dell’agenzia ' : ''}è libera: una buona occasione per sentire qualche cliente.${domani}`);
     } else {
-      s += ': per oggi non ne restano altri.';
+      frasi.push(`Pomeriggio senza appuntamenti${soggetto ? ' ' + soggetto : ''}: c’è spazio per qualche telefonata.${domani}`);
     }
-    frasi.push(s);
+  } else if (prossimo) {
+    const chi = prossimo.contact_name ? ` con ${prossimo.contact_name}` : '';
+    const tipo = (typeLabel(prossimo.type) || 'appuntamento').toLowerCase();
+    const quanti = `${plurale(agendaToday.length, 'appuntamento', 'appuntamenti')}${visite ? `, di cui ${plurale(visite, 'visita', 'visite')}` : ''}`;
+    if (periodo === 'mattina') {
+      frasi.push(`Oggi ${hai} ${quanti}: il prossimo è alle ${timeLabel(prossimo.start_at)}, ${tipo}${chi}.${domani}`);
+    } else if (periodo === 'pomeriggio') {
+      const resta = restanti === 1 ? (agency ? 'In agenzia resta' : 'Ti resta') : (agency ? 'In agenzia restano' : 'Ti restano');
+      frasi.push(`${restanti === agendaToday.length ? `Oggi ${hai} ${quanti}` : `${resta} ${plurale(restanti, 'appuntamento', 'appuntamenti')} su ${agendaToday.length}`}: il prossimo è alle ${timeLabel(prossimo.start_at)}, ${tipo}${chi}.${domani}`);
+    } else {
+      frasi.push(`${agency ? 'In agenzia c’è' : 'Hai'} ancora ${plurale(restanti, 'appuntamento', 'appuntamenti')} stasera: alle ${timeLabel(prossimo.start_at)}, ${tipo}${chi}.${domani}`);
+    }
+  } else {
+    const quanti = `${plurale(agendaToday.length, 'appuntamento', 'appuntamenti')}${visite ? `, di cui ${plurale(visite, 'visita', 'visite')}` : ''}`;
+    const uno = agendaToday.length === 1;
+    if (periodo === 'sera') {
+      frasi.push(`La giornata è finita: ${agency ? (uno ? 'in agenzia c’è stato' : 'in agenzia ci sono stati') : 'hai avuto'} ${quanti}, ${uno ? 'ormai' : 'tutti'} alle spalle.${domani || ' Domani ci aspettano nuove opportunità.'}`);
+    } else if (uno) {
+      frasi.push(`${agency ? 'L’appuntamento di oggi in agenzia' : 'Il tuo appuntamento di oggi'} è già alle spalle: il resto della giornata è libero.${domani}`);
+    } else {
+      frasi.push(`${agency ? 'I' : 'I tuoi'} ${quanti.replace(', di cui', ' di oggi' + (agency ? ' in agenzia' : '') + ', di cui')}${visite ? ',' : (agency ? ' di oggi in agenzia' : ' di oggi')} sono già alle spalle: il resto della giornata è libero.${domani}`);
+    }
   }
+
+  // 2. il radar
   if (radar.total) {
     const primo = radar.items[0];
-    frasi.push(`Il radar segnala ${plurale(radar.total, 'opportunità', 'opportunità')} da seguire: la prima è ${primo.title} (${primo.reason.charAt(0).toLowerCase()}${primo.reason.slice(1)}).`);
+    const motivo = primo ? ` La prima è ${primo.title} (${primo.reason.charAt(0).toLowerCase()}${primo.reason.slice(1)}).` : '';
+    frasi.push(`Intanto il Radar ha trovato ${plurale(radar.total, 'situazione interessante', 'situazioni interessanti')} da esplorare.${motivo}`);
   } else {
-    frasi.push('Il radar non segnala clienti in attesa: è un buon momento per coltivare nuovi contatti.');
+    frasi.push('Il Radar non ha trovato clienti in attesa: è un buon momento per coltivare nuovi contatti.');
   }
+
+  // 3. le attivita', senza nasconderle
   if (overdue || today || toVerify) {
     const parti = [];
     if (overdue) parti.push(plurale(overdue, 'attività scaduta', 'attività scadute'));
     if (today) parti.push(plurale(today, 'attività di oggi', 'attività di oggi'));
     if (toVerify) parti.push(plurale(toVerify, 'situazione da verificare', 'situazioni da verificare'));
-    frasi.push(`Più in basso trovi ${parti.length > 1 ? `${parti.slice(0, -1).join(', ')} e ${parti[parti.length - 1]}` : parti[0]}.`);
+    const elenco = parti.length > 1 ? `${parti.slice(0, -1).join(', ')} e ${parti[parti.length - 1]}` : parti[0];
+    frasi.push(`${periodo === 'sera' ? 'Restano' : 'Più in basso trovi'} ${elenco}${periodo === 'sera' ? ', più in basso' : ''}.`);
   } else {
-    frasi.push('Nessuna attività scaduta e niente da verificare.');
+    frasi.push('Nessuna attività scaduta e niente da verificare: tutto in ordine.');
   }
   return frasi;
 }

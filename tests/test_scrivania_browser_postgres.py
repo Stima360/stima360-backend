@@ -164,16 +164,18 @@ const [base, shots, emailOwner, emailAgent, password, t1, t2, oggi, emailAdmin, 
       };
     });
   }
-  async function entra(ctx, email, chiave = null, foto = null) {
+  async function entra(ctx, email, chiave = null, foto = null, partenza = '') {
     const page = await ctx.newPage();
     page.on('pageerror', (e) => out.errors.push(String(e)));
     page.on('console', (m) => { if (m.type() === 'error' && !/favicon|Failed to load resource/.test(m.text())) out.errors.push(m.text()); });
-    await page.goto(`${base}/os/`);
+    await page.goto(`${base}/os/${partenza}`);
     await page.fill('#login-email', email);
     await page.fill('#login-password', password);
     await page.click('#login-form button[type=submit]');
     await page.waitForSelector('[data-scrivania-kpi]', { timeout: 20000 });
     await pausa(page, 500);
+    // SCRIVANIA VIVA: dopo l'accesso si e' sempre sulla Scrivania, da qualunque indirizzo si parta
+    (out.landing ||= {})[chiave || email] = { partenza, hash: await page.evaluate(() => location.hash) };
     if (chiave) out.viva[chiave] = await viva(page);
     if (foto) await page.screenshot({ path: `${shots}/${foto}`, fullPage: true });
     await page.click('[data-scrivania-toggle-tasks]');
@@ -304,7 +306,7 @@ const [base, shots, emailOwner, emailAgent, password, t1, t2, oggi, emailAdmin, 
 
     // ---- 03 agente, amministratore, Superadmin dentro l'agenzia A
     const ctxA = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
-    page = await entra(ctxA, emailAgent, 'agent', 'viva-agente-desktop.png');
+    page = await entra(ctxA, emailAgent, 'agent', 'viva-agente-desktop.png', '#/contatti');
     out.agent = await leggi(page);
     await page.screenshot({ path: `${shots}/scrivania-agente.png`, fullPage: true });
     // il collegamento «Apri acquisizione» del Radar porta alla scheda vera
@@ -355,7 +357,132 @@ const [base, shots, emailOwner, emailAgent, password, t1, t2, oggi, emailAdmin, 
     out.mobile.radarTap = await page.$$eval('.scrivania-radar-item .scrivania-actions .btn', (b) => b.map((x) => Math.round(x.getBoundingClientRect().height)));
     await page.screenshot({ path: `${shots}/scrivania-mobile.png`, fullPage: true });
     out.mobile.tap = await page.$$eval('.scrivania-task .scrivania-actions .btn', (b) => b.map((x) => Math.round(x.getBoundingClientRect().height)));
+
+    // ---- 05 SHELL MOBILE: intestazione compatta, barra inferiore, ricerca a icona, «Altro», «+»
+    const shell = () => page.evaluate(() => {
+      const q = (s) => document.querySelector(s);
+      const r = (n) => (n ? n.getBoundingClientRect() : null);
+      const vis = (n) => { const b = r(n); return !!b && b.height > 0 && b.width > 0
+        && getComputedStyle(n).display !== 'none' && getComputedStyle(n).visibility !== 'hidden'; };
+      const nav = q('[data-mobile-nav]');
+      const fab = q('[data-scrivania-fab]');
+      const sotto = (sel) => { const f = q(sel); return f ? { vis: vis(f), bottom: Math.round(r(f).bottom) } : null; };
+      return {
+        hash: location.hash,
+        sidebar: vis(q('#app-view > .sidebar')), topbar: vis(q('.main > .topbar')), head: vis(q('[data-mobile-head]')),
+        env: ((q('[data-mobile-head] .env-badge') || {}).textContent || '').trim(),
+        logo: vis(q('[data-mobile-head] .mobile-brand-logo')), profile: vis(q('[data-mobile-profile] #user-menu')),
+        searchIcon: vis(q('[data-mobile-search]')), searchBox: vis(q('.main > .card:first-child input[type=search]')),
+        navVisible: vis(nav), navTop: nav ? Math.round(r(nav).top) : null, navBottom: nav ? Math.round(r(nav).bottom) : null,
+        vh: window.innerHeight, vw: window.innerWidth, scrollW: document.documentElement.scrollWidth,
+        nav: nav ? [...nav.querySelectorAll('[data-mobile-route]')].map((b) => [b.dataset.mobileRoute, b.textContent.trim(),
+          Math.round(r(b).height), b.classList.contains('active')]) : [],
+        more: [...document.querySelectorAll('[data-mobile-more] [data-mobile-route]')].map((b) => [b.dataset.mobileRoute,
+          b.textContent.trim(), Math.round(r(b).height), b.classList.contains('active')]),
+        moreOpen: document.body.classList.contains('os-more-open') && vis(q('[data-mobile-more]')),
+        sidebarRoutes: [...document.querySelectorAll('#nav [data-route]')].map((b) => b.dataset.route),
+        fab: fab ? { vis: vis(fab), bottom: Math.round(r(fab).bottom), h: Math.round(r(fab).height) } : null,
+        tabs: vis(q('.sezione[data-sezione="oggi"] > .sezione-tabs')),
+        agendaFab: sotto('.agenda-page .agenda-fab'), placeBar: sotto('.territorio-place-bar'),
+        content: (q('#content') || { innerText: '' }).innerText.slice(0, 300),
+      };
+    });
+    out.shell = { home: await shell() };
+    await page.screenshot({ path: `${shots}/mobile-home.png` });
+    // la ricerca dall'icona: il riquadro compare con il fuoco, la barra si ritira con la tastiera
+    await page.click('[data-mobile-search]');
+    await pausa(page, 250);
+    out.shell.searchOpen = await shell();
+    out.shell.searchFocused = await page.evaluate(() => document.activeElement === document.querySelector('.main > .card:first-child input[type=search]'));
+    await page.fill('.main > .card:first-child input[type=search]', 'Carla');
+    await page.waitForSelector('.main > .card:first-child a.list-item', { timeout: 15000 });
+    out.shell.searchHits = await page.$$eval('.main > .card:first-child a.list-item', (a) => a.map((x) => [x.textContent.trim(), x.getAttribute('href')]));
+    await page.screenshot({ path: `${shots}/mobile-ricerca.png` });
+    await page.click('.main > .card:first-child a.list-item');
+    await pausa(page, 1500);
+    out.shell.afterSearch = await shell();
+    // «Altro» porta ovunque, Fogli visita compresi
+    await page.goto(`${base}/os/#/oggi`);
+    await page.waitForSelector('[data-scrivania-fab]', { timeout: 15000 });
+    await pausa(page, 800);
+    await page.click('[data-mobile-route="altro"]');
+    await pausa(page, 300);
+    out.shell.moreOpen = await shell();
+    await page.screenshot({ path: `${shots}/mobile-altro.png` });
+    await page.click('[data-mobile-more] [data-mobile-route="fogli-visita"]');
+    await pausa(page, 1500);
+    out.shell.fogli = await shell();
+    await page.screenshot({ path: `${shots}/mobile-fogli.png` });
+    // Agenda e Zona dalla barra: i loro pulsanti in basso restano sopra la barra
+    await page.click('[data-mobile-route="agenda"]');
+    await pausa(page, 1500);
+    out.shell.agenda = await shell();
+    await page.screenshot({ path: `${shots}/mobile-agenda.png` });
+    await page.click('[data-mobile-route="zona"]');
+    await pausa(page, 2500);
+    out.shell.zona = await shell();
+    await page.screenshot({ path: `${shots}/mobile-zona.png` });
+    // il «+»: tre strade che esistono gia' (contatto, immobile, appuntamento)
+    async function apriPiu() {
+      await page.goto(`${base}/os/#/oggi`);
+      await page.waitForSelector('[data-scrivania-fab]', { timeout: 15000 });
+      await pausa(page, 800);
+      await page.click('[data-scrivania-fab]');
+      await pausa(page, 200);
+    }
+    await apriPiu();
+    out.shell.plus = await page.evaluate(() => {
+      const m = document.querySelector('[data-scrivania-plus-menu]');
+      const b = m.getBoundingClientRect(); const f = document.querySelector('[data-scrivania-fab]').getBoundingClientRect();
+      return { hidden: m.hidden, top: Math.round(b.top), bottom: Math.round(b.bottom), fabTop: Math.round(f.top), vh: window.innerHeight,
+        items: [...m.querySelectorAll('[data-scrivania-plus-item]')].map((x) => [x.dataset.scrivaniaPlusItem, x.innerText.replace(/\n/g, ' · '), Math.round(x.getBoundingClientRect().height)]) };
+    });
+    await page.screenshot({ path: `${shots}/mobile-piu.png` });
+    await page.click('[data-scrivania-plus-item="contact"]');
+    await page.waitForSelector('#contact-create-dialog[open]', { timeout: 15000 });
+    await pausa(page, 400);
+    out.shell.nuovoContatto = { url: page.url(), dialog: await page.$eval('#contact-create-dialog[open]', (n) => n.innerText.slice(0, 160)) };
+    await page.keyboard.press('Escape');
+    await apriPiu();
+    await page.click('[data-scrivania-plus-item="property"]');
+    await page.waitForSelector('dialog[open]', { timeout: 15000 });
+    await pausa(page, 400);
+    out.shell.nuovoImmobile = { url: page.url(), dialog: await page.$eval('dialog[open]', (n) => n.innerText.slice(0, 160)) };
+    await page.keyboard.press('Escape');
+    await apriPiu();
+    await page.click('[data-scrivania-plus-item="appointment"]');
+    await page.waitForSelector('dialog[open] form', { timeout: 15000 });
+    out.shell.nuovoAppuntamento = { url: page.url() };
+    // il Radar scorre: i puntini seguono la scheda; «Vedi tutte» apre l'elenco
+    await page.goto(`${base}/os/#/oggi`);
+    await page.waitForSelector('[data-scrivania-radar-track]', { timeout: 15000 });
+    await pausa(page, 800);
+    await page.screenshot({ path: `${shots}/mobile-benvenuto.png` });
+    out.shell.radar = await page.evaluate(() => {
+      const t = document.querySelector('[data-scrivania-radar-track]');
+      return { scrollable: t.scrollWidth > t.clientWidth + 10, widths: [...t.children].map((i) => Math.round(i.getBoundingClientRect().width)),
+        vw: window.innerWidth, dots: document.querySelectorAll('.scrivania-radar-dot').length,
+        active: [...document.querySelectorAll('.scrivania-radar-dot')].findIndex((d) => d.classList.contains('active')) };
+    });
+    await page.$eval('[data-scrivania-radar-track]', (t) => { t.scrollLeft = t.children[2].offsetLeft - t.children[0].offsetLeft; });
+    await pausa(page, 500);
+    out.shell.radarScrolled = await page.$$eval('.scrivania-radar-dot', (d) => d.findIndex((x) => x.classList.contains('active')));
+    await page.click('[data-scrivania-radar-all]');
+    await pausa(page, 200);
+    out.shell.radarAll = await page.evaluate(() => { const t = document.querySelector('[data-scrivania-radar-track]');
+      return { scrollable: t.scrollWidth > t.clientWidth + 10, expanded: t.parentElement.classList.contains('expanded'),
+        label: document.querySelector('[data-scrivania-radar-all]').textContent }; });
+    await page.screenshot({ path: `${shots}/mobile-radar-tutte.png` });
     await ctxM.close();
+
+    // ---- 06 l'agente sullo smartphone: le voci della sua barra laterale, niente di piu'
+    const ctxMA = await browser.newContext({ ...devices['iPhone 13'] });
+    page = await entra(ctxMA, emailAgent, 'mobileAgent', null, '#/agenda');
+    out.shellAgent = await shell();
+    await page.click('[data-mobile-route="altro"]');
+    await pausa(page, 300);
+    out.shellAgent.more = (await shell()).more;
+    await ctxMA.close();
   } catch (e) {
     out.errors.push('SCRIPT: ' + String(e && e.stack || e));
   }
@@ -363,6 +490,71 @@ const [base, shots, emailOwner, emailAgent, password, t1, t2, oggi, emailAdmin, 
   console.log('RISULTATO ' + JSON.stringify(out));
 })();
 """
+
+
+def _verifica_shell_mobile(out: dict, oggi: date) -> None:
+    """SHELL MOBILE: intestazione compatta, barra inferiore con «Altro», ricerca a icona,
+    «+» con le sole strade esistenti, Radar a pista; l'agente vede le sue voci e basta."""
+    sh = out["shell"]
+    casa = sh["home"]
+    # intestazione compatta al posto di barra laterale e barra del titolo; le schede interne sparite
+    assert casa["head"] and casa["logo"] and casa["profile"] and casa["searchIcon"], casa
+    assert not casa["sidebar"] and not casa["topbar"] and not casa["searchBox"] and not casa["tabs"], casa
+    assert casa["env"], "il badge dell'ambiente (TEST in collaudo, AMBIENTE LOCALE qui) sta nell'intestazione"
+    # barra inferiore: cinque voci, tutte toccabili, a filo del fondo, Scrivania accesa
+    assert [v[0] for v in casa["nav"]] == ["oggi", "agenda", "zona", "contatti", "altro"], casa["nav"]
+    assert [v[1] for v in casa["nav"]] == ["Scrivania", "Agenda", "Zona", "Contatti", "Altro"], casa["nav"]
+    assert min(v[2] for v in casa["nav"]) >= 44 and casa["navBottom"] == casa["vh"], casa
+    assert [v[0] for v in casa["nav"] if v[3]] == ["oggi"], casa["nav"]
+    assert casa["scrollW"] <= casa["vw"], casa
+    # il «+» fluttua sopra la barra, mai sotto
+    assert casa["fab"]["vis"] and casa["fab"]["h"] >= 48 and casa["fab"]["bottom"] <= casa["navTop"], casa["fab"]
+    # «Altro» elenca il resto, Fogli visita e Attività compresi, con le stesse voci della barra laterale
+    laterali = [r for r in casa["sidebarRoutes"] if r not in ("oggi", "agenda", "zona", "contatti")]
+    assert [v[0] for v in casa["more"]] == ["attivita"] + laterali, (casa["more"], laterali)
+    assert "fogli-visita" in laterali, laterali
+    # ricerca dall'icona: compare, ha il fuoco, la barra si ritira con la tastiera; scelto un risultato tutto si chiude
+    assert sh["searchOpen"]["searchBox"] and sh["searchFocused"] and not sh["searchOpen"]["navVisible"], sh["searchOpen"]
+    assert sh["searchHits"] and "Carla Collega" in sh["searchHits"][0][0], sh["searchHits"]   # il suo lead segue
+    assert sh["afterSearch"]["hash"] == sh["searchHits"][0][1] and not sh["afterSearch"]["searchBox"], sh["afterSearch"]
+    assert sh["afterSearch"]["navVisible"] and [v[0] for v in sh["afterSearch"]["nav"] if v[3]] == ["contatti"], sh["afterSearch"]["nav"]
+    # «Altro» -> Fogli visita: il foglio si chiude, la voce «Altro» resta accesa
+    assert sh["moreOpen"]["moreOpen"] is True and min(v[2] for v in sh["moreOpen"]["more"]) >= 44, sh["moreOpen"]["more"]
+    assert sh["fogli"]["hash"] == "#/fogli-visita" and not sh["fogli"]["moreOpen"], sh["fogli"]
+    assert [v[0] for v in sh["fogli"]["nav"] if v[3]] == ["altro"] and [v[0] for v in sh["fogli"]["more"] if v[3]] == ["fogli-visita"]
+    assert sh["fogli"]["scrollW"] <= sh["fogli"]["vw"] and "fogli visita" in sh["fogli"]["content"].lower(), sh["fogli"]
+    # Agenda e Zona: i loro pulsanti in basso restano sopra la barra
+    assert sh["agenda"]["hash"].startswith("#/agenda") and [v[0] for v in sh["agenda"]["nav"] if v[3]] == ["agenda"], sh["agenda"]
+    assert sh["agenda"]["agendaFab"] and sh["agenda"]["agendaFab"]["vis"] and sh["agenda"]["agendaFab"]["bottom"] <= sh["agenda"]["navTop"], sh["agenda"]
+    assert sh["agenda"]["scrollW"] <= sh["agenda"]["vw"], sh["agenda"]
+    assert sh["zona"]["hash"].startswith("#/edifici/mappa") and [v[0] for v in sh["zona"]["nav"] if v[3]] == ["zona"], sh["zona"]
+    if sh["zona"]["placeBar"] and sh["zona"]["placeBar"]["vis"]:
+        assert sh["zona"]["placeBar"]["bottom"] <= sh["zona"]["navTop"], sh["zona"]
+    # «+»: tre voci vere, sopra il tasto e dentro lo schermo
+    piu = sh["plus"]
+    assert not piu["hidden"] and [i[0] for i in piu["items"]] == ["appointment", "contact", "property"], piu
+    assert piu["top"] >= 0 and piu["bottom"] <= piu["fabTop"] and min(i[2] for i in piu["items"]) >= 44, piu
+    assert "Nuovo contatto" in piu["items"][1][1] and "Nuovo immobile" in piu["items"][2][1], piu
+    assert sh["nuovoContatto"]["url"].endswith("#/contatti") and "nuovo contatto" in sh["nuovoContatto"]["dialog"].lower(), sh["nuovoContatto"]
+    assert sh["nuovoImmobile"]["url"].endswith("#/immobili"), sh["nuovoImmobile"]
+    # l'Agenda apre la creazione e toglie «/nuovo» dall'indirizzo, come sul desktop (vedi out["owner"]["nuovo"])
+    assert sh["nuovoAppuntamento"]["url"].endswith(f"#/agenda/giorno/{oggi.isoformat()}"), sh["nuovoAppuntamento"]
+    # il Radar su smartphone: pista scorrevole, schede larghe meno dello schermo, puntini che seguono
+    rd = sh["radar"]
+    assert rd["scrollable"] and rd["dots"] == 5 and rd["active"] == 0 and max(rd["widths"]) < rd["vw"], rd
+    assert sh["radarScrolled"] == 2, sh["radarScrolled"]
+    assert sh["radarAll"] == {"scrollable": False, "expanded": True, "label": "Scorri"}, sh["radarAll"]
+    # l'agente: stesse regole, le voci della sua barra laterale e nulla in piu'
+    # la pagina iniziale: la Scrivania, su desktop e su smartphone, anche partendo da altrove
+    assert out["landing"]["agent"] == {"partenza": "#/contatti", "hash": "#/oggi"}, out["landing"]
+    assert out["landing"]["mobileAgent"] == {"partenza": "#/agenda", "hash": "#/oggi"}, out["landing"]
+    assert all(v["hash"] in ("", "#/oggi") for v in out["landing"].values()), out["landing"]
+    ag = out["shellAgent"]
+    assert [v[0] for v in ag["nav"]] == ["oggi", "agenda", "zona", "contatti", "altro"], ag["nav"]
+    laterali_a = [r for r in ag["sidebarRoutes"] if r not in ("oggi", "agenda", "zona", "contatti")]
+    assert [v[0] for v in ag["more"]] == ["attivita"] + laterali_a, (ag["more"], laterali_a)
+    assert set(laterali_a) <= set(laterali) and "fogli-visita" in laterali_a, (laterali_a, laterali)
+    assert ag["fab"]["vis"] and ag["profile"] and not ag["sidebar"], ag
 
 
 def test_la_scrivania_nel_browser(app, server, tmp_path):
@@ -491,7 +683,10 @@ def test_la_scrivania_nel_browser(app, server, tmp_path):
     # agenda di oggi per orario; domani senza l'annullato
     assert [a["id"] for a in p["agenda"]] == [str(a_passato_oggi), str(a_sera)], p["agenda"]
     assert p["agenda"][0]["href"] == f"#/agenda/giorno/{oggi.isoformat()}/{a_passato_oggi}"
-    assert "Da verificare" in p["agenda"][0]["text"] and "Confermato" in p["agenda"][1]["text"]
+    # timeline: ora, cliente, tipo; lo stato solo quando dice qualcosa (confermato tace)
+    assert "Da verificare" in p["agenda"][0]["text"] and "Mario Scaduto" in p["agenda"][0]["text"]
+    assert "Confermato" not in p["agenda"][1]["text"] and "Lucia Oggi" in p["agenda"][1]["text"]
+    assert "Videochiamata" in p["agenda"][1]["text"], p["agenda"][1]
     assert "Agente: Aldo Alfa" in p["agenda"][0]["text"]
     assert p["tomorrowHrefs"] == [f"#/agenda/giorno/{domani.isoformat()}/{a_domani}"], p["tomorrowHrefs"]
     tutti_gli_appuntamenti = [a["id"] for a in p["agenda"]] + [h.rsplit("/", 1)[1] for h in p["tomorrowHrefs"]] \
@@ -566,11 +761,21 @@ def test_la_scrivania_nel_browser(app, server, tmp_path):
     assert abs(yy["radar"] - yy["agenda"]) < 5 and vo["x"]["radar"] < vo["x"]["agenda"], (yy, vo["x"])
     assert vo["secondaryHidden"] is True and vo["adviceHidden"] is True
     assert "3 scadute" in vo["chips"] and "priorità alta" in vo["chips"], vo["chips"]
-    # briefing: solo conteggi e record veri
-    assert vo["briefing"][0].startswith("Oggi in agenzia ci sono 2 appuntamenti"), vo["briefing"]
-    assert vo["briefing"][1].startswith("Il radar segnala 6 opportunità da seguire: la prima è Carla Collega"), vo["briefing"]
+    # briefing: solo conteggi e record veri, nella voce della fascia oraria
+    # (2 appuntamenti oggi: uno alle 0:05 gia' passato, la videochiamata alle 23:30 ancora davanti)
+    if ora < 13:
+        atteso_o, atteso_a = "Oggi in agenzia ci sono 2 appuntamenti: il prossimo è alle 23:30", "Oggi hai 2 appuntamenti: il prossimo è alle 23:30"
+    elif ora < 18:
+        atteso_o, atteso_a = "In agenzia resta 1 appuntamento su 2: il prossimo è alle 23:30", "Ti resta 1 appuntamento su 2: il prossimo è alle 23:30"
+    else:
+        atteso_o, atteso_a = "In agenzia c’è ancora 1 appuntamento stasera: alle 23:30", "Hai ancora 1 appuntamento stasera: alle 23:30"
+    assert vo["briefing"][0].startswith(atteso_o) and "videochiamata con Lucia Oggi" in vo["briefing"][0], vo["briefing"]
+    assert vo["briefing"][0].endswith("Domani è già in agenda 1 appuntamento."), vo["briefing"]
+    assert "finita" not in vo["briefing"][0], "con un impegno davanti la giornata non e' finita"
+    assert vo["briefing"][1] == ("Intanto il Radar ha trovato 6 situazioni interessanti da esplorare. "
+                                 "La prima è Carla Collega (ricontatto previsto e non ancora fatto)."), vo["briefing"]
     assert "3 attività scadute" in vo["briefing"][2] and "3 situazioni da verificare" in vo["briefing"][2], vo["briefing"]
-    assert va["briefing"][0].startswith("Oggi hai 2 appuntamenti") and "Franco Ricontatto" in va["briefing"][1], va["briefing"]
+    assert va["briefing"][0].startswith(atteso_a) and "Franco Ricontatto" in va["briefing"][1], va["briefing"]
     # radar del titolare: a turno fra le famiglie, massimo 5, il resto contato
     assert [r["key"] for r in vo["radar"]] == [f"seller:{l_carla}", f"lead:{l_vera}", f"acquisition:{acq_collega}",
                                                f"seller:{l_giulia}", f"seller:{l_franco}"], [r["key"] for r in vo["radar"]]
@@ -583,12 +788,13 @@ def test_la_scrivania_nel_browser(app, server, tmp_path):
     radar_a = {r["key"]: r for r in va["radar"]}
     franco = radar_a[f"seller:{l_franco}"]
     assert "Ricontatto previsto e non ancora fatto" in franco["text"] and "in ritardo di 2 giorni" in franco["text"]
-    assert dict(franco["hrefs"])["Chiama"] == "tel:3331230001" and dict(franco["hrefs"])["Apri contatto"] == f"#/contatti/{c_franco}"
+    # SENTINELLA AGGIORNATA DA SCRIVANIA VIVA (restyling): il pulsante principale e' «Apri contatto →», «Chiama» resta accanto
+    assert dict(franco["hrefs"])["Chiama"] == "tel:3331230001" and dict(franco["hrefs"])["Apri contatto →"] == f"#/contatti/{c_franco}"
     assert "Nessuna prossima azione definita" in radar_a[f"seller:{l_giulia}"]["text"]
     assert "ultimo contatto 20 giorni fa" in radar_a[f"seller:{l_giulia}"]["text"]
     gino = radar_a[f"acquisition:{acq_mia}"]
     assert "nessun aggiornamento" in gino["text"] and "fermo da 10 giorni" in gino["text"], gino["text"]
-    assert dict(gino["hrefs"])["Apri acquisizione"] == f"#/acquisizioni/{acq_mia}"
+    assert dict(gino["hrefs"])["Apri acquisizione →"] == f"#/acquisizioni/{acq_mia}"
     testo_agente = json.dumps(va, ensure_ascii=False)
     for altrui in ("Carla Collega", "Rita Ferma", "Vera Valutazione"):
         assert altrui not in testo_agente and altrui not in out["agent"]["body"], altrui
@@ -608,5 +814,6 @@ def test_la_scrivania_nel_browser(app, server, tmp_path):
     # ---- 04 smartphone
     m = out["mobile"]
     assert m["scrollW"] <= m["clientW"], (m["scrollW"], m["clientW"])
+    _verifica_shell_mobile(out, oggi)
     assert m["kpi"]["recuperare"] == "2"
     assert m["tap"] and min(m["tap"]) >= 40, m["tap"]

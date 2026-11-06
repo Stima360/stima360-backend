@@ -8,6 +8,8 @@ consigli, e i confini della pagina, senza database.
   04  radar: ricontatti scaduti, senza prossima azione, acquisizioni ferme (soglia e
       appuntamento futuro), valutazioni dal sito senza agente; a turno, massimo 5.
   05  briefing e consigli: solo conteggi e record, in ordine fisso.
+  07  il briefing segue la fascia oraria (mattina, pomeriggio, sera): non dice mai
+      «giornata finita» con un appuntamento ancora davanti; il segno dell'ora.
   06  i confini: nessuna lettura vietata (valutazioni, WhatsApp, ricalcolo dei suggerimenti,
       punteggio di intenzione), nessuna scrittura nuova, nessun servizio esterno, nessun
       innerHTML; le funzioni operative di prima restano.
@@ -149,16 +151,64 @@ out.niente = m.advice({ now });
 """)
     assert out["b"] == [
         "Oggi hai 3 appuntamenti, di cui 2 visite: il prossimo è alle 10:00, visita immobile con Ada.",
-        "Il radar segnala 4 opportunità da seguire: la prima è Carla (ricontatto previsto e non ancora fatto).",
+        "Intanto il Radar ha trovato 4 situazioni interessanti da esplorare. "
+        "La prima è Carla (ricontatto previsto e non ancora fatto).",
         "Più in basso trovi 2 attività scadute e 1 attività di oggi."]
-    assert out["vuoto"] == ["Oggi non hai appuntamenti in agenda.",
-                            "Il radar non segnala clienti in attesa: è un buon momento per coltivare nuovi contatti.",
-                            "Nessuna attività scaduta e niente da verificare."]
-    assert out["agenzia"][0] == "Oggi in agenzia c’è 1 appuntamento: per oggi non ne restano altri."
+    assert out["vuoto"] == ["Oggi l’agenda è libera: una buona occasione per sentire qualche cliente.",
+                            "Il Radar non ha trovato clienti in attesa: è un buon momento per coltivare nuovi contatti.",
+                            "Nessuna attività scaduta e niente da verificare: tutto in ordine."]
+    assert out["agenzia"][0] == "L’appuntamento di oggi in agenzia è già alle spalle: il resto della giornata è libero."
     assert [c["kind"] for c in out["c"]] == ["appointment", "opportunity", "task"]
     assert out["c"][0]["href"] == "#/agenda/giorno/x/2" and out["c"][1]["href"] == "#/contatti/9"
     assert out["c"][2]["href"] == "" and out["c"][2]["label"] == "Mostra le attività"
     assert [c["kind"] for c in out["solo"]] == ["verify"] and out["niente"] == []
+
+
+def test_07_il_briefing_segue_la_fascia_oraria():
+    out = _node("""
+const tl = (v) => new Date(v).toISOString().slice(11, 16);
+const ty = (t) => ({ buyer_visit: 'Visita immobile', call: 'Telefonata', video_call: 'Videochiamata' })[t] || '';
+const agenda = [
+  { id: 1, type: 'call', status: 'completed', start_at: '2026-11-05T08:00:00Z', contact_name: 'Ugo' },
+  { id: 2, type: 'buyer_visit', status: 'confirmed', start_at: '2026-11-05T14:00:00Z', contact_name: 'Ada' },
+  { id: 3, type: 'video_call', status: 'confirmed', start_at: '2026-11-05T20:30:00Z', contact_name: 'Bea' },
+];
+const radar = { items: [{ title: 'Carla', reason: 'Ricontatto previsto e non ancora fatto', href: '#/contatti/9',
+  hrefLabel: 'Apri contatto', kind: 'seller_overdue' }], total: 1 };
+const domani = [{ id: 9 }, { id: 10 }];
+const a = (iso, extra = {}) => m.briefing({ agendaToday: agenda, radar, now: new Date(iso), typeLabel: ty, timeLabel: tl, ...extra });
+out.periodi = ['2026-11-05T08:00:00Z', '2026-11-05T13:00:00Z', '2026-11-05T18:00:00Z', '2026-11-05T22:00:00Z']
+  .map((iso) => m.dayPeriod(new Date(iso)));
+out.segni = ['2026-11-05T08:00:00Z', '2026-11-05T13:00:00Z', '2026-11-05T18:00:00Z'].map((iso) => m.timeSign(new Date(iso)).name);
+out.mattina = a('2026-11-05T08:00:00Z');
+out.pomeriggio = a('2026-11-05T14:30:00Z', { agendaTomorrow: domani });
+out.seraConImpegno = a('2026-11-05T18:00:00Z');          // 19:00 a Roma, la videochiamata e' ancora davanti
+out.seraFinita = a('2026-11-05T22:00:00Z');              // 23:00: tutto alle spalle
+out.seraFinitaAgenzia = a('2026-11-05T22:00:00Z', { agency: true, agendaTomorrow: domani.slice(0, 1), radar: { items: [], total: 0 } });
+out.seraVuota = m.briefing({ now: new Date('2026-11-05T22:00:00Z'), overdue: 1, toVerify: 2 });
+out.pomeriggioVuoto = m.briefing({ now: new Date('2026-11-05T14:00:00Z'), agency: true });
+""")
+    assert out["periodi"] == ["mattina", "pomeriggio", "sera", "sera"]
+    assert out["segni"] == ["sole", "tramonto", "luna"]
+    assert out["mattina"][0] == "Oggi hai 3 appuntamenti, di cui 1 visita: il prossimo è alle 14:00, visita immobile con Ada."
+    assert out["pomeriggio"][0] == ("Ti resta 1 appuntamento su 3: il prossimo è alle 20:30, videochiamata con Bea. "
+                                    "Domani hai già 2 appuntamenti.")
+    # sera con un impegno davanti: mai «giornata finita»
+    assert out["seraConImpegno"][0] == "Hai ancora 1 appuntamento stasera: alle 20:30, videochiamata con Bea."
+    assert "finita" not in out["seraConImpegno"][0]
+    assert out["seraFinita"][0] == ("La giornata è finita: hai avuto 3 appuntamenti, di cui 1 visita, tutti alle spalle. "
+                                    "Domani ci aspettano nuove opportunità.")
+    assert out["seraFinita"][1] == ("Intanto il Radar ha trovato 1 situazione interessante da esplorare. "
+                                    "La prima è Carla (ricontatto previsto e non ancora fatto).")
+    assert out["seraFinitaAgenzia"] == [
+        "La giornata è finita: in agenzia ci sono stati 3 appuntamenti, di cui 1 visita, tutti alle spalle. "
+        "Domani è già in agenda 1 appuntamento.",
+        "Il Radar non ha trovato clienti in attesa: è un buon momento per coltivare nuovi contatti.",
+        "Nessuna attività scaduta e niente da verificare: tutto in ordine."]
+    # la sera le attivita' aperte restano dette, mai «tutto concluso»
+    assert out["seraVuota"][0] == "La giornata è finita, senza appuntamenti in agenda. Domani ci aspettano nuove opportunità."
+    assert out["seraVuota"][2] == "Restano 1 attività scaduta e 2 situazioni da verificare, più in basso."
+    assert out["pomeriggioVuoto"][0] == "Pomeriggio senza appuntamenti in agenzia: c’è spazio per qualche telefonata."
 
 
 def _codice(p: Path) -> str:

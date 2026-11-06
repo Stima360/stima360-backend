@@ -438,7 +438,10 @@ window.maplibregl = {
   Popup: class {
     on() { return this; } setLngLat() { return this; }
     setDOMContent(n) { n.classList.add('riquadro-finto'); if (this.n && this.n.isConnected) this.n.replaceWith(n); this.n = n; return this; }
-    addTo() { window.__ml.popups++; document.body.appendChild(this.n); return this; }
+    // SENTINELLA AGGIORNATA DA SCRIVANIA VIVA (shell mobile): il riquadro sta nel contenitore
+    // della mappa, come fa MapLibre (`map.getContainer()`), non in fondo a `body`, dove su
+    // smartphone finirebbe sotto la barra di navigazione fissa.
+    addTo(map) { window.__ml.popups++; (map && map.c ? map.c : document.body).appendChild(this.n); return this; }
     remove() { this.n && this.n.remove(); }
   },
 };
