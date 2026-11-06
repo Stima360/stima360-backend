@@ -52,7 +52,7 @@ from core.database import core_cursor
 from appointments import repository as appointment_repository
 from inbound_messages import repository as inbound_repository
 from inbound_messages import routing
-from inbound_messages.service import INBOUND_ORIGIN
+from inbound_messages.service import INBOUND_ORIGIN, InboundError, resolve_inbox
 from message_replies import service as replies_service
 from message_replies import transport as transport_module
 from message_replies.enums import WINDOW_HOURS, WINDOW_SAFETY_MINUTES
@@ -63,6 +63,7 @@ from reply_suggestions import repository as suggestion_repository
 from reply_suggestions import service as suggestions
 from reply_suggestions.fields import AVAILABLE_STATUS
 from visit_booking import service as visit_booking
+from whatsapp_inboxes import repository as inboxes_repository
 
 from . import repository
 from .enums import (
@@ -126,6 +127,11 @@ class NotFound(AutoReplyError):
     status = 404
 
 
+class Conflict(AutoReplyError):
+    """DUE CASELLE: il cliente ha scritto a piu' numeri, va detto quale (`inbox`)."""
+    status = 409
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -174,11 +180,14 @@ def _customer_at(m: dict):
     return min(stamp, received)                     # un orario futuro non allunga la finestra
 
 
-def _operator_replied(sys_ctx, contact_id: int, sender_phone: str, now) -> bool:
+def _operator_replied(sys_ctx, contact_id: int, sender_phone: str, now, phone_number_id: str | None = None) -> bool:
+    """Una risposta manuale recente a QUESTO cliente, da QUESTA casella (una
+    risposta senza numero nei metadati conta per ogni casella)."""
     since = now - timedelta(hours=OPERATOR_PAUSE_HOURS)
     for row in communication.list_for_contact(sys_ctx, contact_id, limit=50):
         if (row["channel"] == "whatsapp" and row["reason_code"] == "operator_reply"
-                and row["destination_snapshot"] == sender_phone and row["created_at"] >= since):
+                and row["destination_snapshot"] == sender_phone and row["created_at"] >= since
+                and (_metadata(row).get("phone_number_id") or phone_number_id) == phone_number_id):
             return True
     return False
 
@@ -195,6 +204,10 @@ def decide(cur, agency_id: int, message: dict, *, now=None) -> dict:
     def skipped(code):
         return {**base, "decision": SKIPPED, "reason_code": code}
 
+    # DUE CASELLE: le automazioni restano sul numero 1. Una casella con le
+    # automazioni spente non riceve MAI una risposta automatica.
+    if not inboxes_repository.automations_enabled(cur, message.get("phone_number_id")):
+        return skipped("inbox_automations_disabled")
     if now >= closes_at - timedelta(minutes=WINDOW_SAFETY_MINUTES):
         return skipped("window_closed")
     if repository.stop_in_conversation(cur, agency_id, sender):
@@ -206,9 +219,9 @@ def decide(cur, agency_id: int, message: dict, *, now=None) -> dict:
     for address in {sender, (contact or {}).get("phone_normalized")} - {None, ""}:
         if consent_repository.latest_platform_optout(cur, "whatsapp", address) is not None:
             return skipped("platform_optout")
-    if repository.open_pause(cur, agency_id, sender) is not None:
+    if repository.open_pause(cur, agency_id, sender, message.get("phone_number_id")) is not None:
         return skipped("conversation_paused")
-    if contact is not None and _operator_replied(sys_ctx, contact["id"], sender, now):
+    if contact is not None and _operator_replied(sys_ctx, contact["id"], sender, now, message.get("phone_number_id")):
         return skipped("operator_replied")
     if message.get("message_type") != "text":
         return skipped("attachment")
@@ -349,6 +362,8 @@ def _send_time_check(agency_id: int, message: dict, *, now=None) -> tuple[str | 
             return "recipient_not_allowed", None
         if routing.configured_routes().get(meta.get("phone_number_id") or "") != {agency_id}:
             return "sender_not_configured", None
+        if not inboxes_repository.automations_enabled(cur, meta.get("phone_number_id")):
+            return "inbox_automations_disabled", None
         inbound = inbound_repository.get_message(cur, agency_id, meta.get("inbound_message_id") or 0)
         if inbound is None or inbound["contact_id"] != message["contact_id"]:
             return "contact_changed", None
@@ -362,10 +377,10 @@ def _send_time_check(agency_id: int, message: dict, *, now=None) -> tuple[str | 
                 return "platform_optout", None
         if do_not_contact.active(cur, agency_id, message["contact_id"]):
             return do_not_contact.REASON, None
-        if repository.open_pause(cur, agency_id, sender) is not None:
+        if repository.open_pause(cur, agency_id, sender, meta.get("phone_number_id")) is not None:
             return "conversation_paused", None
         sys_ctx = SystemAgencyContext(agency_id=agency_id, origin=INBOUND_ORIGIN)
-        if _operator_replied(sys_ctx, message["contact_id"], sender, now):
+        if _operator_replied(sys_ctx, message["contact_id"], sender, now, meta.get("phone_number_id")):
             return "operator_replied", None
         if meta.get("property_data") and not _available(cur, agency_id, {"id": message.get("property_id")}):
             return "property_no_longer_active", None
@@ -527,12 +542,20 @@ def set_settings(ctx, mode: str) -> dict:
         return _settings_view(repository.set_mode(cur, agency_id, mode, ctx.user_id), ctx, send_ready=ready)
 
 
-def _visible_conversation(cur, ctx, sender_phone: str) -> list[dict]:
+def _visible_conversation(cur, ctx, sender_phone: str, phone_number_id: str | None) -> tuple[str, list[dict]]:
+    """DUE CASELLE: la conversazione di UNA casella (quella chiesta, o l'unica)."""
+    from whatsapp_inboxes import service as inboxes
+
+    try:
+        number = resolve_inbox(cur, ctx, sender_phone, phone_number_id)
+    except InboundError as exc:
+        raise (Conflict if exc.status == 409 else NotFound)(exc.code, str(exc)) from exc
     rows = inbound_repository.conversation_messages(cur, ctx.require_agency(), sender_phone,
-                                                    agent_user_id=_agent_scope(ctx), limit=100)
+                                                    agent_user_id=_agent_scope(ctx), limit=100,
+                                                    phone_number_id=number, hidden_numbers=inboxes.hidden_numbers(cur, ctx))
     if not rows:
         raise NotFound("NOT_FOUND", NOT_FOUND_MESSAGE)
-    return rows
+    return number, rows
 
 
 def _decision_view(d: dict, dispatch: dict | None = None) -> dict:
@@ -556,11 +579,11 @@ def _decision_view(d: dict, dispatch: dict | None = None) -> dict:
     return view
 
 
-def conversation_state(ctx, sender_phone: str) -> dict:
+def conversation_state(ctx, sender_phone: str, phone_number_id: str | None = None) -> dict:
     agency_id = ctx.require_agency()
     with core_cursor() as (_, cur):
         _require_installed(cur)
-        rows = _visible_conversation(cur, ctx, sender_phone)
+        number, rows = _visible_conversation(cur, ctx, sender_phone, phone_number_id)
         decisions = repository.decisions_for_messages(cur, agency_id, [r["id"] for r in rows])
         dispatches = repository.dispatches_for_decisions(cur, agency_id, [d["id"] for d in decisions])
         sys_ctx = SystemAgencyContext(agency_id=agency_id, origin=INBOUND_ORIGIN)
@@ -568,25 +591,27 @@ def conversation_state(ctx, sender_phone: str) -> dict:
             if row.get("communication_message_id"):
                 m = communication.get_message(sys_ctx, row["communication_message_id"], cur=cur)
                 row.update({k: m.get(k) for k in ("status", "sent_at", "suppressed_reason", "error_code")})
-        pause = repository.open_pause(cur, agency_id, sender_phone)
+        pause = repository.open_pause(cur, agency_id, sender_phone, number)
         conf = repository.settings(cur, agency_id)
         ready = repository.send_installed(cur)
-    return {"sender_phone": sender_phone, "settings": _settings_view(conf, ctx, send_ready=ready),
+        automations = inboxes_repository.automations_enabled(cur, number)
+    return {"sender_phone": sender_phone, "phone_number_id": number, "inbox_automations_enabled": automations,
+            "settings": _settings_view(conf, ctx, send_ready=ready),
             "paused": pause is not None, "paused_at": _iso((pause or {}).get("paused_at")),
             "decisions": [_decision_view(d, dispatches.get(d["id"])) for d in decisions]}
 
 
-def set_pause(ctx, sender_phone: str, paused: bool) -> dict:
-    """Pausa/ripresa di una conversazione: chiunque la veda (non in sola lettura,
-    che la guardia globale ferma prima)."""
+def set_pause(ctx, sender_phone: str, paused: bool, phone_number_id: str | None = None) -> dict:
+    """Pausa/ripresa di una conversazione (di UNA casella): chiunque la veda
+    (non in sola lettura, che la guardia globale ferma prima)."""
     agency_id = ctx.require_agency()
     if ctx.user_id is None:
         raise Forbidden("AUTO_REPLY_FORBIDDEN", FORBIDDEN_MESSAGE)
     with core_cursor(commit=True) as (_, cur):
         _require_installed(cur)
-        _visible_conversation(cur, ctx, sender_phone)
+        number, _rows = _visible_conversation(cur, ctx, sender_phone, phone_number_id)
         if paused:
-            repository.pause(cur, agency_id, sender_phone, ctx.user_id)
+            repository.pause(cur, agency_id, sender_phone, ctx.user_id, number)
         else:
-            repository.resume(cur, agency_id, sender_phone, ctx.user_id)
-    return conversation_state(ctx, sender_phone)
+            repository.resume(cur, agency_id, sender_phone, ctx.user_id, number)
+    return conversation_state(ctx, sender_phone, number)

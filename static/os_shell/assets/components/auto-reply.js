@@ -30,10 +30,15 @@ function errorMessage(error) {
   return (error && error.message) || 'Operazione non riuscita.';
 }
 
+/** `?inbox=`: la casella (phone_number_id) della conversazione, se nota (DUE CASELLE). */
+function inboxQuery(inbox) {
+  return inbox ? `?inbox=${encodeURIComponent(inbox)}` : '';
+}
+
 /** Lo stato della conversazione, o null se il motore non è installato qui. */
-export async function fetchAutoState(senderPhone) {
+export async function fetchAutoState(senderPhone, inbox = null) {
   try {
-    return await apiGet(`${API}/conversations/${encodeURIComponent(senderPhone)}`);
+    return await apiGet(`${API}/conversations/${encodeURIComponent(senderPhone)}${inboxQuery(inbox)}`);
   } catch (error) {
     if (error && (error.status === 503 || error.status === 404)) return null;
     throw error;
@@ -96,18 +101,24 @@ export function renderDecision(d) {
 }
 
 /** Il pannello in cima alla conversazione: stato, pausa, modo dell'agenzia. */
-export function renderAutoPanel(state, senderPhone, onChange) {
+export function renderAutoPanel(state, senderPhone, onChange, inbox = null) {
   const panel = el('div', 'wa-auto-panel');
   panel.setAttribute('data-auto-panel', '');
   const status = el('p', null, statusText(state.settings));
   status.setAttribute('data-auto-status', state.settings.effective);
   panel.appendChild(status);
+  if (state.inbox_automations_enabled === false) {
+    // DUE CASELLE: le automazioni restano sul numero 1. Qui nessuna risposta automatica parte.
+    const off = el('p', 'muted', 'Questa casella non ha le automazioni attive: nessuna risposta automatica parte da questo numero.');
+    off.setAttribute('data-auto-inbox-off', '');
+    panel.appendChild(off);
+  }
   const actions = el('div', 'agency-actions');
   const pause = button(state.paused ? 'Riprendi automazione' : 'Metti in pausa', 'ghost', 'data-auto-pause');
   pause.addEventListener('click', async () => {
     pause.disabled = true;
     try {
-      await apiPost(`${API}/conversations/${encodeURIComponent(senderPhone)}/${state.paused ? 'resume' : 'pause'}`, {});
+      await apiPost(`${API}/conversations/${encodeURIComponent(senderPhone)}/${state.paused ? 'resume' : 'pause'}${inboxQuery(inbox)}`, {});
       await onChange();
     } catch (error) {
       pause.disabled = false;

@@ -52,10 +52,12 @@ def insert_event(cur, e, *, routing_status, agency_id) -> bool:
 # --- lettura per l'interfaccia ---------------------------------------------------
 
 _MESSAGE_COLUMNS = (
-    "m.id, m.provider_message_id, m.sender_phone, m.sender_profile_name, m.message_type, m.text_body, m.metadata, "
+    "m.id, m.provider_message_id, m.phone_number_id, m.display_phone_number, "
+    "m.sender_phone, m.sender_profile_name, m.message_type, m.text_body, m.metadata, "
     "m.provider_timestamp, m.received_at, m.contact_id, m.contact_match, m.property_id, m.linked_by_user_id, "
     "m.linked_at, c.display_name AS contact_name, c.first_name AS contact_first_name, "
-    "c.last_name AS contact_last_name, p.title AS property_title, p.code AS property_code")
+    "c.last_name AS contact_last_name, (to_jsonb(c)->>'private_user_id')::bigint AS contact_private_user_id, "
+    "p.title AS property_title, p.code AS property_code")
 
 _JOINS = ("FROM whatsapp_inbound_messages m "
           "LEFT JOIN contacts c ON c.id = m.contact_id AND c.agency_id = m.agency_id "
@@ -69,44 +71,78 @@ def _agent_filter(agent_user_id: int | None) -> tuple[str, tuple]:
     return " AND c.assigned_agent_id = %s", (agent_user_id,)
 
 
+def _inbox_filter(hidden_numbers, phone_number_id: str | None) -> tuple[str, tuple]:
+    """DUE CASELLE: le caselle che l'operatore non vede (riservate senza
+    autorizzazione, disattivate) e, se chiesta, UNA casella soltanto."""
+    sql, params = "", ()
+    if hidden_numbers:
+        sql += " AND NOT (m.phone_number_id = ANY(%s))"
+        params += (list(hidden_numbers),)
+    if phone_number_id:
+        sql += " AND m.phone_number_id = %s"
+        params += (phone_number_id,)
+    return sql, params
+
+
+def _visibility(agent_user_id, hidden_numbers, phone_number_id) -> tuple[str, tuple]:
+    a, pa = _agent_filter(agent_user_id)
+    b, pb = _inbox_filter(hidden_numbers, phone_number_id)
+    return a + b, pa + pb
+
+
 def reads_installed(cur) -> bool:
-    cur.execute("SELECT to_regclass('whatsapp_inbound_reads') IS NOT NULL AS installed")
+    """La 126 (segni di lettura) E la 130 (segno per casella)."""
+    cur.execute("SELECT to_regclass('whatsapp_inbound_reads') IS NOT NULL AND EXISTS (SELECT 1 FROM "
+                "information_schema.columns WHERE table_name = 'whatsapp_inbound_reads' "
+                "AND column_name = 'phone_number_id') AS installed")
     return bool(cur.fetchone()["installed"])
 
 
 def list_conversations(cur, agency_id: int, *, agent_user_id: int | None, only_unlinked: bool, limit: int,
-                       reader_user_id: int | None = None):
-    """`reader_user_id`: con la migrazione 126, conta i messaggi non ancora
-    letti da QUELL'operatore (`unread`); senza, `unread` e' NULL."""
-    extra, params = _agent_filter(agent_user_id)
+                       reader_user_id: int | None = None, hidden_numbers=(), phone_number_id: str | None = None):
+    """Una riga per CONVERSAZIONE = (numero ricevente, numero del cliente):
+    lo stesso cliente su due caselle da' due righe. `reader_user_id`: con la
+    migrazione 126 (e la 130), conta i messaggi non ancora letti da
+    QUELL'operatore (`unread`); senza, `unread` e' NULL."""
+    extra, params = _visibility(agent_user_id, hidden_numbers, phone_number_id)
     having = " HAVING count(*) FILTER (WHERE m.contact_id IS NULL OR m.property_id IS NULL) > 0" if only_unlinked else ""
     if reader_user_id is None:
         unread, reads, read_params = "NULL::bigint AS unread", "", ()
     else:
         unread = "count(*) FILTER (WHERE m.id > COALESCE(r.last_read_message_id, 0)) AS unread"
         reads = ("LEFT JOIN whatsapp_inbound_reads r ON r.agency_id = m.agency_id AND r.user_id = %s "
-                 "AND r.sender_phone = m.sender_phone ")
+                 "AND r.phone_number_id = m.phone_number_id AND r.sender_phone = m.sender_phone ")
         read_params = (reader_user_id,)
     cur.execute(
-        "SELECT m.sender_phone, max(m.received_at) AS last_received_at, count(*) AS messages, "
+        "SELECT m.phone_number_id, m.sender_phone, max(m.received_at) AS last_received_at, count(*) AS messages, "
         "count(*) FILTER (WHERE m.contact_id IS NULL) AS without_contact, "
         "count(*) FILTER (WHERE m.property_id IS NULL) AS without_property, "
         f"{unread}, "
         "(array_agg(m.id ORDER BY m.received_at DESC, m.id DESC))[1] AS last_message_id "
-        f"{_JOINS}{reads}WHERE m.agency_id = %s{extra} GROUP BY m.sender_phone{having} "
+        f"{_JOINS}{reads}WHERE m.agency_id = %s{extra} GROUP BY m.phone_number_id, m.sender_phone{having} "
         "ORDER BY max(m.received_at) DESC LIMIT %s",
         (*read_params, agency_id, *params, limit))
     return [dict(r) for r in cur.fetchall()]
 
 
-def mark_read(cur, agency_id: int, user_id: int, sender_phone: str, message_id: int) -> None:
+def sender_inboxes(cur, agency_id: int, sender_phone: str, *, agent_user_id: int | None, hidden_numbers=()) -> list[str]:
+    """I numeri riceventi su cui QUESTO cliente ha conversazioni visibili
+    all'operatore, dal piu' recente."""
+    extra, params = _visibility(agent_user_id, hidden_numbers, None)
+    cur.execute(f"SELECT m.phone_number_id, max(m.received_at) AS last_at {_JOINS} WHERE m.agency_id = %s "
+                f"AND m.sender_phone = %s{extra} GROUP BY m.phone_number_id ORDER BY max(m.received_at) DESC",
+                (agency_id, sender_phone, *params))
+    return [r["phone_number_id"] for r in cur.fetchall()]
+
+
+def mark_read(cur, agency_id: int, user_id: int, phone_number_id: str, sender_phone: str, message_id: int) -> None:
     """Il segno avanza soltanto: una lettura piu' vecchia non lo riporta indietro."""
     cur.execute(
-        "INSERT INTO whatsapp_inbound_reads (agency_id, user_id, sender_phone, last_read_message_id) "
-        "VALUES (%s, %s, %s, %s) ON CONFLICT (agency_id, user_id, sender_phone) DO UPDATE "
+        "INSERT INTO whatsapp_inbound_reads (agency_id, user_id, phone_number_id, sender_phone, last_read_message_id) "
+        "VALUES (%s, %s, %s, %s, %s) ON CONFLICT (agency_id, user_id, phone_number_id, sender_phone) DO UPDATE "
         "SET last_read_message_id = GREATEST(whatsapp_inbound_reads.last_read_message_id, "
         "EXCLUDED.last_read_message_id), read_at = NOW()",
-        (agency_id, user_id, sender_phone, message_id))
+        (agency_id, user_id, phone_number_id, sender_phone, message_id))
 
 
 # Stesso numero in formato internazionale: le cifre, senza `00` iniziale; un
@@ -139,15 +175,18 @@ def messages_by_ids(cur, agency_id: int, ids: list[int]):
     return [dict(r) for r in cur.fetchall()]
 
 
-def conversation_messages(cur, agency_id: int, sender_phone: str, *, agent_user_id: int | None, limit: int):
-    extra, params = _agent_filter(agent_user_id)
+def conversation_messages(cur, agency_id: int, sender_phone: str, *, agent_user_id: int | None, limit: int,
+                          phone_number_id: str | None = None, hidden_numbers=()):
+    """I messaggi della conversazione (con `phone_number_id`: di UNA casella)."""
+    extra, params = _visibility(agent_user_id, hidden_numbers, phone_number_id)
     cur.execute(f"SELECT {_MESSAGE_COLUMNS} {_JOINS} WHERE m.agency_id = %s AND m.sender_phone = %s{extra} "
                 "ORDER BY m.received_at DESC, m.id DESC LIMIT %s", (agency_id, sender_phone, *params, limit))
     return [dict(r) for r in cur.fetchall()]
 
 
-def get_message(cur, agency_id: int, message_id: int, *, agent_user_id: int | None = None, lock: bool = False):
-    extra, params = _agent_filter(agent_user_id)
+def get_message(cur, agency_id: int, message_id: int, *, agent_user_id: int | None = None, lock: bool = False,
+                hidden_numbers=()):
+    extra, params = _visibility(agent_user_id, hidden_numbers, None)
     cur.execute(f"SELECT {_MESSAGE_COLUMNS}, m.agency_id {_JOINS} WHERE m.id = %s AND m.agency_id = %s{extra}"
                 + (" FOR UPDATE OF m" if lock else ""), (message_id, agency_id, *params))
     row = cur.fetchone()
@@ -187,25 +226,30 @@ def link_history(cur, agency_id: int, message_id: int):
     return [dict(r) for r in cur.fetchall()]
 
 
-def candidate_contacts(cur, agency_id: int, phone: str):
+def candidate_contacts(cur, agency_id: int, phone: str, *, viewer_user_id: int | None = None):
     from . import contact_match
 
-    return contact_match.candidates(cur, agency_id, phone, limit=20)
+    return contact_match.candidates(cur, agency_id, phone, limit=20, viewer_user_id=viewer_user_id)
 
 
-def conversation_rows_for_link(cur, agency_id: int, sender_phone: str):
-    """Tutti i messaggi instradati della conversazione, bloccati per l'associazione."""
-    cur.execute("SELECT id, contact_id, property_id, message_type, text_body, provider_message_id, provider_timestamp "
-                "FROM whatsapp_inbound_messages WHERE agency_id = %s AND sender_phone = %s ORDER BY id FOR UPDATE",
-                (agency_id, sender_phone))
+def conversation_rows_for_link(cur, agency_id: int, sender_phone: str, hidden_numbers=()):
+    """Tutti i messaggi instradati della conversazione (su ogni casella
+    visibile), bloccati per l'associazione."""
+    extra, params = _inbox_filter(hidden_numbers, None)
+    cur.execute("SELECT m.id, m.contact_id, m.property_id, m.message_type, m.text_body, m.provider_message_id, "
+                "m.provider_timestamp FROM whatsapp_inbound_messages m WHERE m.agency_id = %s AND m.sender_phone = %s"
+                f"{extra} ORDER BY m.id FOR UPDATE", (agency_id, sender_phone, *params))
     return [dict(r) for r in cur.fetchall()]
 
 
 # --- BLOCCO-4B: letture per le risposte manuali ---------------------------------
 
-def last_inbound(cur, agency_id: int, sender_phone: str, *, agent_user_id: int | None):
-    """L'ultimo messaggio ricevuto della conversazione nell'agenzia (visibile a chi chiede)."""
-    extra, params = _agent_filter(agent_user_id)
+def last_inbound(cur, agency_id: int, sender_phone: str, *, agent_user_id: int | None,
+                 phone_number_id: str | None = None, hidden_numbers=()):
+    """L'ultimo messaggio ricevuto della conversazione nell'agenzia (visibile a
+    chi chiede). Con `phone_number_id`: su QUELLA casella, cosi' la risposta
+    parte dal numero che ha ricevuto."""
+    extra, params = _visibility(agent_user_id, hidden_numbers, phone_number_id)
     # L'ora del cliente e' quella dichiarata da Meta, MA mai dopo la ricezione:
     # un orario futuro non e' attendibile e non puo' allungare la finestra.
     cur.execute("SELECT m.id, m.phone_number_id, m.contact_id, m.property_id, m.provider_timestamp, m.received_at, "

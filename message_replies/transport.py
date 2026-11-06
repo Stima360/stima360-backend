@@ -45,8 +45,23 @@ def enabled() -> bool:
     return (os.getenv(MODE_ENV) or "").strip().lower() == MODE_META
 
 
-def credentials_present() -> bool:
-    return bool((os.getenv(TOKEN_ENV) or "").strip())
+def token_for(phone_number_id: str | None) -> str | None:
+    """DUE CASELLE: il token della casella (`WHATSAPP_TOKEN__<phone_number_id>`),
+    altrimenti quello generale (`WHATSAPP_TOKEN`). Mai nel database."""
+    if phone_number_id:
+        own = (os.getenv(f"{TOKEN_ENV}__{phone_number_id}") or "").strip()
+        if own:
+            return own
+    return (os.getenv(TOKEN_ENV) or "").strip() or None
+
+
+def credentials_present(phone_number_id: str | None = None) -> bool:
+    """Senza casella: c'e' il token generale o almeno uno per casella."""
+    if phone_number_id:
+        return token_for(phone_number_id) is not None
+    if (os.getenv(TOKEN_ENV) or "").strip():
+        return True
+    return any(k.startswith(f"{TOKEN_ENV}__") and v.strip() for k, v in os.environ.items())
 
 
 def allowed_recipients():
@@ -90,12 +105,15 @@ class MetaCloudTransport:
             # Rifiuto certo, senza aprire alcuna connessione: il destinatario non
             # e' in WHATSAPP_OUTBOUND_ALLOWED_RECIPIENTS (o l'allowlist manca).
             return SendResult("rejected", error_code="provider_rejected", error_detail="recipient_not_allowed")
+        token = token_for(phone_number_id) or self._token
+        if not token:
+            return SendResult("rejected", error_code="missing_credentials", error_detail="token_missing_for_inbox")
         url = f"https://graph.facebook.com/{self._version}/{phone_number_id}/messages"
         payload = {"messaging_product": "whatsapp", "recipient_type": "individual", "to": to,
                    "type": "text", "text": {"preview_url": False, "body": text}}
         try:
             response = self._session.post(url, json=payload, timeout=REQUEST_TIMEOUT_SECONDS,
-                                          headers={"Authorization": f"Bearer {self._token}"})
+                                          headers={"Authorization": f"Bearer {token}"})
         except requests.exceptions.ConnectTimeout:
             # La connessione non si e' mai aperta: il messaggio non e' partito.
             return SendResult("rejected", error_code="provider_unavailable", error_detail="connect_timeout")
@@ -143,4 +161,4 @@ def current():
     version = graph_version()
     if not enabled() or not credentials_present() or version is None:
         return None
-    return MetaCloudTransport(os.getenv(TOKEN_ENV).strip(), version)
+    return MetaCloudTransport((os.getenv(TOKEN_ENV) or "").strip(), version)

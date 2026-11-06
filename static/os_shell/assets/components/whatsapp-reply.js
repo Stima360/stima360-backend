@@ -12,6 +12,9 @@
 // Tre stati non finali, distinti: «in attesa» (in coda, mai partita: chi l'ha
 // scritta può riprenderla), «in invio» ed «esito incerto» (il processo può
 // essersi fermato dopo la chiamata a WhatsApp: mai ritentate).
+//
+// DUE CASELLE: `inbox` (phone_number_id) dice da quale numero dell'agenzia
+// parte la risposta: lo stesso che ha ricevuto la chat. Il server lo verifica.
 
 import { apiGet, apiPost } from '../core/api-client.js';
 
@@ -62,6 +65,7 @@ export function failureText(reply) {
       conversation_not_visible: 'non hai più accesso alla conversazione',
       contact_changed: 'il contatto della conversazione è cambiato',
       sender_changed: 'il numero della conversazione è cambiato',
+      inbox_automations_disabled: 'la casella non ha le automazioni attive',
       no_contact: 'la conversazione non ha più un contatto',
       operator_not_authorized: 'il tuo accesso all’agenzia non è più attivo',
       recipient_not_allowed: 'il numero non è tra i destinatari autorizzati su questo ambiente',
@@ -137,20 +141,23 @@ function replyItem(r, onResume) {
  * invio o una ripresa la vista ricarica la chat, invece del solo pannello.
  * `recipientName`: il nome mostrato nella conferma.
  */
-export async function mountWhatsappReply(container, { senderPhone, history = 'all', compact = false, onChange = null, recipientName = null }) {
+export async function mountWhatsappReply(container, { senderPhone, inbox = null, inboxName = null, history = 'all', compact = false, onChange = null, recipientName = null }) {
   const root = el('div', compact ? 'wa-reply wa-reply-compact' : 'wa-reply');
   root.setAttribute('data-wa-reply-panel', '');
+  if (inbox) root.setAttribute('data-wa-reply-inbox', inbox);
   container.appendChild(root);
   let requestId = null;
   let lastText = '';
   let composer = null;   // il compositore attuale, se la risposta è possibile
   const done = (notice) => (onChange ? onChange(notice) : load(notice));
   const toName = recipientName || `+${senderPhone}`;
+  const q = inbox ? `?inbox=${encodeURIComponent(inbox)}` : '';
+  const fromText = inboxName ? ` Partirà da ${inboxName}.` : '';
 
   async function load(notice) {
     let st;
     try {
-      st = await apiGet(`${API}/${encodeURIComponent(senderPhone)}`);
+      st = await apiGet(`${API}/${encodeURIComponent(senderPhone)}${q}`);
     } catch (error) {
       root.replaceChildren(el('div', 'error-box', errorMessage(error)));
       return;
@@ -172,7 +179,7 @@ export async function mountWhatsappReply(container, { senderPhone, history = 'al
         send.disabled = true; cancel.disabled = true;
         send.textContent = 'Invio in corso…';
         try {
-          const out = await apiPost(`${API}/${encodeURIComponent(senderPhone)}/replies/${encodeURIComponent(String(r.id))}/resume`,
+          const out = await apiPost(`${API}/${encodeURIComponent(senderPhone)}/replies/${encodeURIComponent(String(r.id))}/resume${q}`,
             { confirm: true });
           await done(outcomeNotice(out));
         } catch (error) {
@@ -264,7 +271,7 @@ export async function mountWhatsappReply(container, { senderPhone, history = 'al
       if (!text.value.trim()) { text.focus(); return; }
       if (!requestId) requestId = newRequestId();
       confirmBox.replaceChildren(
-        el('p', null, compact ? `Inviare a ${toName}?` : `Confermi l'invio di questo testo a ${toName}? Partirà dal numero WhatsApp dell'agenzia e resterà registrato con il tuo nome.`),
+        el('p', null, compact ? `Inviare a ${toName}?${fromText}` : `Confermi l'invio di questo testo a ${toName}?${fromText || " Partirà dal numero WhatsApp dell'agenzia"} Resterà registrato con il tuo nome.`),
       );
       const send = button('Conferma invio', 'primary', 'data-wa-reply-confirm');
       const cancel = button('Annulla', 'ghost', 'data-wa-reply-cancel');
@@ -278,7 +285,7 @@ export async function mountWhatsappReply(container, { senderPhone, history = 'al
         send.disabled = true; cancel.disabled = true; text.disabled = true;
         send.textContent = 'Invio in corso…';
         try {
-          const r = await apiPost(`${API}/${encodeURIComponent(senderPhone)}`,
+          const r = await apiPost(`${API}/${encodeURIComponent(senderPhone)}${q}`,
             { text: text.value, client_request_id: requestId, confirm: true });
           const notice = outcomeNotice(r);
           requestId = null; lastText = '';

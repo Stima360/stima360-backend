@@ -123,6 +123,10 @@ APPROVED_VERSIONS = (
     "128_signature_request_signers",
     # SENTINELLA AGGIORNATA DALLA FIRMA OTP: la 129 (sfide OTP e registro probatorio; additiva).
     "129_signature_otp",
+    # SENTINELLA AGGIORNATA DA WHATSAPP DUE CASELLE: la 130 (caselle WhatsApp; additiva, chiave per casella).
+    "130_whatsapp_inboxes",
+    # SENTINELLA AGGIORNATA DALL'IMPORTAZIONE RUBRICA: la 131 (contatti riservati, contact_phones; additiva).
+    "131_contact_import",
 )
 
 

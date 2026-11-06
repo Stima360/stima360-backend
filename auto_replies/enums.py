@@ -34,6 +34,7 @@ OPERATOR_PAUSE_HOURS = 24
 
 SKIPPED = "skipped"
 SKIP_REASONS = {
+    "inbox_automations_disabled": "Casella senza automazioni: su questo numero nessuna risposta automatica.",
     "window_closed": "Finestra di 24 ore chiusa: nessuna risposta automatica possibile.",
     "stop_in_conversation": "Il cliente ha scritto STOP in questa conversazione: nessuna risposta automatica.",
     "platform_optout": "Il numero ha chiesto di non ricevere comunicazioni STIMA360: nessuna risposta automatica.",

@@ -1,11 +1,17 @@
 // STIMA360 OS — views/messaggi.js
-// «WhatsApp» (`#/messaggi[/<telefono>]`): una chat semplice, come WhatsApp Web.
+// «WhatsApp» (`#/messaggi[/<telefono>[/<casella>]]`): una chat semplice, come WhatsApp Web.
 //
 // Sinistra: le conversazioni (nome del contatto CRM, anteprima, ora, non letti),
 // con ricerca. Destra: la chat con il cliente, fumetti ricevuti a sinistra e
 // inviati a destra, e in basso il campo per scrivere (components/whatsapp-reply.js,
 // /api/message-replies: conferma esplicita, chiave di richiesta contro il doppio
 // invio, finestra di 24 ore e destinatari autorizzati decisi dal server).
+//
+// DUE CASELLE: una conversazione è (numero ricevente, cliente). Con più caselle
+// visibili l'elenco mostra su quale numero è arrivata ogni chat e si può
+// filtrare per casella; la risposta parte dallo stesso numero (`inbox` =
+// phone_number_id, deciso dal server). Lo stesso cliente su due numeri ha due
+// chat e una sola scheda contatto. Chi vede quali caselle lo decide il server.
 //
 // Ciò che non serve tutti i giorni sta nel menu «⋯»: cambiare o collegare il
 // contatto (BLOCCO-4A, /api/inbound-messages, `can_link` deciso dal server),
@@ -136,7 +142,7 @@ function contactSection(data, sender, onDone) {
   status.setAttribute('role', 'status');
   const linkTo = async (contactId) => {
     try {
-      const r = await apiPost(`${API}/conversations/${encodeURIComponent(sender)}/link`, { contact_id: contactId });
+      const r = await apiPost(`${API}/conversations/${encodeURIComponent(sender)}/link${inboxQuery(data.phone_number_id)}`, { contact_id: contactId });
       onDone(r.changed ? 'Conversazione collegata al contatto.' : 'Nessuna modifica.');
     } catch (error) {
       status.textContent = errorMessage(error);
@@ -144,7 +150,11 @@ function contactSection(data, sender, onDone) {
     }
   };
   const others = (data.contact_candidates || []).filter((c) => !data.contact || c.id !== data.contact.id);
-  if (data.contact) {
+  if (data.contact && data.contact.private) {
+    // Contatto riservato di un collega (rubrica importata): si sa che c'è, non chi è.
+    section.appendChild(el('p', null, 'Contatto riservato di un altro operatore: la scheda non è visibile a te.'));
+    if (!data.can_link) return section;
+  } else if (data.contact) {
     const how = data.contact.match === 'manual' ? 'scelto manualmente'
       : (others.length ? `riconosciuto automaticamente: il contatto attivo creato per primo fra ${others.length + 1} con questo numero` : 'riconosciuto automaticamente dalla rubrica');
     section.append(el('p', null, `${data.contact.name || `Contatto n. ${data.contact.id}`} · ${how}.`),
@@ -238,6 +248,24 @@ function propertySection(m, candidates, onDone) {
   return section;
 }
 
+/** `?inbox=<phone_number_id>`: la casella della conversazione, quando è nota. */
+export function inboxQuery(phoneNumberId) {
+  return phoneNumberId ? `?inbox=${encodeURIComponent(phoneNumberId)}` : '';
+}
+
+/** Il nome della casella da mostrare: etichetta, o il numero visibile. */
+export function inboxLabel(inbox) {
+  if (!inbox) return '';
+  return inbox.label || (inbox.display_phone_number ? `+${inbox.display_phone_number}` : `Numero …${String(inbox.phone_number_id || '').slice(-4)}`);
+}
+
+/** Il nome del contatto della conversazione: mai quello di un contatto riservato di un collega. */
+export function contactDisplayName(contact) {
+  if (!contact) return null;
+  if (contact.private) return 'Contatto riservato';
+  return contact.name || `Contatto n. ${contact.id}`;
+}
+
 // ---------------------------------------------------------------------------
 // Fumetti
 // ---------------------------------------------------------------------------
@@ -305,9 +333,13 @@ export async function renderMessaggi(container, params = []) {
   const unlinkedBtn = button('Da associare', 'chip', 'data-messages-filter-unlinked');
   filters.append(allBtn, unlinkedBtn);
   filters.hidden = true;
+  // DUE CASELLE: il filtro per numero ricevente compare solo con più caselle visibili.
+  const inboxFilters = el('div', 'chips wa-filters wa-inbox-filters');
+  inboxFilters.setAttribute('data-messages-inboxes', '');
+  inboxFilters.hidden = true;
   const list = el('div', 'wa-list');
   list.setAttribute('data-messages-list', '');
-  sideHead.append(search, filters);
+  sideHead.append(search, inboxFilters, filters);
   side.append(sideHead, list);
 
   // --- colonna destra
@@ -325,12 +357,32 @@ export async function renderMessaggi(container, params = []) {
   window.addEventListener('resize', fit);
 
   let onlyUnlinked = false;
+  let inboxFilter = null;          // phone_number_id della casella scelta, o null = tutte
+  let inboxes = [];                // le caselle visibili (dal server)
   let items = [];
   let selected = params[0] && /^\d{6,15}$/.test(params[0]) ? params[0] : null;
+  let selectedInbox = selected && params[1] && /^\d{5,20}$/.test(params[1]) ? params[1] : null;
 
   function nameOf(c) {
     const last = c.last_message;
-    return (last && last.contact && last.contact.name) || (last && last.sender_profile_name) || phoneText(c.sender_phone);
+    return (last && last.contact && contactDisplayName(last.contact)) || (last && last.sender_profile_name) || phoneText(c.sender_phone);
+  }
+
+  const isSelected = (c) => c.sender_phone === selected && (!selectedInbox || c.phone_number_id === selectedInbox);
+
+  function renderInboxFilters() {
+    inboxFilters.replaceChildren();
+    if (inboxes.length < 2) { inboxFilters.hidden = true; return; }
+    inboxFilters.hidden = false;
+    const all = button('Tutte le caselle', `chip${inboxFilter ? '' : ' active'}`, 'data-messages-inbox-all');
+    all.addEventListener('click', () => { inboxFilter = null; loadList(); });
+    inboxFilters.appendChild(all);
+    for (const ib of inboxes) {
+      const b = button(inboxLabel(ib), `chip${inboxFilter === ib.phone_number_id ? ' active' : ''}`, 'data-messages-inbox');
+      b.setAttribute('data-inbox', ib.phone_number_id);
+      b.addEventListener('click', () => { inboxFilter = ib.phone_number_id; loadList(); });
+      inboxFilters.appendChild(b);
+    }
   }
 
   function renderList() {
@@ -346,7 +398,8 @@ export async function renderMessaggi(container, params = []) {
     for (const c of shown) {
       const item = button('', 'wa-item', 'data-messages-conversation');
       item.setAttribute('data-sender', c.sender_phone);
-      if (c.sender_phone === selected) item.classList.add('active');
+      if (c.phone_number_id) item.setAttribute('data-inbox', c.phone_number_id);
+      if (isSelected(c)) item.classList.add('active');
       if (c.unread) item.classList.add('unread');
       const who = nameOf(c);
       const avatar = el('span', 'wa-avatar', initials(who));
@@ -355,6 +408,12 @@ export async function renderMessaggi(container, params = []) {
       top.append(el('strong', 'wa-item-name', who), el('span', 'wa-item-time', chatTimeText(c.last_received_at)));
       const bottom = el('span', 'wa-item-bottom');
       bottom.appendChild(el('span', 'wa-item-preview', messageSummary(c.last_message)));
+      if (inboxes.length > 1 && c.inbox) {
+        // Su quale numero è arrivata: solo quando l'agenzia ha più caselle visibili.
+        const chip = el('span', 'wa-inbox-chip', inboxLabel(c.inbox));
+        chip.setAttribute('data-messages-item-inbox', c.phone_number_id);
+        bottom.appendChild(chip);
+      }
       if (c.unread) {
         const badge = el('span', 'wa-unread', String(c.unread));
         badge.setAttribute('data-messages-unread', String(c.unread));
@@ -365,64 +424,75 @@ export async function renderMessaggi(container, params = []) {
       }
       body.append(top, bottom);
       item.append(avatar, body);
-      item.addEventListener('click', () => { selected = c.sender_phone; renderList(); loadConversation(c.sender_phone); });
+      item.addEventListener('click', () => {
+        selected = c.sender_phone; selectedInbox = c.phone_number_id || null;
+        renderList(); loadConversation(c.sender_phone, c.phone_number_id || null);
+      });
       list.appendChild(item);
     }
   }
 
   async function loadList() {
     let data;
+    const q = [];
+    if (onlyUnlinked) q.push('only_unlinked=true');
+    if (inboxFilter) q.push(`inbox=${encodeURIComponent(inboxFilter)}`);
     try {
-      data = await apiGet(`${API}/conversations${onlyUnlinked ? '?only_unlinked=true' : ''}`);
+      data = await apiGet(`${API}/conversations${q.length ? `?${q.join('&')}` : ''}`);
     } catch (error) {
       list.replaceChildren(el('div', 'error-box', errorMessage(error)));
       return;
     }
     items = data.items;
+    inboxes = Array.isArray(data.inboxes) ? data.inboxes : [];
+    renderInboxFilters();
     // «Da associare» compare solo se esiste davvero una chat senza contatto.
     if (!onlyUnlinked) filters.hidden = !items.some((c) => c.without_contact);
     renderList();
-    if (selected && items.some((c) => c.sender_phone === selected)) await loadConversation(selected);
+    const current = selected ? items.find(isSelected) : null;
+    if (current) { selectedInbox = current.phone_number_id || selectedInbox; await loadConversation(selected, selectedInbox); }
     else {
-      selected = null;
+      selected = null; selectedInbox = null;
       root.classList.remove('is-chat-open');
       detail.replaceChildren(el('div', 'wa-placeholder', 'Seleziona una chat per leggere e rispondere.'));
     }
   }
 
-  async function loadConversation(sender, notice) {
+  async function loadConversation(sender, inbox, notice) {
     root.classList.add('is-chat-open');
     detail.replaceChildren(el('p', 'muted wa-loading', 'Caricamento…'));
     let data;
     try {
-      data = await apiGet(`${API}/conversations/${encodeURIComponent(sender)}`);
+      data = await apiGet(`${API}/conversations/${encodeURIComponent(sender)}${inboxQuery(inbox)}`);
     } catch (error) {
       detail.replaceChildren(el('div', 'error-box', errorMessage(error)));
       return;
     }
+    inbox = data.phone_number_id || inbox || null;    // la casella decisa dal server
+    selectedInbox = inbox;
     // Letti per chi apre la chat: un errore (sola lettura, migrazione assente) non blocca la vista.
-    apiPost(`${API}/conversations/${encodeURIComponent(sender)}/read`, {}).then(() => {
-      const item = list.querySelector(`[data-sender="${sender}"]`);
+    apiPost(`${API}/conversations/${encodeURIComponent(sender)}/read${inboxQuery(inbox)}`, {}).then(() => {
+      const item = list.querySelector(`[data-sender="${sender}"]${inbox ? `[data-inbox="${inbox}"]` : ''}`);
       if (item) {
         item.classList.remove('unread');
         const badge = item.querySelector('[data-messages-unread]');
         if (badge) badge.remove();
       }
-      const c = items.find((x) => x.sender_phone === sender);
+      const c = items.find((x) => x.sender_phone === sender && (!inbox || x.phone_number_id === inbox));
       if (c) c.unread = 0;
     }).catch(() => {});
 
     let replies = [];
     try {
-      replies = (await apiGet(`${REPLIES_API}/${encodeURIComponent(sender)}`)).replies || [];
+      replies = (await apiGet(`${REPLIES_API}/${encodeURIComponent(sender)}${inboxQuery(inbox)}`)).replies || [];
     } catch (error) {
       replies = [];
     }
     let auto = null;
-    try { auto = await fetchAutoState(sender); } catch (error) { auto = null; }
+    try { auto = await fetchAutoState(sender, inbox); } catch (error) { auto = null; }
     const decisions = new Map(((auto && auto.decisions) || []).map((d) => [d.message_id, d]));
 
-    const who = (data.contact && data.contact.name) || data.sender_profile_name || phoneText(sender);
+    const who = contactDisplayName(data.contact) || data.sender_profile_name || phoneText(sender);
     detail.replaceChildren();
 
     // --- intestazione
@@ -432,10 +502,16 @@ export async function renderMessaggi(container, params = []) {
     back.addEventListener('click', () => { selected = null; root.classList.remove('is-chat-open'); renderList(); });
     const titleBox = el('div', 'wa-head-title');
     titleBox.append(el('strong', 'wa-head-name', who));
-    titleBox.appendChild(el('span', 'wa-head-sub', data.contact ? phoneText(sender) : `${phoneText(sender)} · nessun contatto collegato`));
+    const subParts = [phoneText(sender)];
+    if (!data.contact) subParts.push('nessun contatto collegato');
+    // DUE CASELLE: su quale numero è arrivata la chat (e da quale parte la risposta).
+    if (data.inbox && (inboxes.length > 1 || (data.other_inboxes || []).length)) subParts.push(`ricevuto su ${inboxLabel(data.inbox)}`);
+    const sub = el('span', 'wa-head-sub', subParts.join(' · '));
+    if (data.phone_number_id) sub.setAttribute('data-messages-head-inbox', data.phone_number_id);
+    titleBox.appendChild(sub);
     titleBox.setAttribute('data-messages-head-contact', data.contact ? String(data.contact.id) : 'none');
     const actions = el('div', 'wa-head-actions');
-    if (data.contact) actions.appendChild(openButton('Scheda', 'contatti', data.contact.id, 'ghost wa-head-btn'));
+    if (data.contact && !data.contact.private) actions.appendChild(openButton('Scheda', 'contatti', data.contact.id, 'ghost wa-head-btn'));
     else if (data.can_link) {
       const link = button('Collega contatto', 'ghost wa-head-btn', 'data-messages-contact-open');
       link.addEventListener('click', () => openSheet('contact'));
@@ -457,11 +533,20 @@ export async function renderMessaggi(container, params = []) {
     noticeBox.setAttribute('role', 'status');
     noticeBox.setAttribute('data-messages-notice', '');
     if (notice) noticeBox.appendChild(el('div', notice.kind === 'ok' ? 'success-box' : 'error-box', notice.text));
+    // Lo stesso cliente ha scritto anche a un altro numero: la chat è separata, il contatto è lo stesso.
+    for (const other of data.other_inboxes || []) {
+      const line = el('div', 'wa-other-inbox');
+      line.setAttribute('data-messages-other-inbox', other.phone_number_id);
+      const open = button(`Apri la chat su ${inboxLabel(other)}`, 'ghost', 'data-messages-open-other');
+      open.addEventListener('click', () => { selected = sender; selectedInbox = other.phone_number_id; renderList(); loadConversation(sender, other.phone_number_id); });
+      line.append(el('span', null, `Questo cliente ha scritto anche a ${inboxLabel(other)}.`), open);
+      noticeBox.appendChild(line);
+    }
     const sheet = el('div', 'wa-sheet');
     sheet.hidden = true;
     sheet.setAttribute('data-messages-sheet', '');
     detail.append(noticeBox, sheet);
-    const refresh = async (msg) => { await loadList(); await loadConversation(sender, msg ? { kind: 'ok', text: msg } : undefined); };
+    const refresh = async (msg) => { await loadList(); await loadConversation(sender, inbox, msg ? { kind: 'ok', text: msg } : undefined); };
     const lastIn = data.messages[0];     // il server li dà dal più recente
     const sections = {
       contact: () => contactSection(data, sender, (msg) => refresh(msg)),
@@ -480,7 +565,7 @@ export async function renderMessaggi(container, params = []) {
         card.setAttribute('data-messages-auto', '');
         card.appendChild(el('h4', null, 'Risposte automatiche'));
         if (!auto) { card.appendChild(el('p', 'muted', 'Non disponibili su questo ambiente.')); return card; }
-        card.appendChild(renderAutoPanel(auto, sender, () => refresh()));
+        card.appendChild(renderAutoPanel(auto, sender, () => refresh(), inbox));
         for (const m of data.messages) {
           if (decisions.has(m.id)) card.appendChild(renderDecision(decisions.get(m.id)));
         }
@@ -497,7 +582,7 @@ export async function renderMessaggi(container, params = []) {
     }
     const menuItems = [];
     if (data.can_link) menuItems.push(['contact', data.contact ? 'Cambia contatto' : 'Collega contatto']);
-    if (data.contact) menuItems.push(['card', 'Apri scheda contatto']);
+    if (data.contact && !data.contact.private) menuItems.push(['card', 'Apri scheda contatto']);
     if (data.can_link && lastIn) menuItems.push(['property', 'Collega immobile']);
     menuItems.push(['stime', 'Stime suggerite']);
     if (lastIn && lastIn.is_text) menuItems.push(['suggestion', 'Suggerimento di risposta']);
@@ -528,8 +613,9 @@ export async function renderMessaggi(container, params = []) {
     // --- compositore: sempre in basso. Le risposte partono solo dopo la tua conferma.
     let composer = null;
     composer = await mountWhatsappReply(detail, {
-      senderPhone: sender, history: 'pending', compact: true, recipientName: who,
-      onChange: (n) => loadConversation(sender, n),
+      senderPhone: sender, inbox, inboxName: data.inbox && (inboxes.length > 1 || (data.other_inboxes || []).length) ? inboxLabel(data.inbox) : null,
+      history: 'pending', compact: true, recipientName: who,
+      onChange: (n) => loadConversation(sender, inbox, n),
     });
     scroller.scrollTop = scroller.scrollHeight;
   }

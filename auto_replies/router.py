@@ -6,15 +6,18 @@ Montato in main.py con `require_authenticated_operator`; lo scope viene da
     GET  /settings                              stato (arresto generale, modo dell'agenzia)
     PUT  /settings                              modo dell'agenzia: off | simulate (titolare/amministratore)
     POST /tick                                  un giro di decisioni simulate (titolare/amministratore)
-    GET  /conversations/{sender_phone}          decisioni simulate e pausa della conversazione
-    POST /conversations/{sender_phone}/pause    mette in pausa la conversazione
-    POST /conversations/{sender_phone}/resume   riprende la conversazione
+    GET  /conversations/{sender_phone}?inbox=   decisioni e pausa della conversazione (di una casella)
+    POST /conversations/{sender_phone}/pause?inbox=    mette in pausa la conversazione
+    POST /conversations/{sender_phone}/resume?inbox=   riprende la conversazione
+
+DUE CASELLE: `inbox` = `phone_number_id` del numero ricevente; si omette solo
+se il cliente ha scritto a un numero soltanto.
 """
 from __future__ import annotations
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, ConfigDict
 
 from operator_auth.context import OperatorContext
@@ -26,6 +29,7 @@ from . import service
 router = APIRouter(prefix="/api/auto-replies", tags=["auto-replies"])
 
 SENDER = Path(..., pattern=r"^[0-9]{6,15}$")
+INBOX = Query(None, pattern=r"^[0-9]{5,20}$")
 
 
 class SettingsRequest(BaseModel):
@@ -59,15 +63,15 @@ def tick(ctx: OperatorContext = Depends(require_operator)):
 
 
 @router.get("/conversations/{sender_phone}")
-def conversation(sender_phone: str = SENDER, ctx: OperatorContext = Depends(require_operator)):
-    return _call(service.conversation_state, ctx, sender_phone)
+def conversation(sender_phone: str = SENDER, inbox: str | None = INBOX, ctx: OperatorContext = Depends(require_operator)):
+    return _call(service.conversation_state, ctx, sender_phone, inbox)
 
 
 @router.post("/conversations/{sender_phone}/pause")
-def pause(sender_phone: str = SENDER, ctx: OperatorContext = Depends(require_operator)):
-    return _call(service.set_pause, ctx, sender_phone, True)
+def pause(sender_phone: str = SENDER, inbox: str | None = INBOX, ctx: OperatorContext = Depends(require_operator)):
+    return _call(service.set_pause, ctx, sender_phone, True, inbox)
 
 
 @router.post("/conversations/{sender_phone}/resume")
-def resume(sender_phone: str = SENDER, ctx: OperatorContext = Depends(require_operator)):
-    return _call(service.set_pause, ctx, sender_phone, False)
+def resume(sender_phone: str = SENDER, inbox: str | None = INBOX, ctx: OperatorContext = Depends(require_operator)):
+    return _call(service.set_pause, ctx, sender_phone, False, inbox)

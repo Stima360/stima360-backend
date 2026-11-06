@@ -36,25 +36,30 @@ def set_mode(cur, agency_id: int, mode: str, user_id: int | None) -> dict:
     return dict(cur.fetchone())
 
 
-def open_pause(cur, agency_id: int, sender_phone: str) -> dict | None:
+def open_pause(cur, agency_id: int, sender_phone: str, phone_number_id: str | None = None) -> dict | None:
+    """La pausa aperta della conversazione (DUE CASELLE: di QUELLA casella; una
+    pausa senza numero, precedente alla 130, vale per ogni casella)."""
     cur.execute("SELECT id, paused_by_user_id, paused_at, reason FROM whatsapp_auto_reply_pauses "
-                "WHERE agency_id = %s AND sender_phone = %s AND resumed_at IS NULL", (agency_id, sender_phone))
+                "WHERE agency_id = %s AND sender_phone = %s AND resumed_at IS NULL "
+                "AND (phone_number_id IS NULL OR %s::text IS NULL OR phone_number_id = %s) "
+                "ORDER BY paused_at LIMIT 1", (agency_id, sender_phone, phone_number_id, phone_number_id))
     row = cur.fetchone()
     return dict(row) if row else None
 
 
-def pause(cur, agency_id: int, sender_phone: str, user_id: int) -> bool:
+def pause(cur, agency_id: int, sender_phone: str, user_id: int, phone_number_id: str | None = None) -> bool:
     """Apre la pausa; False se era gia' in pausa (indice unico parziale)."""
-    cur.execute("INSERT INTO whatsapp_auto_reply_pauses (agency_id, sender_phone, paused_by_user_id) "
-                "VALUES (%s, %s, %s) ON CONFLICT (agency_id, sender_phone) WHERE resumed_at IS NULL DO NOTHING "
-                "RETURNING id", (agency_id, sender_phone, user_id))
+    cur.execute("INSERT INTO whatsapp_auto_reply_pauses (agency_id, sender_phone, paused_by_user_id, phone_number_id) "
+                "VALUES (%s, %s, %s, %s) ON CONFLICT (agency_id, sender_phone, COALESCE(phone_number_id, '')) "
+                "WHERE resumed_at IS NULL DO NOTHING RETURNING id", (agency_id, sender_phone, user_id, phone_number_id))
     return cur.fetchone() is not None
 
 
-def resume(cur, agency_id: int, sender_phone: str, user_id: int) -> bool:
+def resume(cur, agency_id: int, sender_phone: str, user_id: int, phone_number_id: str | None = None) -> bool:
     cur.execute("UPDATE whatsapp_auto_reply_pauses SET resumed_at = NOW(), resumed_by_user_id = %s "
-                "WHERE agency_id = %s AND sender_phone = %s AND resumed_at IS NULL RETURNING id",
-                (user_id, agency_id, sender_phone))
+                "WHERE agency_id = %s AND sender_phone = %s AND resumed_at IS NULL "
+                "AND (phone_number_id IS NULL OR %s::text IS NULL OR phone_number_id = %s) RETURNING id",
+                (user_id, agency_id, sender_phone, phone_number_id, phone_number_id))
     return cur.fetchone() is not None
 
 

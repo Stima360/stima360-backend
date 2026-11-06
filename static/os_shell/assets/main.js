@@ -276,7 +276,7 @@ registerRoute('voce', (container) => renderVoce(container));
 // BLOCCO-1B: `#/agenzia`. Rotta di tenant come le altre (la guardia sotto rimanda
 // alla Rete chi non opera in un'agenzia); i permessi li decide il server.
 registerRoute('agenzia', (container) => renderAgenziaDati(container));
-// BLOCCO-4A: `#/messaggi[/<telefono>]`. I permessi li decide il server.
+// BLOCCO-4A: `#/messaggi[/<telefono>[/<casella>]]`. I permessi li decide il server (DUE CASELLE: la casella e' il phone_number_id).
 registerRoute('messaggi', (container, params = []) => renderMessaggi(container, params));
 
 initRouter(contentEl, {

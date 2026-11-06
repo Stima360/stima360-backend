@@ -6,10 +6,14 @@ scope da `require_operator` (solo sessione). L'agenzia viene sempre dalla
 sessione; il corpo dell'associazione e' chiuso (`extra=forbid`). In
 consultazione in sola lettura la POST e' bloccata dalla guardia globale.
 
-    GET  /api/inbound-messages/conversations?only_unlinked=   conversazioni
-    GET  /api/inbound-messages/conversations/{sender_phone}   messaggi di un mittente
-    POST /api/inbound-messages/conversations/{sender_phone}/read  segna letti (per l'operatore della sessione)
-    POST /api/inbound-messages/conversations/{sender_phone}/link  associa TUTTA la conversazione a un contatto
+    GET  /api/inbound-messages/conversations?only_unlinked=&inbox=   conversazioni (una per casella e cliente)
+    GET  /api/inbound-messages/conversations/{sender_phone}?inbox=   messaggi di un mittente su una casella
+    POST /api/inbound-messages/conversations/{sender_phone}/read?inbox=  segna letti (per l'operatore della sessione)
+    POST /api/inbound-messages/conversations/{sender_phone}/link?inbox=  associa TUTTA la conversazione a un contatto
+
+DUE CASELLE: `inbox` e' il `phone_number_id` del numero ricevente. Si puo'
+omettere quando il cliente ha scritto a un solo numero; con piu' numeri la
+rotta risponde 409 INBOX_REQUIRED.
     POST /api/inbound-messages/reconcile                      riconosce in rubrica le conversazioni senza contatto
     GET  /api/inbound-messages/{id}                           un messaggio (con lo storico associazioni)
     POST /api/inbound-messages/{id}/link                      associa contatto e immobile
@@ -26,6 +30,8 @@ from operator_auth.exceptions import PlatformAdminAgencyRequired
 from . import service
 
 router = APIRouter(prefix="/api/inbound-messages", tags=["inbound-messages"])
+
+INBOX = Query(None, pattern=r"^[0-9]{5,20}$")
 
 
 class LinkRequest(BaseModel):
@@ -45,19 +51,21 @@ def _call(fn, *args, **kwargs):
 
 
 @router.get("/conversations")
-def conversations(only_unlinked: bool = Query(False), ctx: OperatorContext = Depends(require_operator)):
-    return _call(service.list_conversations, ctx, only_unlinked=only_unlinked)
+def conversations(only_unlinked: bool = Query(False), inbox: str | None = INBOX,
+                  ctx: OperatorContext = Depends(require_operator)):
+    return _call(service.list_conversations, ctx, only_unlinked=only_unlinked, phone_number_id=inbox)
 
 
 @router.get("/conversations/{sender_phone}")
-def conversation(sender_phone: str = Path(..., pattern=r"^[0-9]{6,15}$"),
+def conversation(sender_phone: str = Path(..., pattern=r"^[0-9]{6,15}$"), inbox: str | None = INBOX,
                  ctx: OperatorContext = Depends(require_operator)):
-    return _call(service.conversation, ctx, sender_phone)
+    return _call(service.conversation, ctx, sender_phone, inbox)
 
 
 @router.post("/conversations/{sender_phone}/read")
-def read(sender_phone: str = Path(..., pattern=r"^[0-9]{6,15}$"), ctx: OperatorContext = Depends(require_operator)):
-    return _call(service.mark_read, ctx, sender_phone)
+def read(sender_phone: str = Path(..., pattern=r"^[0-9]{6,15}$"), inbox: str | None = INBOX,
+         ctx: OperatorContext = Depends(require_operator)):
+    return _call(service.mark_read, ctx, sender_phone, inbox)
 
 
 class ConversationLinkRequest(BaseModel):
@@ -68,8 +76,8 @@ class ConversationLinkRequest(BaseModel):
 
 @router.post("/conversations/{sender_phone}/link")
 def link_conversation(body: ConversationLinkRequest, sender_phone: str = Path(..., pattern=r"^[0-9]{6,15}$"),
-                      ctx: OperatorContext = Depends(require_operator)):
-    return _call(service.link_conversation, ctx, sender_phone, body.contact_id)
+                      inbox: str | None = INBOX, ctx: OperatorContext = Depends(require_operator)):
+    return _call(service.link_conversation, ctx, sender_phone, body.contact_id, inbox)
 
 
 @router.post("/reconcile")

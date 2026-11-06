@@ -340,6 +340,11 @@ TENANT_PREFIXES = (
     # altre - l'agenzia viene dalla sessione - e quindi deve dichiarare il
     # cookie e SOLO il cookie, come verifica il test 6 qui sopra.
     "/api/communication",
+    # SENTINELLA AGGIORNATA DA WHATSAPP DUE CASELLE e IMPORTAZIONE RUBRICA: le
+    # caselle WhatsApp e l'importazione della rubrica. Superfici operatore come
+    # le altre - l'agenzia viene dalla sessione (`require_operator` su ogni
+    # rotta) - quindi dichiarano il cookie e SOLO il cookie (test 6 qui sopra).
+    "/api/whatsapp-inboxes", "/api/contact-imports",
     # LMC-15: il ponte di acquisizione. Superficie operatore come le altre -
     # l'agenzia viene dalla sessione, mai dal client - quindi dichiara il
     # cookie e SOLO il cookie, come verifica il test 6 qui sopra.

@@ -58,6 +58,7 @@ from .database import core_cursor
 from .exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
 from operator_auth.context import SystemAgencyContext
 
+from .contact_privacy import contact_privacy_predicate
 from .scope import (
     ProgrammingError,
     creator_assignment,
@@ -198,6 +199,9 @@ def _ensure_exists_scoped(ctx, cur, table: str, entity_id: int, label: str) -> N
         if cur.fetchone() is None:
             raise NotFoundError(f"{label} {entity_id} not found")
         return
+    # IMPORTAZIONE RUBRICA: un contatto riservato di un altro operatore non esiste, per chi chiede.
+    privacy, privacy_params = contact_privacy_predicate(ctx, "s")
+    source, params = f"{source} AND {privacy}", params + privacy_params
     # CESTINO-CONTATTI-1: un contatto nel Cestino non riceve nulla di nuovo
     # (lead, ruoli, attivita' e task dell'operatore). Stessa statement, con il
     # contatto fuori dal Cestino e FOR KEY SHARE (attende uno spostamento in
@@ -249,9 +253,22 @@ def create_contact(ctx, data: dict[str, Any]) -> dict[str, Any]:
         return _row(cur.fetchone())
 
 
+def _contact_phones_installed(cur) -> bool:
+    """IMPORTAZIONE RUBRICA (131): la tabella dei numeri aggiuntivi. Letta in
+    modo tollerante (anche un cursore di prova senza quella colonna)."""
+    cur.execute("SELECT to_regclass('public.contact_phones') IS NOT NULL AS presente")
+    row = cur.fetchone()
+    if not row:
+        return False
+    value = row.get("presente") if hasattr(row, "get") else row[0]
+    return value is True
+
+
 def list_contacts(ctx, limit: int, offset: int, search: str | None, status: str | None) -> list[dict[str, Any]]:
     source, params = scoped_source(ctx, "contacts", "c")
-    where = []
+    privacy, privacy_params = contact_privacy_predicate(ctx, "c")
+    where = [privacy]
+    params.extend(privacy_params)
     if status:
         where.append("status = %s")
         params.append(status)
@@ -262,26 +279,30 @@ def list_contacts(ctx, limit: int, offset: int, search: str | None, status: str 
     # CESTINO-CONTATTI-1: un contatto nel Cestino non e' mai nella lista, nella
     # ricerca globale o nei selettori; si vede solo dal Cestino.
     where.append(contact_trash.live("c"))
-    if search:
-        where.append(
-            """(
-                display_name ILIKE %s OR first_name ILIKE %s OR last_name ILIKE %s OR
-                company_name ILIKE %s OR email_normalized ILIKE %s OR phone_normalized ILIKE %s
-            )"""
-        )
-        term = f"%{search.strip()}%"
-        params.extend([term] * 6)
-    clause = " AND " + " AND ".join(where) if where else ""
-    params.extend([limit, offset])
+    term = f"%{search.strip()}%" if search else None
     with core_cursor() as (_, cur):
+        if search:
+            # IMPORTAZIONE RUBRICA: la ricerca per numero trova anche il terzo numero del contatto.
+            extra_phones = (" OR EXISTS (SELECT 1 FROM contact_phones cp WHERE cp.contact_id = c.id "
+                            "AND cp.phone_normalized ILIKE %s)") if _contact_phones_installed(cur) else ""
+            where.append(
+                """(
+                    display_name ILIKE %s OR first_name ILIKE %s OR last_name ILIKE %s OR
+                    company_name ILIKE %s OR email_normalized ILIKE %s OR phone_normalized ILIKE %s
+                """ + extra_phones + ")"
+            )
+            params.extend([term] * (7 if extra_phones else 6))
+        clause = " AND " + " AND ".join(where) if where else ""
+        params.extend([limit, offset])
         cur.execute(f"SELECT * FROM {source}{clause} ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s", params)
         return [dict(row) for row in cur.fetchall()]
 
 
 def get_contact(ctx, contact_id: int) -> dict[str, Any]:
     source, params = scoped_source(ctx, "contacts", "c")
+    privacy, privacy_params = contact_privacy_predicate(ctx, "c")
     with core_cursor() as (_, cur):
-        cur.execute(f"SELECT * FROM {source} AND c.id = %s", params + [contact_id])
+        cur.execute(f"SELECT * FROM {source} AND {privacy} AND c.id = %s", params + privacy_params + [contact_id])
         contact = _row(cur.fetchone())
         if not contact:
             raise NotFoundError(f"contact {contact_id} not found")
@@ -289,6 +310,13 @@ def get_contact(ctx, contact_id: int) -> dict[str, Any]:
         # child table needs no predicate of its own.
         cur.execute("SELECT * FROM contact_roles WHERE contact_id = %s ORDER BY created_at, id", (contact_id,))
         contact["roles"] = [dict(row) for row in cur.fetchall()]
+        # IMPORTAZIONE RUBRICA (131): tutti i numeri del contatto, nell'ordine della rubrica.
+        if _contact_phones_installed(cur):
+            cur.execute("SELECT id, phone, phone_normalized, label, position, source FROM contact_phones "
+                        "WHERE contact_id = %s ORDER BY position, id", (contact_id,))
+            contact["phones"] = [dict(row) for row in cur.fetchall()]
+        else:
+            contact["phones"] = []
         return contact
 
 
@@ -298,12 +326,13 @@ def update_contact(ctx, contact_id: int, data: dict[str, Any]) -> dict[str, Any]
     if not data:
         return get_contact(ctx, contact_id)
     predicate, scope_params = scoped_predicate(ctx, "contacts", "c")
+    privacy, privacy_params = contact_privacy_predicate(ctx, "c")
     assignments = [f"{key} = %s" for key in data]
-    params = list(data.values()) + [contact_id] + scope_params
+    params = list(data.values()) + [contact_id] + scope_params + privacy_params
     with core_cursor(commit=True) as (_, cur):
         cur.execute(
             f"UPDATE contacts c SET {', '.join(assignments)}, updated_at = NOW() "
-            f"WHERE c.id = %s AND {predicate} RETURNING *",
+            f"WHERE c.id = %s AND {predicate} AND {privacy} RETURNING *",
             params,
         )
         row = cur.fetchone()

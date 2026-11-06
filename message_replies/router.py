@@ -6,16 +6,20 @@ scope da `require_operator` (solo sessione). Il corpo e' chiuso
 e numero mittente non si possono passare. In consultazione in sola lettura
 la POST e' bloccata dalla guardia globale.
 
-    GET  /api/message-replies/conversations/{sender_phone}   stato: finestra, STOP, blocchi, risposte
-    POST /api/message-replies/conversations/{sender_phone}   invia una risposta di testo (una volta sola)
-    POST /api/message-replies/conversations/{sender_phone}/replies/{reply_id}/resume
+    GET  /api/message-replies/conversations/{sender_phone}?inbox=   stato: finestra, STOP, blocchi, risposte
+    POST /api/message-replies/conversations/{sender_phone}?inbox=   invia una risposta di testo (una volta sola)
+    POST /api/message-replies/conversations/{sender_phone}/replies/{reply_id}/resume?inbox=
          riprende una risposta rimasta in coda e mai presa in carico (mai una incerta)
+
+DUE CASELLE: `inbox` (il `phone_number_id` del numero ricevente) sceglie la
+conversazione; la risposta parte da quel numero. Si puo' omettere solo se il
+cliente ha scritto a un numero soltanto (altrimenti 409 INBOX_REQUIRED).
 """
 from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Path
+from fastapi import APIRouter, Depends, HTTPException, Path, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from communication.exceptions import ConflictError, NotFoundError, ValidationError
@@ -29,6 +33,7 @@ from .enums import TEXT_MAX
 router = APIRouter(prefix="/api/message-replies", tags=["message-replies"])
 
 SENDER = Path(..., pattern=r"^[0-9]{6,15}$")
+INBOX = Query(None, pattern=r"^[0-9]{5,20}$")
 
 
 class ReplyRequest(BaseModel):
@@ -61,16 +66,17 @@ def _call(fn, *args):
 
 
 @router.get("/conversations/{sender_phone}")
-def state(sender_phone: str = SENDER, ctx: OperatorContext = Depends(require_operator)):
-    return _call(service.reply_state, ctx, sender_phone)
+def state(sender_phone: str = SENDER, inbox: str | None = INBOX, ctx: OperatorContext = Depends(require_operator)):
+    return _call(service.reply_state, ctx, sender_phone, inbox)
 
 
 @router.post("/conversations/{sender_phone}")
-def reply(body: ReplyRequest, sender_phone: str = SENDER, ctx: OperatorContext = Depends(require_operator)):
-    return _call(service.send_reply, ctx, sender_phone, body.text, str(body.client_request_id), body.confirm)
+def reply(body: ReplyRequest, sender_phone: str = SENDER, inbox: str | None = INBOX,
+          ctx: OperatorContext = Depends(require_operator)):
+    return _call(service.send_reply, ctx, sender_phone, body.text, str(body.client_request_id), body.confirm, inbox)
 
 
 @router.post("/conversations/{sender_phone}/replies/{reply_id}/resume")
-def resume(body: ResumeRequest, sender_phone: str = SENDER, reply_id: int = Path(..., ge=1),
+def resume(body: ResumeRequest, sender_phone: str = SENDER, reply_id: int = Path(..., ge=1), inbox: str | None = INBOX,
            ctx: OperatorContext = Depends(require_operator)):
-    return _call(service.resume_reply, ctx, sender_phone, reply_id, body.confirm)
+    return _call(service.resume_reply, ctx, sender_phone, reply_id, body.confirm, inbox)

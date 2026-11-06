@@ -86,7 +86,11 @@ NUOVE = ("115_agency_logos", "116_property_valuations", "117_property_valuation_
          # SENTINELLA AGGIORNATA DALL'INTEGRAZIONE DOCUMENSO: la 128 (firmatari delle richieste di firma).
          "128_signature_request_signers",
          # SENTINELLA AGGIORNATA DALLA FIRMA OTP: la 129 (sfide OTP e registro probatorio).
-         "129_signature_otp")
+         "129_signature_otp",
+         # SENTINELLA AGGIORNATA DA WHATSAPP DUE CASELLE: la 130 (caselle, accessi, chiave per casella).
+         "130_whatsapp_inboxes",
+         # SENTINELLA AGGIORNATA DALL'IMPORTAZIONE RUBRICA: la 131 (contatti riservati, numeri, importazioni).
+         "131_contact_import")
 BASE = {"characteristics": "Trilocale sintetico al secondo piano.",
         "surface": {"value": "85", "kind": "commerciale", "source": "planimetria"},
         "rationale": "Motivazione sintetica: stato buono, zona servita.",

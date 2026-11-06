@@ -94,6 +94,10 @@ from message_replies.router import router as message_replies_router
 from reply_suggestions.router import router as reply_suggestions_router
 # BLOCCO-4D: motore delle risposte automatiche, solo simulazione (`/api/auto-replies`).
 from auto_replies.router import router as auto_replies_router
+# WHATSAPP DUE CASELLE: le caselle (numeri riceventi) dell'agenzia (`/api/whatsapp-inboxes`).
+from whatsapp_inboxes.router import router as whatsapp_inboxes_router
+# IMPORTAZIONE RUBRICA: Contatti → Importa rubrica (`/api/contact-imports`).
+from contact_imports.router import router as contact_imports_router
 # BLOCCO-6A: fogli visita (`/api/visit-sheets`).
 from visit_sheets.router import router as visit_sheets_router
 # BLOCCO-6B: richieste di firma (`/api/signature-requests`), oggi solo adattatore simulato.
@@ -235,6 +239,10 @@ app.include_router(message_replies_router, dependencies=[Depends(require_authent
 app.include_router(reply_suggestions_router, dependencies=[Depends(require_authenticated_operator)])
 # BLOCCO-4D: stesso montaggio; nessuna rotta invia o accoda. Arresto generale: WHATSAPP_AUTO_REPLY_MODE.
 app.include_router(auto_replies_router, dependencies=[Depends(require_authenticated_operator)])
+# WHATSAPP DUE CASELLE: stesso montaggio; permessi in `whatsapp_inboxes.service` (configura solo il titolare).
+app.include_router(whatsapp_inboxes_router, dependencies=[Depends(require_authenticated_operator)])
+# IMPORTAZIONE RUBRICA: stesso montaggio; nessun invio, contatti riservati a chi importa.
+app.include_router(contact_imports_router, dependencies=[Depends(require_authenticated_operator)])
 # BLOCCO-6A: stesso montaggio; visibilita' dell'Agenda, nessuna pubblicazione al proprietario.
 app.include_router(visit_sheets_router, dependencies=[Depends(require_authenticated_operator)])
 # BLOCCO-6B: stesso montaggio; nessuna firma valida finche' non si integra un fornitore reale.

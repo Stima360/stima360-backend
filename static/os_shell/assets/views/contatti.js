@@ -47,6 +47,8 @@ import { renderTable, bindTableRowClicks, escapeHtml, formatDate } from '../comp
 // contatto che l'elenco mostra (gia' nello scope di chi guarda): blocchi e
 // storico li decide il backend.
 import { bindRowDeletes, rowDeleteColumn, rowDeleteDialogHtml } from '../trash/trash-row-actions.js';
+// IMPORTAZIONE RUBRICA: «Importa rubrica» (.vcf, anteprima, «Importa tutti»; components/contact-import.js).
+import { openContactImportDialog } from '../components/contact-import.js';
 
 const PAGE_SIZE = 50;
 
@@ -67,6 +69,7 @@ export async function renderContatti(container, { nuovo = false } = {}) {
       <div class="list-toolbar">
         <input id="contatti-search" class="input" type="search" placeholder="Cerca per nome, telefono o email…">
         <button type="button" id="contatti-new-btn" class="btn primary">+ Nuovo contatto</button>
+        <button type="button" id="contatti-import-btn" class="btn ghost" data-contatti-import>Importa rubrica</button>
       </div>
       <div id="contatti-feedback"></div>
       <div id="contatti-list-area" class="trash-row-host"><p class="muted">Caricamento…</p></div>
@@ -74,6 +77,7 @@ export async function renderContatti(container, { nuovo = false } = {}) {
       ${rowDeleteDialogHtml()}
     </div>
     <dialog id="contact-create-dialog" class="modal"></dialog>
+    <dialog id="contact-import-dialog" class="modal modal-wide"></dialog>
   `;
 
   const searchInput = container.querySelector('#contatti-search');
@@ -133,6 +137,10 @@ export async function renderContatti(container, { nuovo = false } = {}) {
     if (prevBtn) prevBtn.onclick = () => { offset = Math.max(0, offset - PAGE_SIZE); load(); };
     if (nextBtn) nextBtn.onclick = () => { offset += PAGE_SIZE; load(); };
   }
+
+  container.querySelector('#contatti-import-btn').addEventListener('click', () => {
+    openContactImportDialog(container.querySelector('#contact-import-dialog'), async () => { offset = 0; await load(); });
+  });
 
   searchInput.addEventListener('input', () => {
     offset = 0;

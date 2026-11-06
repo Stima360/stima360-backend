@@ -188,7 +188,11 @@ def test_reply_ui_confirms_reuses_the_request_key_and_never_calls_the_old_admin_
         assert reason in js, reason
     # il corpo inviato e' SOLO testo, chiave e conferma: destinatario e mittente li decide il server
     assert "{ text: text.value, client_request_id: requestId, confirm: true }" in js
-    assert "phone_number_id" not in js
+    # SENTINELLA AGGIORNATA DA WHATSAPP DUE CASELLE: il browser indica la casella
+    # (`?inbox=` nella rotta, il phone_number_id della conversazione che sta
+    # leggendo) ma non nel corpo: destinatario e numero mittente restano
+    # decisi e verificati dal server.
+    assert "`?inbox=${encodeURIComponent(inbox)}`" in js and "inbox" not in "{ text: text.value, client_request_id: requestId, confirm: true }"
 
 
 # ---------------------------------------------------------------------------

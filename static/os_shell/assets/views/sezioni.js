@@ -22,6 +22,7 @@ import { renderAbbinamenti } from './abbinamenti.js';
 import { renderAgenziaDati } from './agenzia-dati.js';
 import { renderAutomazioni } from './automazioni.js';
 import { renderCestino } from './cestino.js';
+import { renderCaselleWhatsapp } from './caselle-whatsapp.js';
 
 function el(tag, className, text) {
   const node = document.createElement(tag);
@@ -92,6 +93,8 @@ export async function renderImpostazioni(container, params = [], { tenant = fals
   if (tenant) {
     tabs.push({ key: 'agenzia', label: 'Dati agenzia e logo', render: (c) => renderAgenziaDati(c) });
     tabs.push({ key: 'automazioni', label: 'Automazioni', render: (c) => renderAutomazioni(c) });
+    // DUE CASELLE: le caselle WhatsApp dell'agenzia (etichetta, automazioni, accesso). Configura il titolare.
+    tabs.push({ key: 'whatsapp', label: 'Caselle WhatsApp', render: (c) => renderCaselleWhatsapp(c) });
   }
   tabs.push({ key: 'cestino', label: 'Cestino', render: (c) => renderCestino(c, { platformAdmin, platformOnly, meId }) });
   return renderTabbed(container, { route: 'impostazioni', active: params[0], tabs });

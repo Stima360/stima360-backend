@@ -6,6 +6,11 @@ operatore, testo, data e stato scritti dal server. Destinatario e numero
 mittente vengono dalla conversazione e dalla configurazione del server
 (`WHATSAPP_INBOUND_ROUTES`), mai dal browser.
 
+DUE CASELLE: la conversazione e' di UNA casella (numero ricevente), e la
+risposta parte da QUEL numero, con il token di quella casella
+(`WHATSAPP_TOKEN__<phone_number_id>`, altrimenti `WHATSAPP_TOKEN`). Lo stesso
+cliente su due numeri ha due conversazioni e due finestre di 24 ore.
+
 Ordine di un invio, per non mandare mai due volte la stessa risposta:
 
     1. controlli: agenzia, visibilita' della conversazione, contatto collegato,
@@ -50,8 +55,9 @@ from consent import do_not_contact
 from core.database import core_cursor
 from inbound_messages import repository as inbound_repository
 from inbound_messages import routing
-from inbound_messages.service import is_stop_request
+from inbound_messages.service import InboundError, is_stop_request, resolve_inbox
 from operator_auth.permissions import sees_all_agency_records
+from whatsapp_inboxes import service as inboxes
 
 from . import repository
 from . import transport as transport_module
@@ -115,12 +121,20 @@ def _iso(value):
     return value.isoformat() if hasattr(value, "isoformat") else value
 
 
-def _conversation(cur, ctx, sender_phone: str) -> dict:
-    """Lo stato della conversazione per rispondere: tutto ricavato dal server."""
+def _conversation(cur, ctx, sender_phone: str, phone_number_id: str | None = None) -> dict:
+    """Lo stato della conversazione (di UNA casella) per rispondere: tutto
+    ricavato dal server. Senza `phone_number_id`: l'unica casella su cui il
+    cliente ha scritto (409 se sono piu' d'una)."""
     agency_id = ctx.require_agency()
     if not inbound_repository.installed(cur):
         raise NotFound("NOT_FOUND", NOT_FOUND_MESSAGE)
-    last = inbound_repository.last_inbound(cur, agency_id, sender_phone, agent_user_id=_agent_scope(ctx))
+    try:
+        number = resolve_inbox(cur, ctx, sender_phone, phone_number_id)
+    except InboundError as exc:
+        raise (Blocked if exc.status == 409 else NotFound)(exc.code, str(exc)) from exc
+    hidden = inboxes.hidden_numbers(cur, ctx)
+    last = inbound_repository.last_inbound(cur, agency_id, sender_phone, agent_user_id=_agent_scope(ctx),
+                                           phone_number_id=number, hidden_numbers=hidden)
     if last is None:
         raise NotFound("NOT_FOUND", NOT_FOUND_MESSAGE)
     agencies = routing.configured_routes().get(last["phone_number_id"] or "")
@@ -129,14 +143,17 @@ def _conversation(cur, ctx, sender_phone: str) -> dict:
     window_open = _now() < closes_at - timedelta(minutes=WINDOW_SAFETY_MINUTES)
     # Lo STOP letto dalla conversazione di QUESTA agenzia (mai dal registro di
     # piattaforma, che vale per tutte): un'informazione, non un permesso.
+    # Vale per il cliente, su ogni casella: la rinuncia e' della persona.
     stop_at = next((m["provider_timestamp"] or m["received_at"]
                     for m in inbound_repository.conversation_messages(cur, agency_id, sender_phone,
-                                                                     agent_user_id=_agent_scope(ctx), limit=REPLIES_LIMIT)
+                                                                     agent_user_id=_agent_scope(ctx), limit=REPLIES_LIMIT,
+                                                                     hidden_numbers=hidden)
                     if is_stop_request(SimpleNamespace(message_type=m["message_type"], text_body=m["text_body"]))), None)
     blocks = []
     if not transport_module.enabled():
         blocks.append(("OUTBOUND_DISABLED", OUTBOUND_DISABLED_MESSAGE))
     elif not transport_module.credentials_present():
+        # il token della singola casella (WHATSAPP_TOKEN__<numero>) lo sceglie il trasporto all'invio
         blocks.append(("CREDENTIALS_MISSING", CREDENTIALS_MISSING_MESSAGE))
     elif not transport_module.graph_version():
         blocks.append(("GRAPH_VERSION_MISSING", GRAPH_VERSION_MISSING_MESSAGE))
@@ -151,16 +168,21 @@ def _conversation(cur, ctx, sender_phone: str) -> dict:
         blocks.append(("DO_NOT_CONTACT", DO_NOT_CONTACT_MESSAGE))
     if not window_open:
         blocks.append(("WINDOW_CLOSED", WINDOW_CLOSED_MESSAGE))
-    return {"last": last, "closes_at": closes_at, "window_open": window_open, "stop_at": stop_at, "blocks": blocks}
+    info = inboxes.describe(cur, agency_id, [number]).get(number) or {}
+    return {"last": last, "phone_number_id": number, "inbox": info, "closes_at": closes_at,
+            "window_open": window_open, "stop_at": stop_at, "blocks": blocks}
 
 
 def _ledger_rows(cur, ctx, conv: dict, sender_phone: str) -> list[dict]:
+    """Le risposte di QUESTA conversazione: stesso cliente e stessa casella
+    (il numero mittente e' nei metadati della risposta)."""
     contact_id = conv["last"]["contact_id"]
     if contact_id is None:
         return []
     return [m for m in communication.list_for_contact(ctx, contact_id, limit=REPLIES_LIMIT, cur=cur)
             if m["channel"] == CHANNEL and m["reason_code"] == REASON
-            and m["destination_snapshot"] == sender_phone]
+            and m["destination_snapshot"] == sender_phone
+            and (_metadata(m).get("phone_number_id") or conv["phone_number_id"]) == conv["phone_number_id"]]
 
 
 def _resumable(ctx, sender_phone: str, message: dict) -> bool:
@@ -196,13 +218,14 @@ def _replies(cur, ctx, conv: dict, sender_phone: str) -> list[dict]:
 
 def _send_time_block(ctx, sender_phone: str, enqueued_from: dict) -> str | None:
     """Il motivo per NON chiamare il trasporto adesso, o None. Ricalcolato con
-    l'ora attuale e i dati attuali, non con quelli dell'accodamento."""
+    l'ora attuale e i dati attuali, non con quelli dell'accodamento, sulla
+    STESSA casella da cui la risposta era stata accodata."""
     try:
         with core_cursor() as (_, cur):
             if not repository.operator_still_authorized(cur, ctx):
                 return "operator_not_authorized"
-            conv = _conversation(cur, ctx, sender_phone)
-    except NotFound:
+            conv = _conversation(cur, ctx, sender_phone, enqueued_from["phone_number_id"])
+    except (NotFound, Blocked):
         return "conversation_not_visible"
     if conv["blocks"]:
         return conv["blocks"][0][0].lower()
@@ -213,12 +236,15 @@ def _send_time_block(ctx, sender_phone: str, enqueued_from: dict) -> str | None:
     return None
 
 
-def reply_state(ctx, sender_phone: str) -> dict:
+def reply_state(ctx, sender_phone: str, phone_number_id: str | None = None) -> dict:
     with core_cursor() as (_, cur):
-        conv = _conversation(cur, ctx, sender_phone)
+        conv = _conversation(cur, ctx, sender_phone, phone_number_id)
         replies = _replies(cur, ctx, conv, sender_phone)
     return {
         "sender_phone": sender_phone,
+        "phone_number_id": conv["phone_number_id"],
+        "inbox": {"phone_number_id": conv["phone_number_id"], "label": conv["inbox"].get("label"),
+                  "display_phone_number": conv["inbox"].get("display_phone_number")},
         "can_reply": not conv["blocks"],
         "blocks": [{"code": c, "message": m} for c, m in conv["blocks"]],
         "window": {"open": conv["window_open"], "last_customer_message_at": _iso(conv["last"]["customer_at"]),
@@ -283,13 +309,14 @@ def _deliver(ctx, sender_phone: str, message: dict) -> None:
                                              error_detail=result.error_detail)
 
 
-def _state_with(ctx, sender_phone: str, message_id: int) -> dict:
-    state = reply_state(ctx, sender_phone)
+def _state_with(ctx, sender_phone: str, message_id: int, phone_number_id: str | None = None) -> dict:
+    state = reply_state(ctx, sender_phone, phone_number_id)
     state["reply"] = next((r for r in state["replies"] if r["id"] == message_id), None)
     return state
 
 
-def send_reply(ctx, sender_phone: str, text: str, client_request_id: str, confirmed: bool) -> dict:
+def send_reply(ctx, sender_phone: str, text: str, client_request_id: str, confirmed: bool,
+               phone_number_id: str | None = None) -> dict:
     agency_id = ctx.require_agency()
     text = (text or "").strip()
     if not text:
@@ -297,7 +324,7 @@ def send_reply(ctx, sender_phone: str, text: str, client_request_id: str, confir
     if not confirmed:
         raise Blocked("CONFIRM_REQUIRED", CONFIRM_REQUIRED_MESSAGE)
     with core_cursor() as (_, cur):
-        conv = _conversation(cur, ctx, sender_phone)
+        conv = _conversation(cur, ctx, sender_phone, phone_number_id)
     _raise_block(conv)
     last = conv["last"]
 
@@ -312,17 +339,17 @@ def send_reply(ctx, sender_phone: str, text: str, client_request_id: str, confir
     # percorso. `sending`, `indeterminate` e ogni esito finale non ripartono.
     if _resumable(ctx, sender_phone, message):
         _deliver(ctx, sender_phone, message)
-    state = _state_with(ctx, sender_phone, message["id"])
+    state = _state_with(ctx, sender_phone, message["id"], conv["phone_number_id"])
     state["created"] = queued["created"]
     return state
 
 
-def resume_reply(ctx, sender_phone: str, reply_id: int, confirmed: bool) -> dict:
+def resume_reply(ctx, sender_phone: str, reply_id: int, confirmed: bool, phone_number_id: str | None = None) -> dict:
     """«Riprendi invio»: la stessa risposta, ancora in coda e mai presa in carico."""
     if not confirmed:
         raise Blocked("CONFIRM_REQUIRED", CONFIRM_REQUIRED_MESSAGE)
     with core_cursor() as (_, cur):
-        conv = _conversation(cur, ctx, sender_phone)
+        conv = _conversation(cur, ctx, sender_phone, phone_number_id)
         message = next((m for m in _ledger_rows(cur, ctx, conv, sender_phone) if m["id"] == reply_id), None)
     if message is None:
         raise NotFound("NOT_FOUND", NOT_FOUND_MESSAGE)
@@ -330,7 +357,7 @@ def resume_reply(ctx, sender_phone: str, reply_id: int, confirmed: bool) -> dict
         raise Blocked("NOT_RESUMABLE", NOT_RESUMABLE_MESSAGE)
     _raise_block(conv)
     _deliver(ctx, sender_phone, message)
-    state = _state_with(ctx, sender_phone, message["id"])
+    state = _state_with(ctx, sender_phone, message["id"], conv["phone_number_id"])
     state["created"] = False
     return state
 

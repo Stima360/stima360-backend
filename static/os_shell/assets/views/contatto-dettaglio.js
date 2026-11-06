@@ -984,6 +984,7 @@ export async function renderContattoDettaglio(container, params = []) {
       switch (key) {
         case 'panoramica':
           contentEl.innerHTML = renderPanoramica(contact, data);
+          bindContactShare(contentEl, contact, data);
           void hydrateSellerIntent(contentEl, data, lazyCache);
           void hydrateBuyerPressure(
             contentEl.querySelector('[data-buyer-pressure-mount]'),
@@ -1072,11 +1073,42 @@ function assignmentErrorMessage(error) {
 
 // --- Panoramica -------------------------------------------------------
 
+// IMPORTAZIONE RUBRICA: i numeri oltre ai due della scheda (contact_phones) e la riservatezza.
+export function extraPhonesText(contact) {
+  const known = new Set([contact.phone_normalized, contact.phone, contact.secondary_phone].filter(Boolean));
+  const extra = (contact.phones || []).filter((p) => !known.has(p.phone) && !known.has(p.phone_normalized));
+  return extra.map((p) => (p.label ? `${p.phone} (${p.label})` : p.phone)).join(', ');
+}
+
+// IMPORTAZIONE RUBRICA: «Condividi con l'agenzia» (POST /api/contact-imports/contacts/{id}/share):
+// solo chi ha importato il contatto riservato; il server rifiuta gli altri.
+function bindContactShare(contentEl, contact, data) {
+  const btn = contentEl.querySelector('[data-contact-share]');
+  if (!btn) return;
+  btn.addEventListener('click', async () => {
+    btn.disabled = true;
+    btn.textContent = 'Condivisione…';
+    try {
+      await apiPost(`/api/contact-imports/contacts/${contact.id}/share`, {});
+      contact.private_user_id = null;
+      contentEl.innerHTML = renderPanoramica(contact, data);
+      void hydrateSellerIntent(contentEl, data, lazyCache);
+    } catch (error) {
+      btn.disabled = false;
+      btn.textContent = 'Condividi con l’agenzia';
+      const line = btn.parentElement;
+      if (line) line.appendChild(document.createTextNode(` ${error.message || 'Non riuscito.'}`));
+    }
+  });
+}
+
 function renderPanoramica(contact, data) {
   const fields = [
     ['Email', contact.email], ['Telefono', contact.phone], ['Secondo telefono', contact.secondary_phone],
+    ['Altri numeri', extraPhonesText(contact)],
     ['Fonte', contact.source], ['Stato', contact.status],
     ['Consenso marketing', contact.marketing_consent ? 'Sì' : 'No'],
+    ['Visibilità', contact.private_user_id ? 'Riservato: lo vedi solo tu' : 'Agenzia'],
   ];
   const relCounts = [
     ['Lead', (data.leads || []).length],
@@ -1092,6 +1124,7 @@ function renderPanoramica(contact, data) {
     <div class="detail-grid">
       ${fields.map(([label, value]) => `<div class="detail-item"><label>${escapeHtml(label)}</label>${escapeHtml(value || '—')}</div>`).join('')}
     </div>
+    ${contact.private_user_id ? '<p class="muted" data-contact-private>Contatto riservato (rubrica importata): non compare a titolare, amministratori e colleghi. <button type="button" class="btn ghost" data-contact-share>Condividi con l’agenzia</button></p>' : ''}
     <h3 class="section-title">Note</h3>
     <p>${escapeHtml(contact.notes || 'Nessuna nota.')}</p>
     ${renderOwnerHome(data.owner_home)}

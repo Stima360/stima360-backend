@@ -100,12 +100,15 @@ def test_g_the_marker_never_points_to_another_conversation_nor_moves_back(wa):
         finally:
             conn.close()
 
-    insert = ("INSERT INTO whatsapp_inbound_reads (agency_id, user_id, sender_phone, last_read_message_id) "
-              "VALUES (%s, %s, %s, %s)")
+    # SENTINELLA AGGIORNATA DA WHATSAPP DUE CASELLE: con la 130 il segno porta anche il numero ricevente.
+    insert = ("INSERT INTO whatsapp_inbound_reads (agency_id, user_id, phone_number_id, sender_phone, last_read_message_id) "
+              "VALUES (%s, %s, %s, %s, %s)")
     for bad in (m2, mb):
         with pytest.raises(psycopg2.Error, match="another conversation"):
-            run(insert, (ids["a"], ids["owner_a"], s1, bad))
-    run(insert, (ids["a"], ids["owner_a"], s1, m1[1]))
+            run(insert, (ids["a"], ids["owner_a"], NUMBER_A, s1, bad))
+    with pytest.raises(psycopg2.Error, match="another conversation"):          # stesso cliente, altra casella
+        run(insert, (ids["a"], ids["owner_a"], NUMBER_B, s1, m1[1]))
+    run(insert, (ids["a"], ids["owner_a"], NUMBER_A, s1, m1[1]))
     with pytest.raises(psycopg2.Error, match="only forward moves"):
         run("UPDATE whatsapp_inbound_reads SET last_read_message_id = %s WHERE sender_phone = %s",
             (m1[0], s1))
@@ -165,4 +168,9 @@ def test_z_without_migration_126_the_inbox_works_and_unread_is_unavailable(wa):
         assert len(owner.get(f"{API}/conversations/{sender}").json()["messages"]) == 2
     finally:
         _q(wa, up)
+        # SENTINELLA AGGIORNATA DA WHATSAPP DUE CASELLE: la 130 porta il numero
+        # ricevente nella chiave dei segni di lettura; rimessa la 126 serve anche quella parte.
+        up130 = (Path(__file__).resolve().parents[1] / "migrations" / "130_whatsapp_inboxes.sql").read_text()
+        reads_130 = up130[up130.index("-- Letti/non letti: per casella."):up130.index("-- Pausa delle risposte automatiche")]
+        _q(wa, reads_130)
     assert owner.post(f"{API}/conversations/{sender}/read").status_code == 200

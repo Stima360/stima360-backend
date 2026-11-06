@@ -5,9 +5,14 @@ Regole:
   .normalize_phone`: `+39`, `0039`, `39`, spazi, trattini e numeri nazionali
   diventano lo stesso valore), mai le ultime cifre o una parte;
 - si guardano TUTTI i campi telefonici dello schema `contacts`: `phone`
-  (tramite `phone_normalized`, ricalcolato dal valore grezzo se manca) e
-  `secondary_phone` (normalizzato in lettura, non ha una colonna normalizzata);
-- solo i contatti vivi della STESSA agenzia;
+  (tramite `phone_normalized`, ricalcolato dal valore grezzo se manca),
+  `secondary_phone` (normalizzato in lettura, non ha una colonna normalizzata)
+  e, con la migrazione 131, ogni altro numero in `contact_phones` (rubrica
+  importata: un contatto conserva tutti i suoi numeri);
+- solo i contatti vivi della STESSA agenzia; un contatto RISERVATO (importato
+  da un operatore, `private_user_id`) e' candidato per il riconoscimento
+  automatico ma nell'elenco mostrato a un operatore compaiono solo i contatti
+  che quell'operatore puo' vedere;
 - con UN contatto si collega quello; con PIU' contatti si collega da solo il
   contatto ATTIVO (`status = 'active'`, non eliminato) creato per primo
   (`created_at` piu' vecchio, a parita' l'id piu' basso): gli altri restano
@@ -38,24 +43,42 @@ _NORMALIZED = ("(CASE WHEN " + _NO_00 + " = '' THEN NULL WHEN " + _NO_00 + " LIK
 
 MATCH_SQL = ("(coalesce(c.phone_normalized, " + _NORMALIZED.format(col="c.phone") + ") = %(phone)s "
              "OR " + _NORMALIZED.format(col="c.secondary_phone") + " = %(phone)s)")
+#: Con la 131: anche i numeri aggiuntivi del contatto.
+MATCH_SQL_WITH_PHONES = ("(" + MATCH_SQL + " OR EXISTS (SELECT 1 FROM contact_phones cp WHERE cp.contact_id = c.id "
+                         "AND cp.phone_normalized = %(phone)s))")
+#: Il contatto riservato di un altro operatore non si mostra (letto via to_jsonb: valido anche senza la 131).
+VISIBLE_SQL = "((to_jsonb(c)->>'private_user_id') IS NULL OR (to_jsonb(c)->>'private_user_id')::bigint = %(viewer)s)"
+
+
+def phones_installed(cur) -> bool:
+    cur.execute("SELECT to_regclass('public.contact_phones') IS NOT NULL AS presente")
+    return bool(cur.fetchone()["presente"])
+
+
+def match_sql(cur) -> str:
+    return MATCH_SQL_WITH_PHONES if phones_installed(cur) else MATCH_SQL
 
 
 def canonical(phone: str | None) -> str | None:
     return normalize_phone(phone)
 
 
-def candidates(cur, agency_id: int, phone: str, *, limit: int = 20) -> list[dict]:
+def candidates(cur, agency_id: int, phone: str, *, limit: int = 20, viewer_user_id: int | None = None) -> list[dict]:
     """I contatti vivi dell'agenzia con quel numero (intero) in uno dei campi
-    telefonici. Ordinati per id: l'ordine non decide mai nulla."""
+    telefonici. Ordinati per `created_at`, id: l'ordine non decide mai nulla.
+    Con `viewer_user_id`: solo quelli che quell'operatore puo' vedere
+    (i contatti riservati di altri restano fuori dall'elenco)."""
     canon = canonical(phone)
     if not canon:
         return []
+    visible = f" AND {VISIBLE_SQL}" if viewer_user_id is not None else ""
     cur.execute(
         "SELECT c.id, c.display_name, c.first_name, c.last_name, c.status, c.created_at, "
-        "(coalesce(c.phone_normalized, " + _NORMALIZED.format(col="c.phone") + ") = %(phone)s) AS on_phone "
-        f"FROM contacts c WHERE c.agency_id = %(agency)s AND {_LIVE_CONTACT} AND {MATCH_SQL} "
+        "(coalesce(c.phone_normalized, " + _NORMALIZED.format(col="c.phone") + ") = %(phone)s) AS on_phone, "
+        "(to_jsonb(c)->>'private_user_id')::bigint AS private_user_id "
+        f"FROM contacts c WHERE c.agency_id = %(agency)s AND {_LIVE_CONTACT} AND {match_sql(cur)}{visible} "
         "ORDER BY c.created_at, c.id LIMIT %(limit)s",
-        {"phone": canon, "agency": agency_id, "limit": limit})
+        {"phone": canon, "agency": agency_id, "limit": limit, "viewer": viewer_user_id})
     return [dict(r) for r in cur.fetchall()]
 
 
