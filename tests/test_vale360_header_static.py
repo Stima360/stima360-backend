@@ -1,6 +1,6 @@
 """VALE360 - la fascia alta del CRM porta il solo nuovo marchio, centrato.
 
-  * l'asset `assets/brand/vale360-banner.png` esiste (PNG 1400x309, ritagliato solo
+  * l'asset `assets/brand/vale360-banner.png` esiste (PNG 1400x300, ritagliato solo
     del margine bianco esterno);
   * desktop: `index.html` apre `#app-view` con la fascia `[data-brand-band]` e il
     banner; nella barra laterale non c'e' piu' il vecchio logo ne' `#env-badge`;
@@ -34,7 +34,7 @@ def test_01_asset_del_banner():
     dati = BANNER.read_bytes()
     assert dati[:8] == b"\x89PNG\r\n\x1a\n"
     larghezza, altezza = int.from_bytes(dati[16:20], "big"), int.from_bytes(dati[20:24], "big")
-    assert (larghezza, altezza) == (1400, 309)
+    assert (larghezza, altezza) == (1400, 300)
 
 
 def test_02_desktop_solo_il_nuovo_marchio_nella_fascia_alta():
