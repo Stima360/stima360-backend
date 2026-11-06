@@ -43,7 +43,11 @@ def test_parser_reads_every_entry_change_message_and_status():
     ]}
     parsed = parser.parse(payload)
     assert [m.provider_message_id for m in parsed.messages] == ["w1", "w2", "w3"]
-    assert parsed.messages[1].text_body is None and parsed.messages[1].metadata == {"mime_type": "audio/ogg", "voice": True}
+    # SENTINELLA AGGIORNATA DA WHATSAPP COEXISTENCE: dell'allegato si tiene anche l'identificativo
+    # opaco di Meta (`media_id`, per aprirlo a richiesta); l'URL temporaneo resta escluso.
+    assert parsed.messages[1].text_body is None
+    assert parsed.messages[1].metadata == {"mime_type": "audio/ogg", "voice": True, "media_id": "m"}
+    assert "url" not in parsed.messages[1].metadata and "https://x" not in str(parsed.messages[1].metadata)
     assert parsed.messages[2].sender_phone == "447700900123"                  # numero internazionale intatto
     assert [(e.event_kind, e.status) for e in parsed.events] == [("status", "read"), ("other", None)]
 
@@ -236,6 +240,12 @@ def test_messages_view_reads_safely_and_offers_no_send():
     # (components/whatsapp-reply.js, /api/message-replies, con conferma). Resta
     # vietato ogni altro canale d'invio: il vecchio /api/admin/whatsapp/reply,
     # i link wa.me, l'apertura di finestre o URL.
+    # SENTINELLA AGGIORNATA DA WHATSAPP COEXISTENCE: un solo collegamento ammesso, l'allegato
+    # aperto dal CRM stesso (`/api/whatsapp-coexistence/messages/{id}/media`); nessun altro href.
+    hrefs = re.findall(r"href = ([^;]+);", lowered)
+    assert hrefs == ["`${media_api}/${encodeuricomponent(m.id)}/media`"], hrefs
+    assert "const media_api = '/api/whatsapp-coexistence/messages';" in lowered
+    lowered = lowered.replace("a.href = `${media_api}/${encodeuricomponent(m.id)}/media`;", "")
     for forbidden in ("/api/admin/whatsapp", "/reply", "/send", "wa.me", "window.open", "href ="):
         assert forbidden not in lowered, forbidden
     assert "partono solo dopo la tua conferma" in lowered

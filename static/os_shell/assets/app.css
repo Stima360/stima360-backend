@@ -1720,6 +1720,11 @@ a.census-unit-main { text-decoration: none; }
 .wa-bubble-out { align-self: flex-end; background: #dbe7ff; border: 1px solid #c5d6fb; border-top-right-radius: 4px; }
 .wa-bubble-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .wa-bubble-kind { display: block; font-size: 12px; color: var(--muted); margin-bottom: 2px; }
+/* WHATSAPP COEXISTENCE: messaggi scritti dall'app (eco) e dallo storico; allegati a richiesta. */
+.wa-bubble-app { background: #e6f4ea; border-color: #c8e6d0; }
+.wa-bubble-history { background: #f7f8fb; }
+.wa-bubble-origin { display: block; font-size: 11px; font-weight: 600; color: var(--muted); margin-bottom: 2px; }
+.wa-bubble-media { display: inline-block; margin: 2px 0 4px; font-size: 13px; font-weight: 600; color: var(--primary); }
 .wa-bubble-meta { position: absolute; right: 8px; bottom: 3px; font-size: 11px; color: var(--muted); display: inline-flex; gap: 4px; align-items: center; }
 .wa-tick { font-weight: 700; letter-spacing: -2px; }
 .wa-tick.is-read { color: #1a73e8; }
@@ -2629,3 +2634,15 @@ a.scrivania-mini:hover { color: var(--primary); }
 .user-menu-env[data-env="test"] dd { color: #b45309; font-weight: 600; }
 .user-menu-env[data-env="test"] dd::before { background: #f59e0b; }
 .user-menu-env[data-env="prod"] dd::before { background: #16a34a; }
+
+/* WHATSAPP COEXISTENCE: il collegamento del numero dell'app WhatsApp Business. */
+.coex-panel { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
+.coex-panel .warning-box { padding: 10px 12px; border-radius: 12px; background: #fdf3d8; color: #7a5200; border: 1px solid #f2dca0; }
+.coex-list { display: flex; flex-direction: column; gap: 10px; }
+.coex-item { border: 1px solid var(--border); border-radius: 14px; padding: 12px 14px; background: #fff; display: flex; flex-direction: column; gap: 4px; }
+.coex-item.is-connected { border-left: 4px solid #16a34a; }
+.coex-line { margin: 0; font-size: 14px; }
+.coex-steps { margin: 4px 0 0; padding-left: 0; list-style: none; font-size: 13px; color: var(--muted); }
+.coex-steps .ok { color: #12623a; }
+.coex-steps .ko { color: var(--danger); }
+.coex-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }

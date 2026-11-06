@@ -415,6 +415,10 @@ TENANT_PREFIXES = (
     "/api/visit-sheets",
     # SENTINELLA AGGIORNATA DA BLOCCO-6B: le richieste di firma (oggi solo simulate).
     "/api/signature-requests",
+    # SENTINELLA AGGIORNATA DA WHATSAPP COEXISTENCE: il collegamento del numero
+    # dell'app WhatsApp Business e gli allegati. Superficie operatore come le
+    # altre: agenzia dalla sessione, `require_operator` su ogni rotta.
+    "/api/whatsapp-coexistence",
 )
 
 

@@ -4,6 +4,8 @@ Montato in main.py con `require_authenticated_operator`; lo scope viene da
 `require_operator`. Nessuna rotta invia messaggi.
 
     GET  /api/contact-imports/limits                  i limiti reali (dimensione del file; nessun limite di schede)
+    GET  /api/contact-imports/whatsapp-sources        COEXISTENCE: rubriche dell'app WhatsApp Business importabili
+    POST /api/contact-imports/whatsapp/{pnid}/preview COEXISTENCE: anteprima della rubrica dell'app di una casella
     POST /api/contact-imports/preview                 (multipart: file .vcf) analizza e salva l'anteprima;
                                                       letto a pezzi, foto scartate; 413 oltre la dimensione massima
     POST /api/contact-imports/{id}/commit             «Importa tutti» a blocchi: richiamare finche' `done`
@@ -47,6 +49,19 @@ def _call(fn, *args, **kwargs):
 
 
 READ_CHUNK = 1024 * 1024
+
+
+@router.get("/whatsapp-sources")
+def whatsapp_sources(ctx: OperatorContext = Depends(require_operator)):
+    """COEXISTENCE: le rubriche dell'app WhatsApp Business che l'operatore puo' importare."""
+    return _call(service.whatsapp_sources, ctx)
+
+
+@router.post("/whatsapp/{phone_number_id}/preview")
+def whatsapp_preview(phone_number_id: str = Path(..., pattern=r"^[0-9]{5,20}$"),
+                     ctx: OperatorContext = Depends(require_operator)):
+    """COEXISTENCE: l'anteprima della rubrica dell'app di una casella (stesse regole del .vcf)."""
+    return _call(service.preview_whatsapp, ctx, phone_number_id)
 
 
 @router.get("/limits")

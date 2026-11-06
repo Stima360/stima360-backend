@@ -127,6 +127,9 @@ APPROVED_VERSIONS = (
     "130_whatsapp_inboxes",
     # SENTINELLA AGGIORNATA DALL'IMPORTAZIONE RUBRICA: la 131 (contatti riservati, contact_phones; additiva).
     "131_contact_import",
+    # SENTINELLA AGGIORNATA DA WHATSAPP COEXISTENCE: la 132 (direzione e origine dei messaggi, rubrica
+    # dell'app, registro dei collegamenti Meta; additiva, down che rifiuta se ci sono dati).
+    "132_whatsapp_coexistence",
 )
 
 

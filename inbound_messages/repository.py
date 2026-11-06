@@ -13,6 +13,23 @@ def installed(cur) -> bool:
     return bool(cur.fetchone()["installed"])
 
 
+def coexistence_installed(cur) -> bool:
+    """La 132: direzione e origine dei messaggi, rubrica dell'app, collegamenti Meta."""
+    cur.execute("SELECT to_regclass('whatsapp_app_contacts') IS NOT NULL AND EXISTS (SELECT 1 FROM "
+                "information_schema.columns WHERE table_name = 'whatsapp_inbound_messages' "
+                "AND column_name = 'origin') AS installed")
+    return bool(cur.fetchone()["installed"])
+
+
+#: Un messaggio del CLIENTE ricevuto in diretta: il solo che conta per i non
+#: letti e per le risposte automatiche. Funziona anche senza la 132 (colonne
+#: assenti = tutte le righe sono ricezioni di sempre).
+LIVE_CUSTOMER_SQL = ("COALESCE(to_jsonb(m)->>'direction', 'in') = 'in' "
+                     "AND COALESCE(to_jsonb(m)->>'origin', 'webhook') = 'webhook'")
+#: Un messaggio del cliente, anche dallo storico (finestra di 24 ore, STOP).
+CUSTOMER_SQL = "COALESCE(to_jsonb(m)->>'direction', 'in') = 'in'"
+
+
 # --- scrittura dal webhook -----------------------------------------------------
 
 def contacts_by_phone(cur, agency_id: int, phone: str) -> list[int]:
@@ -23,10 +40,27 @@ def contacts_by_phone(cur, agency_id: int, phone: str) -> list[int]:
 
 
 def insert_message(cur, m, *, routing_status, agency_id, routing_reason, contact_id, contact_match,
-                   linked_by_user_id=None, linked_at=None) -> bool:
+                   linked_by_user_id=None, linked_at=None, coexistence: bool = False) -> bool:
     """True se la riga e' nuova; False se il provider l'aveva gia' consegnata.
     `linked_by_user_id`/`linked_at`: solo quando il messaggio eredita
-    l'associazione manuale della conversazione (contact_match.resolve)."""
+    l'associazione manuale della conversazione (contact_match.resolve).
+
+    COEXISTENCE (132): direzione e origine. Un messaggio dello storico prende
+    come ora di ricezione la sua ora originale, cosi' la conversazione resta in
+    ordine e non sembra arrivato adesso."""
+    if coexistence:
+        received_at = m.provider_timestamp if (m.origin == "history" and m.provider_timestamp) else None
+        cur.execute(
+            "INSERT INTO whatsapp_inbound_messages (provider_message_id, phone_number_id, display_phone_number, "
+            "agency_id, routing_status, routing_reason, sender_phone, sender_profile_name, message_type, text_body, "
+            "metadata, provider_timestamp, contact_id, contact_match, linked_by_user_id, linked_at, direction, origin, "
+            "received_at) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, "
+            "COALESCE(%s, NOW())) ON CONFLICT (provider_message_id) DO NOTHING RETURNING id",
+            (m.provider_message_id, m.phone_number_id, m.display_phone_number, agency_id, routing_status,
+             routing_reason, m.sender_phone, m.sender_profile_name, m.message_type, m.text_body, Json(m.metadata),
+             m.provider_timestamp, contact_id, contact_match, linked_by_user_id, linked_at, m.direction, m.origin,
+             received_at))
+        return cur.fetchone() is not None
     cur.execute(
         "INSERT INTO whatsapp_inbound_messages (provider_message_id, phone_number_id, display_phone_number, "
         "agency_id, routing_status, routing_reason, sender_phone, sender_profile_name, message_type, text_body, "
@@ -37,6 +71,53 @@ def insert_message(cur, m, *, routing_status, agency_id, routing_reason, contact
          routing_reason, m.sender_phone, m.sender_profile_name, m.message_type, m.text_body, Json(m.metadata),
          m.provider_timestamp, contact_id, contact_match, linked_by_user_id, linked_at))
     return cur.fetchone() is not None
+
+
+def is_crm_reply(cur, agency_id: int, provider_message_id: str) -> bool:
+    """Un messaggio gia' registrato come risposta inviata dal CRM (stesso wamid):
+    un'eco o lo storico non lo duplicano nella conversazione. La lettura e' del
+    dominio delle comunicazioni (il registro ha un solo proprietario)."""
+    from communication import repository as communication_repository
+    from operator_auth.context import SystemAgencyContext
+
+    ctx = SystemAgencyContext(agency_id=agency_id, origin="whatsapp_inbound")
+    return communication_repository.has_provider_message(cur, ctx, provider_message_id)
+
+
+def upsert_app_contact(cur, agency_id: int, change) -> str:
+    """Una voce della rubrica dell'app: 'new', 'updated' o 'stale' (piu' vecchia
+    di quanto gia' registrato: un ritardo di consegna non torna indietro)."""
+    state = "present" if change.action == "add" else "removed"
+    cur.execute(
+        "INSERT INTO whatsapp_app_contacts AS a (agency_id, phone_number_id, contact_phone, full_name, first_name, "
+        "state, meta_changed_at) VALUES (%s, %s, %s, %s, %s, %s, %s) "
+        "ON CONFLICT (agency_id, phone_number_id, contact_phone) DO UPDATE SET "
+        "full_name = COALESCE(EXCLUDED.full_name, a.full_name), first_name = COALESCE(EXCLUDED.first_name, a.first_name), "
+        "state = EXCLUDED.state, meta_changed_at = EXCLUDED.meta_changed_at, last_synced_at = NOW() "
+        "WHERE a.meta_changed_at IS NULL OR EXCLUDED.meta_changed_at IS NULL "
+        "OR EXCLUDED.meta_changed_at >= a.meta_changed_at "
+        "RETURNING (xmax = 0) AS inserted",
+        (agency_id, change.phone_number_id, change.contact_phone, change.full_name, change.first_name, state,
+         change.changed_at))
+    row = cur.fetchone()
+    if row is None:
+        return "stale"
+    return "new" if row["inserted"] else "updated"
+
+
+def app_contact_names(cur, agency_id: int, pairs) -> dict:
+    """{(phone_number_id, numero): nome} dalla rubrica dell'app, solo voci presenti."""
+    pairs = list(pairs)
+    if not pairs:
+        return {}
+    cur.execute("SELECT to_regclass('whatsapp_app_contacts') IS NOT NULL AS ok")
+    if not cur.fetchone()["ok"]:
+        return {}
+    cur.execute("SELECT phone_number_id, contact_phone, COALESCE(full_name, first_name) AS name "
+                "FROM whatsapp_app_contacts WHERE agency_id = %s AND state = 'present' "
+                "AND (phone_number_id, contact_phone) IN (SELECT * FROM unnest(%s::text[], %s::text[]))",
+                (agency_id, [p for p, _ in pairs], [n for _, n in pairs]))
+    return {(r["phone_number_id"], r["contact_phone"]): r["name"] for r in cur.fetchall() if r["name"]}
 
 
 def insert_event(cur, e, *, routing_status, agency_id) -> bool:
@@ -55,7 +136,9 @@ _MESSAGE_COLUMNS = (
     "m.id, m.provider_message_id, m.phone_number_id, m.display_phone_number, "
     "m.sender_phone, m.sender_profile_name, m.message_type, m.text_body, m.metadata, "
     "m.provider_timestamp, m.received_at, m.contact_id, m.contact_match, m.property_id, m.linked_by_user_id, "
-    "m.linked_at, c.display_name AS contact_name, c.first_name AS contact_first_name, "
+    "m.linked_at, COALESCE(to_jsonb(m)->>'direction', 'in') AS direction, "
+    "COALESCE(to_jsonb(m)->>'origin', 'webhook') AS origin, "
+    "c.display_name AS contact_name, c.first_name AS contact_first_name, "
     "c.last_name AS contact_last_name, (to_jsonb(c)->>'private_user_id')::bigint AS contact_private_user_id, "
     "p.title AS property_title, p.code AS property_code")
 
@@ -109,7 +192,8 @@ def list_conversations(cur, agency_id: int, *, agent_user_id: int | None, only_u
     if reader_user_id is None:
         unread, reads, read_params = "NULL::bigint AS unread", "", ()
     else:
-        unread = "count(*) FILTER (WHERE m.id > COALESCE(r.last_read_message_id, 0)) AS unread"
+        # Solo i messaggi del cliente ricevuti in diretta: non le eco dall'app ne' lo storico.
+        unread = f"count(*) FILTER (WHERE m.id > COALESCE(r.last_read_message_id, 0) AND {LIVE_CUSTOMER_SQL}) AS unread"
         reads = ("LEFT JOIN whatsapp_inbound_reads r ON r.agency_id = m.agency_id AND r.user_id = %s "
                  "AND r.phone_number_id = m.phone_number_id AND r.sender_phone = m.sender_phone ")
         read_params = (reader_user_id,)
@@ -237,7 +321,8 @@ def conversation_rows_for_link(cur, agency_id: int, sender_phone: str, hidden_nu
     visibile), bloccati per l'associazione."""
     extra, params = _inbox_filter(hidden_numbers, None)
     cur.execute("SELECT m.id, m.contact_id, m.property_id, m.message_type, m.text_body, m.provider_message_id, "
-                "m.provider_timestamp FROM whatsapp_inbound_messages m WHERE m.agency_id = %s AND m.sender_phone = %s"
+                "m.provider_timestamp, COALESCE(to_jsonb(m)->>'direction', 'in') AS direction "
+                "FROM whatsapp_inbound_messages m WHERE m.agency_id = %s AND m.sender_phone = %s"
                 f"{extra} ORDER BY m.id FOR UPDATE", (agency_id, sender_phone, *params))
     return [dict(r) for r in cur.fetchall()]
 
@@ -254,7 +339,7 @@ def last_inbound(cur, agency_id: int, sender_phone: str, *, agent_user_id: int |
     # un orario futuro non e' attendibile e non puo' allungare la finestra.
     cur.execute("SELECT m.id, m.phone_number_id, m.contact_id, m.property_id, m.provider_timestamp, m.received_at, "
                 "LEAST(COALESCE(m.provider_timestamp, m.received_at), m.received_at) AS customer_at "
-                f"{_JOINS} WHERE m.agency_id = %s AND m.sender_phone = %s{extra} "
+                f"{_JOINS} WHERE m.agency_id = %s AND m.sender_phone = %s{extra} AND {CUSTOMER_SQL} "
                 "ORDER BY LEAST(COALESCE(m.provider_timestamp, m.received_at), m.received_at) DESC, m.id DESC LIMIT 1",
                 (agency_id, sender_phone, *params))
     row = cur.fetchone()

@@ -90,7 +90,9 @@ NUOVE = ("115_agency_logos", "116_property_valuations", "117_property_valuation_
          # SENTINELLA AGGIORNATA DA WHATSAPP DUE CASELLE: la 130 (caselle, accessi, chiave per casella).
          "130_whatsapp_inboxes",
          # SENTINELLA AGGIORNATA DALL'IMPORTAZIONE RUBRICA: la 131 (contatti riservati, numeri, importazioni).
-         "131_contact_import")
+         "131_contact_import",
+         # SENTINELLA AGGIORNATA DA WHATSAPP COEXISTENCE: la 132 (eco dall'app, storico, rubrica, collegamenti).
+         "132_whatsapp_coexistence")
 BASE = {"characteristics": "Trilocale sintetico al secondo piano.",
         "surface": {"value": "85", "kind": "commerciale", "source": "planimetria"},
         "rationale": "Motivazione sintetica: stato buono, zona servita.",

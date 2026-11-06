@@ -22,6 +22,15 @@ riservata la vedono il titolare e gli operatori autorizzati
 l'associazione manuale valgono per il cliente, su ogni casella.
 Associazione: titolare e amministratori (o Super Admin che opera
 nell'agenzia), con autore e data scritti dal server e registro append-only.
+
+WHATSAPP COEXISTENCE (migrazione 132): nella stessa conversazione entrano i
+messaggi che il titolare scrive dall'app (`out`, eco) e lo storico condiviso
+(`in`/`out`, con l'ora originale). Valgono le stesse regole di visibilita',
+casella e contatto. Restano fuori da non letti, risposte automatiche e
+finestra di 24 ore (che conta solo i messaggi del cliente); lo STOP conta solo
+se l'ha scritto il cliente. Un'eco o un messaggio dello storico con lo stesso
+wamid di una risposta inviata dal CRM non la duplica. La rubrica dell'app va
+in `whatsapp_app_contacts` e non crea contatti del CRM.
 """
 from __future__ import annotations
 
@@ -38,12 +47,14 @@ from whatsapp_inboxes import service as inboxes
 
 from . import contact_match, repository, routing
 from .enums import (
+    COEXISTENCE_NOT_INSTALLED_MESSAGE,
     CONTACT_NOT_FOUND_MESSAGE,
     LINK_FORBIDDEN_MESSAGE,
     MATCH_NONE,
     MESSAGE_NOT_FOUND_MESSAGE,
     MESSAGE_TYPE_LABELS,
     NOT_INSTALLED_MESSAGE,
+    ORIGIN_LABELS,
     PROPERTY_NOT_FOUND_MESSAGE,
     READS_NOT_INSTALLED_MESSAGE,
     ROUTED,
@@ -98,6 +109,11 @@ def ingest(parsed: ParsedPayload, routes: dict[str, set[int]] | None = None) -> 
     with core_cursor(commit=True) as (_, cur):
         if not repository.installed(cur):
             raise NotInstalled("NOT_INSTALLED", NOT_INSTALLED_MESSAGE)
+        coexistence = repository.coexistence_installed(cur)
+        if parsed.coexistence and not coexistence:
+            # Eco, storico o rubrica senza la 132: rifiutati (503), Meta ritenta
+            # dopo la migrazione. Mai salvati come ricezioni di sempre.
+            raise NotInstalled("COEXISTENCE_NOT_INSTALLED", COEXISTENCE_NOT_INSTALLED_MESSAGE)
         resolved: dict[str | None, tuple] = {}
 
         def route(number):
@@ -107,6 +123,9 @@ def ingest(parsed: ParsedPayload, routes: dict[str, set[int]] | None = None) -> 
 
         for m in parsed.messages:
             status, agency_id, reason = route(m.phone_number_id)
+            if m.coexistence and status == ROUTED and repository.is_crm_reply(cur, agency_id, m.provider_message_id):
+                summary["echo_of_crm_reply"] = summary.get("echo_of_crm_reply", 0) + 1
+                continue
             decided = {"contact_id": None, "match": MATCH_NONE, "linked_by_user_id": None, "linked_at": None}
             if status == ROUTED:
                 # Rubrica dell'agenzia su tutti i campi telefonici; l'associazione
@@ -119,14 +138,18 @@ def ingest(parsed: ParsedPayload, routes: dict[str, set[int]] | None = None) -> 
                                             routing_reason=reason, contact_id=contact_id,
                                             contact_match=decided["match"],
                                             linked_by_user_id=decided["linked_by_user_id"],
-                                            linked_at=decided["linked_at"])
+                                            linked_at=decided["linked_at"], coexistence=coexistence)
             summary["messages_new" if new else "messages_duplicate"] += 1
+            if new and m.coexistence:
+                key = "app_echoes" if m.origin == "app_echo" else "history_messages"
+                summary[key] = summary.get(key, 0) + 1
             if new and status == ROUTED:
                 # La conversazione resta coerente: i messaggi precedenti senza contatto
                 # prendono quello deciso adesso (mai quelli decisi a mano).
                 summary["backfilled"] = summary.get("backfilled", 0) + contact_match.backfill_conversation(
                     cur, agency_id, m.sender_phone, decided)
-            if new and is_stop_request(m) and status == ROUTED and contact_id is not None:
+            # Lo STOP e' del cliente (anche dallo storico: una revoca protegge sempre).
+            if new and m.direction == "in" and is_stop_request(m) and status == ROUTED and contact_id is not None:
                 _record_stop(cur, SystemAgencyContext(agency_id=agency_id, origin=INBOUND_ORIGIN),
                              contact_id=contact_id, provider_message_id=m.provider_message_id,
                              decided_at=m.provider_timestamp)
@@ -135,6 +158,14 @@ def ingest(parsed: ParsedPayload, routes: dict[str, set[int]] | None = None) -> 
             status, agency_id, _ = route(e.phone_number_id)
             new = repository.insert_event(cur, e, routing_status=status, agency_id=agency_id)
             summary["events_new" if new else "events_duplicate"] += 1
+        for c in parsed.app_contacts:
+            status, agency_id, _ = route(c.phone_number_id)
+            if status != ROUTED:
+                # Una rubrica di un numero non instradato non si conserva.
+                summary["app_contacts_unrouted"] = summary.get("app_contacts_unrouted", 0) + 1
+                continue
+            outcome = repository.upsert_app_contact(cur, agency_id, c)
+            summary[f"app_contacts_{outcome}"] = summary.get(f"app_contacts_{outcome}", 0) + 1
     log.info("whatsapp_inbound %s", json.dumps(summary))
     return summary
 
@@ -233,12 +264,19 @@ def _contact_view(row, viewer_user_id, **extra) -> dict | None:
 
 
 def _message(row, viewer_user_id=None) -> dict:
+    direction = row.get("direction") or "in"
+    origin = row.get("origin") or "webhook"
+    meta = dict(row.get("metadata") or {})
+    media_id = meta.pop("media_id", None)
     return {
+        "direction": direction, "origin": origin,
+        "origin_label": ORIGIN_LABELS.get((direction, origin)),
+        "has_media": bool(media_id),
         "id": row["id"], "sender_phone": row["sender_phone"], "sender_profile_name": row.get("sender_profile_name"),
         "phone_number_id": row.get("phone_number_id"), "display_phone_number": row.get("display_phone_number"),
         "message_type": row["message_type"],
         "message_type_label": MESSAGE_TYPE_LABELS.get(row["message_type"], f"Tipo «{row['message_type']}»"),
-        "is_text": row["message_type"] == "text", "text": row.get("text_body"), "metadata": row.get("metadata") or {},
+        "is_text": row["message_type"] == "text", "text": row.get("text_body"), "metadata": meta,
         "provider_timestamp": _iso(row.get("provider_timestamp")), "received_at": _iso(row["received_at"]),
         "contact": _contact_view(row, viewer_user_id),
         "contact_match": row["contact_match"],
@@ -284,10 +322,15 @@ def list_conversations(ctx, *, only_unlinked: bool = False, phone_number_id: str
         # quelle con messaggi, meno le riservate senza autorizzazione.
         numbers = sorted((set(inboxes.routed_numbers(agency_id)) | {r["phone_number_id"] for r in rows}) - set(hidden))
         info = inboxes.describe(cur, agency_id, numbers)
+        # COEXISTENCE: il nome con cui il titolare ha salvato il numero nell'app,
+        # solo come aiuto quando la chat non ha un contatto del CRM.
+        app_names = repository.app_contact_names(cur, agency_id, {(r["phone_number_id"], r["sender_phone"])
+                                                                  for r in rows})
     items = []
     for r in rows:
         m = last.get(r["last_message_id"])
         items.append({
+            "app_contact_name": app_names.get((r["phone_number_id"], r["sender_phone"])),
             "sender_phone": r["sender_phone"], "phone_number_id": r["phone_number_id"],
             "inbox": _inbox_view(info.get(r["phone_number_id"]), r["phone_number_id"]),
             "messages": int(r["messages"]),
@@ -318,11 +361,13 @@ def conversation(ctx, sender_phone: str, phone_number_id: str | None = None) -> 
         others = [n for n in repository.sender_inboxes(cur, agency_id, sender_phone, agent_user_id=agent,
                                                        hidden_numbers=hidden) if n != number]
         info = inboxes.describe(cur, agency_id, [number, *others])
+        app_name = repository.app_contact_names(cur, agency_id, [(number, sender_phone)]).get((number, sender_phone))
     if not rows:
         raise NotFound("MESSAGE_NOT_FOUND", MESSAGE_NOT_FOUND_MESSAGE)
     # Il contatto della conversazione: quello dell'ultimo messaggio che ne ha uno.
     current = next((r for r in rows if r.get("contact_id")), None)
     return {"sender_phone": sender_phone, "phone_number_id": number, "inbox": _inbox_view(info.get(number), number),
+            "app_contact_name": app_name,
             "other_inboxes": [_inbox_view(info.get(n), n) for n in others],
             "messages": [_message(r, ctx.user_id) for r in rows], "can_link": agent is None,
             "contact": (_contact_view(current, ctx.user_id, match=current["contact_match"],
@@ -367,6 +412,19 @@ def mark_read(ctx, sender_phone: str, phone_number_id: str | None = None) -> dic
     return {"sender_phone": sender_phone, "phone_number_id": number, "last_read_message_id": last, "unread": 0}
 
 
+def visible_message_row(ctx, message_id: int) -> dict:
+    """La riga di un messaggio VISIBILE a chi chiede (stesse regole di
+    get_message), per aprirne l'allegato da whatsapp_coexistence.media."""
+    agency_id = ctx.require_agency()
+    with core_cursor() as (_, cur):
+        _require_installed(cur)
+        row = repository.get_message(cur, agency_id, message_id, agent_user_id=_agent_scope(ctx),
+                                     hidden_numbers=_hidden(cur, ctx))
+    if row is None:
+        raise NotFound("MESSAGE_NOT_FOUND", MESSAGE_NOT_FOUND_MESSAGE)
+    return row
+
+
 def get_message(ctx, message_id: int) -> dict:
     agency_id = ctx.require_agency()
     agent = _agent_scope(ctx)
@@ -406,7 +464,7 @@ def link(ctx, message_id: int, contact_id: int | None, property_id: int | None) 
             repository.link(cur, agency_id=agency_id, message_id=message_id, contact_id=contact_id,
                             property_id=property_id, previous_contact_id=row["contact_id"],
                             previous_property_id=row["property_id"], user_id=ctx.user_id)
-            if (contact_id is not None and contact_id != row["contact_id"]
+            if (contact_id is not None and contact_id != row["contact_id"] and (row.get("direction") or "in") == "in"
                     and is_stop_request(SimpleNamespace(message_type=row["message_type"], text_body=row["text_body"]))):
                 # Lo STOP del soggetto, ora attribuito a un contatto di questa agenzia.
                 _record_stop(cur, ctx, contact_id=contact_id, provider_message_id=row["provider_message_id"],
@@ -440,7 +498,7 @@ def link_conversation(ctx, sender_phone: str, contact_id: int | None, phone_numb
                             property_id=row["property_id"], previous_contact_id=row["contact_id"],
                             previous_property_id=row["property_id"], user_id=ctx.user_id)
             changed += 1
-            if (contact_id is not None
+            if (contact_id is not None and (row.get("direction") or "in") == "in"
                     and is_stop_request(SimpleNamespace(message_type=row["message_type"], text_body=row["text_body"]))):
                 _record_stop(cur, ctx, contact_id=contact_id, provider_message_id=row["provider_message_id"],
                              decided_at=row["provider_timestamp"])

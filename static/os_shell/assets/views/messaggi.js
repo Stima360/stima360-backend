@@ -280,13 +280,45 @@ function tick(r) {
   return { mark: '🕓', cls: 'is-pending', title: r.status_label };
 }
 
+// COEXISTENCE: l'allegato si apre a richiesta, letto da Meta al momento (mai salvato).
+// E' l'UNICO collegamento della vista e punta al CRM stesso, mai a un indirizzo esterno.
+const MEDIA_API = '/api/whatsapp-coexistence/messages';
+function mediaLink(m) {
+  const a = el('a', 'wa-bubble-media', 'Apri allegato');
+  a.href = `${MEDIA_API}/${encodeURIComponent(m.id)}/media`;
+  a.target = '_blank';
+  a.rel = 'noopener';
+  a.setAttribute('data-messages-media', String(m.id));
+  return a;
+}
+
 function bubbleIn(m, who) {
   const b = el('div', 'wa-bubble wa-bubble-in');
   b.setAttribute('data-message', String(m.id));
+  if (m.origin_label) {
+    b.classList.add('wa-bubble-history');
+    b.appendChild(el('span', 'wa-bubble-origin', m.origin_label));
+  }
   if (!m.is_text) b.appendChild(el('span', 'wa-bubble-kind', m.message_type_label));
   b.appendChild(el('p', 'wa-bubble-text', messageSummary(m)));
+  if (m.has_media) b.appendChild(mediaLink(m));
   const meta = el('span', 'wa-bubble-meta', chatTimeText(m.provider_timestamp || m.received_at));
   meta.title = `${who} · ricevuto ${dateTimeText(m.received_at)}`;
+  b.appendChild(meta);
+  return b;
+}
+
+/** COEXISTENCE: un messaggio scritto dal titolare sull'app (eco) o dallo storico. */
+function bubbleApp(m) {
+  const b = el('div', 'wa-bubble wa-bubble-out wa-bubble-app');
+  b.setAttribute('data-message', String(m.id));
+  b.setAttribute('data-messages-origin', m.origin || '');
+  b.appendChild(el('span', 'wa-bubble-origin', m.origin_label || 'Dal telefono'));
+  if (!m.is_text) b.appendChild(el('span', 'wa-bubble-kind', m.message_type_label));
+  b.appendChild(el('p', 'wa-bubble-text', messageSummary(m)));
+  if (m.has_media) b.appendChild(mediaLink(m));
+  const meta = el('span', 'wa-bubble-meta', chatTimeText(m.provider_timestamp || m.received_at));
+  meta.title = m.origin === 'history' ? 'Messaggio dallo storico condiviso da Meta' : "Scritto dall'app WhatsApp Business";
   b.appendChild(meta);
   return b;
 }
@@ -372,7 +404,9 @@ export async function renderMessaggi(container, params = []) {
 
   function nameOf(c) {
     const last = c.last_message;
-    return (last && last.contact && contactDisplayName(last.contact)) || (last && last.sender_profile_name) || phoneText(c.sender_phone);
+    // COEXISTENCE: senza contatto del CRM, il nome salvato nella rubrica del telefono.
+    return (last && last.contact && contactDisplayName(last.contact)) || (last && last.sender_profile_name)
+      || c.app_contact_name || phoneText(c.sender_phone);
   }
 
   const isSelected = (c) => c.sender_phone === selected && (!selectedInbox || c.phone_number_id === selectedInbox);
@@ -414,7 +448,8 @@ export async function renderMessaggi(container, params = []) {
       const top = el('span', 'wa-item-top');
       top.append(el('strong', 'wa-item-name', who), el('span', 'wa-item-time', chatTimeText(c.last_received_at)));
       const bottom = el('span', 'wa-item-bottom');
-      bottom.appendChild(el('span', 'wa-item-preview', messageSummary(c.last_message)));
+      const mine = c.last_message && c.last_message.direction === 'out';
+      bottom.appendChild(el('span', 'wa-item-preview', `${mine ? 'Tu: ' : ''}${messageSummary(c.last_message)}`));
       if (inboxes.length > 1 && c.inbox) {
         // Su quale numero è arrivata: solo quando l'agenzia ha più caselle visibili.
         const chip = el('span', 'wa-inbox-chip', inboxLabel(c.inbox));
@@ -499,7 +534,7 @@ export async function renderMessaggi(container, params = []) {
     try { auto = await fetchAutoState(sender, inbox); } catch (error) { auto = null; }
     const decisions = new Map(((auto && auto.decisions) || []).map((d) => [d.message_id, d]));
 
-    const who = contactDisplayName(data.contact) || data.sender_profile_name || phoneText(sender);
+    const who = contactDisplayName(data.contact) || data.sender_profile_name || data.app_contact_name || phoneText(sender);
     detail.replaceChildren();
 
     // --- intestazione
@@ -606,14 +641,15 @@ export async function renderMessaggi(container, params = []) {
     const scroller = el('div', 'wa-messages');
     scroller.setAttribute('data-messages-timeline', '');
     const timeline = [
-      ...data.messages.map((m) => ({ kind: 'in', at: m.provider_timestamp || m.received_at, m })),
+      ...data.messages.map((m) => ({ kind: m.direction === 'out' ? 'app' : 'in', at: m.provider_timestamp || m.received_at, m })),
       ...replies.map((r) => ({ kind: 'out', at: r.created_at, r })),
     ].sort((a, b) => String(a.at || '').localeCompare(String(b.at || '')));
     let lastDay = null;
     for (const entry of timeline) {
       const day = dayText(entry.at);
       if (day && day !== lastDay) { scroller.appendChild(el('div', 'wa-day', day)); lastDay = day; }
-      scroller.appendChild(entry.kind === 'in' ? bubbleIn(entry.m, who) : bubbleOut(entry.r));
+      scroller.appendChild(entry.kind === 'in' ? bubbleIn(entry.m, who)
+        : (entry.kind === 'app' ? bubbleApp(entry.m) : bubbleOut(entry.r)));
     }
     detail.appendChild(scroller);
 

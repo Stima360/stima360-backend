@@ -273,6 +273,81 @@ def preview(ctx, *, file_name: str | None, data: bytes, source: str = SOURCE_VCF
 
 
 # ---------------------------------------------------------------------------
+# WHATSAPP COEXISTENCE: la rubrica dell'app WhatsApp Business
+# ---------------------------------------------------------------------------
+
+SOURCE_WHATSAPP = "whatsapp"
+
+
+def _visible_whatsapp_inboxes(cur, ctx) -> list[str]:
+    """Le caselle della rubrica che l'operatore puo' usare: quelle che vede."""
+    from whatsapp_inboxes import service as inboxes
+
+    cur.execute("SELECT to_regclass('whatsapp_app_contacts') IS NOT NULL AS ok")
+    if not cur.fetchone()["ok"]:
+        return []
+    hidden = set(inboxes.hidden_numbers(cur, ctx))
+    cur.execute("SELECT DISTINCT phone_number_id FROM whatsapp_app_contacts WHERE agency_id = %s "
+                "AND state = 'present' ORDER BY 1", (ctx.require_agency(),))
+    return [r["phone_number_id"] for r in cur.fetchall() if r["phone_number_id"] not in hidden]
+
+
+def whatsapp_sources(ctx) -> dict:
+    """Le rubriche dell'app WhatsApp Business ricevute da Meta che l'operatore puo' importare."""
+    from whatsapp_inboxes import service as inboxes
+
+    _require_operator(ctx)
+    agency_id = ctx.require_agency()
+    with core_cursor() as (_, cur):
+        numbers = _visible_whatsapp_inboxes(cur, ctx)
+        info = inboxes.describe(cur, agency_id, numbers)
+        counts = {}
+        if numbers:
+            cur.execute("SELECT phone_number_id, count(*) AS n, max(last_synced_at) AS at FROM whatsapp_app_contacts "
+                        "WHERE agency_id = %s AND state = 'present' AND phone_number_id = ANY(%s) "
+                        "GROUP BY phone_number_id", (agency_id, numbers))
+            counts = {r["phone_number_id"]: r for r in cur.fetchall()}
+    return {"items": [{"phone_number_id": n, "label": info[n]["label"], "contacts": int(counts[n]["n"]),
+                       "last_synced_at": _iso(counts[n]["at"])} for n in numbers if n in counts]}
+
+
+def preview_whatsapp(ctx, phone_number_id: str) -> dict:
+    """L'anteprima della rubrica dell'app di UNA casella visibile: stesse regole
+    del file .vcf (nessun contatto scritto fino a «Importa tutti»)."""
+    from whatsapp_inboxes import service as inboxes
+
+    _require_operator(ctx)
+    agency_id = ctx.require_agency()
+    with core_cursor() as (_, cur):
+        if phone_number_id not in _visible_whatsapp_inboxes(cur, ctx):
+            raise NotFound("WHATSAPP_BOOK_NOT_FOUND", "Rubrica WhatsApp non disponibile per questa casella.")
+        cur.execute("SELECT contact_phone, full_name, first_name FROM whatsapp_app_contacts WHERE agency_id = %s "
+                    "AND phone_number_id = %s AND state = 'present' ORDER BY id", (agency_id, phone_number_id))
+        rows = [dict(r) for r in cur.fetchall()]
+        label = inboxes.describe(cur, agency_id, [phone_number_id])[phone_number_id]["label"]
+    raw = [{"fn": r["full_name"] or r["first_name"], "first_name": None, "last_name": None, "org": None,
+            "emails": [], "phones": [{"raw": "+" + r["contact_phone"], "label": "WhatsApp"}]} for r in rows]
+    if not raw:
+        raise ImportError_("NO_ENTRIES", "La rubrica WhatsApp di questa casella è vuota.")
+    entries = _merge_duplicates(raw)
+    with core_cursor(commit=True) as (_, cur):
+        if not repository.installed(cur):
+            raise NotInstalled("NOT_INSTALLED", NOT_INSTALLED_MESSAGE)
+        contacts, index = repository.visible_contacts(cur, ctx)
+        _classify(entries, contacts, index)
+        for i, e in enumerate(entries):
+            e["index"] = i
+        summary = _summary(entries)
+        summary["file_bytes"] = 0
+        name = f"Rubrica WhatsApp · {label}"[:200]
+        row = repository.insert_preview(cur, agency_id=agency_id, user_id=ctx.user_id, source=SOURCE_WHATSAPP,
+                                        file_name=name, entries=entries, summary=summary)
+    shown = _preview_view(entries)
+    return {"import_id": row["id"], "status": row["status"], "file_name": name, "summary": summary,
+            "entries": shown, "entries_shown": len(shown), "entries_total": len(entries)}
+
+
+# ---------------------------------------------------------------------------
 # conferma
 # ---------------------------------------------------------------------------
 

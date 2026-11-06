@@ -138,6 +138,38 @@ export function openContactImportDialog(dialogEl, onDone) {
   let maxMb = null;            // dal server; senza, decide solo il server
   apiGet(`${API}/limits`).then((l) => { maxMb = l && l.max_file_mb ? l.max_file_mb : null; }).catch(() => {});
 
+  // WHATSAPP COEXISTENCE: la rubrica dell'app WhatsApp Business, ricevuta da Meta per
+  // le caselle collegate che vedi. Stessa anteprima e stesse regole del file .vcf.
+  const waBox = el('div', 'contact-import-wa');
+  waBox.setAttribute('data-contact-import-whatsapp', '');
+  form.insertBefore(waBox, status);
+  apiGet(`${API}/whatsapp-sources`).then((data) => {
+    const items = (data && data.items) || [];
+    if (!items.length) return;
+    waBox.appendChild(el('p', 'muted', 'Oppure importa la rubrica del telefono collegato a WhatsApp Business:'));
+    for (const src of items) {
+      const b = button(`Rubrica WhatsApp · ${src.label} (${src.contacts})`, 'ghost', 'data-contact-import-whatsapp-source');
+      b.setAttribute('data-inbox', src.phone_number_id);
+      b.addEventListener('click', async () => {
+        b.disabled = true; analyze.disabled = true;
+        status.replaceChildren(el('p', 'muted', 'Analisi della rubrica WhatsApp in corso…'));
+        try {
+          current = await apiPost(`${API}/whatsapp/${encodeURIComponent(src.phone_number_id)}/preview`, {});
+          status.replaceChildren();
+          renderPreview(current);
+          importAll.hidden = false;
+          analyze.hidden = true;
+          fileField.hidden = true;
+          waBox.hidden = true;
+        } catch (error) {
+          status.replaceChildren(el('div', 'error-box', errorMessage(error)));
+          b.disabled = false; analyze.disabled = false;
+        }
+      });
+      waBox.appendChild(b);
+    }
+  }).catch(() => {});
+
   function renderPreview(data) {
     preview.replaceChildren();
     const s = data.summary;

@@ -39,3 +39,17 @@ READS_NOT_INSTALLED_MESSAGE = ("Lo stato letto/non letto non è ancora attivo su
 LINK_FORBIDDEN_MESSAGE = "Solo il titolare o un amministratore dell'agenzia può associare i messaggi."
 CONTACT_NOT_FOUND_MESSAGE = "Contatto non trovato in questa agenzia."
 PROPERTY_NOT_FOUND_MESSAGE = "Immobile non trovato in questa agenzia."
+
+# ---------------------------------------------------------------------------
+# WHATSAPP COEXISTENCE (migrazione 132)
+# ---------------------------------------------------------------------------
+
+COEXISTENCE_NOT_INSTALLED_MESSAGE = ("I messaggi scritti dall'app WhatsApp Business, lo storico e la rubrica "
+                                     "non sono ancora attivi su questo ambiente: la migrazione 132 non è stata applicata.")
+
+#: (direzione, origine) -> etichetta per l'interfaccia. Le ricezioni di sempre non hanno etichetta.
+ORIGIN_LABELS = {
+    ("out", "app_echo"): "Dal telefono",
+    ("out", "history"): "Dallo storico · inviato da te",
+    ("in", "history"): "Dallo storico",
+}

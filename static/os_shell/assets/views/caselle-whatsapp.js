@@ -7,6 +7,8 @@
 // token passa dal browser. Tutto il testo passa da `textContent`.
 
 import { apiGet, apiPut } from '../core/api-client.js';
+// WHATSAPP COEXISTENCE: il collegamento del numero dell'app WhatsApp Business con la procedura di Meta.
+import { mountCoexistencePanel } from '../components/whatsapp-coexistence.js';
 
 const API = '/api/whatsapp-inboxes';
 
@@ -183,4 +185,6 @@ export async function renderCaselleWhatsapp(container) {
   } catch (error) {
     status.replaceChildren(el('div', 'error-box', errorMessage(error)));
   }
+  // Il pannello si mostra solo a chi può vederlo (titolare, Super Admin): per gli altri il server risponde 403.
+  await mountCoexistencePanel(container);
 }

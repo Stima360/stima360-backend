@@ -66,7 +66,11 @@ def resume(cur, agency_id: int, sender_phone: str, user_id: int, phone_number_id
 def pending_message_ids(cur, agency_id: int, since, rules_version: str, limit: int) -> list[int]:
     """I messaggi instradati all'agenzia, ricevuti dall'attivazione, ancora
     senza decisione per questa versione delle regole. Dal piu' vecchio."""
+    # COEXISTENCE: mai una risposta automatica a un messaggio dello storico o a
+    # un'eco di cio' che il titolare ha scritto dall'app.
     cur.execute("SELECT m.id FROM whatsapp_inbound_messages m WHERE m.agency_id = %s AND m.routing_status = 'routed' "
+                "AND COALESCE(to_jsonb(m)->>'direction', 'in') = 'in' "
+                "AND COALESCE(to_jsonb(m)->>'origin', 'webhook') = 'webhook' "
                 "AND m.received_at >= %s AND NOT EXISTS (SELECT 1 FROM whatsapp_auto_reply_decisions d "
                 "  WHERE d.inbound_message_id = m.id AND d.rules_version = %s) "
                 "ORDER BY m.received_at, m.id LIMIT %s", (agency_id, since, rules_version, limit))
@@ -98,7 +102,9 @@ def decisions_for_messages(cur, agency_id: int, message_ids: list[int]) -> list[
 
 def stop_in_conversation(cur, agency_id: int, sender_phone: str) -> bool:
     """Uno STOP del mittente in questa agenzia (testo «STOP», come in 4A)."""
-    cur.execute("SELECT 1 FROM whatsapp_inbound_messages WHERE agency_id = %s AND sender_phone = %s "
+    # Lo STOP e' del cliente: un «STOP» scritto dall'app dal titolare non conta.
+    cur.execute("SELECT 1 FROM whatsapp_inbound_messages m WHERE agency_id = %s AND sender_phone = %s "
+                "AND COALESCE(to_jsonb(m)->>'direction', 'in') = 'in' "
                 "AND message_type = 'text' AND upper(regexp_replace(coalesce(text_body, ''), '[^A-Za-z0-9]', '', 'g')) "
                 "= 'STOP' LIMIT 1", (agency_id, sender_phone))
     return cur.fetchone() is not None

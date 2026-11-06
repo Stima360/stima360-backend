@@ -178,7 +178,10 @@ def test_m_every_message_of_every_entry_is_stored_and_types_stay_types(wa):
     rows = _rows(wa, "sender_phone IN (%s, %s)", (s1, s2))
     assert [x[4] for x in rows] == ["text", "image", "text", "sticker", "nuovo_tipo"]
     assert [x[5] for x in rows] == ["Primo", None, "Secondo", None, None]          # nessun testo finto
-    assert rows[1][8] == {"mime_type": "image/jpeg", "caption": "Foto della cucina"}  # niente id media, niente URL
+    # SENTINELLA AGGIORNATA DA WHATSAPP COEXISTENCE: dell'allegato si conserva l'identificativo opaco
+    # di Meta (per aprirlo a richiesta, inbound_messages.media); l'URL temporaneo resta escluso.
+    assert rows[1][8] == {"mime_type": "image/jpeg", "caption": "Foto della cucina", "media_id": "media-id"}
+    assert "url" not in rows[1][8]
     assert all(x[1] == wa["ids"]["a"] and x[2] == "routed" for x in rows)
     names = _q(wa, "SELECT DISTINCT sender_profile_name FROM whatsapp_inbound_messages WHERE sender_phone = %s", (s1,))
     assert names == [("Mittente Uno",)]

@@ -4,6 +4,19 @@ Tutti gli `entry`, tutti i `changes`, tutti i messaggi e tutti gli stati: mai
 solo il primo. Tre categorie distinte: messaggi, aggiornamenti di consegna,
 altri eventi. Per gli allegati si conservano tipo e metadati minimi: nessun
 download, nessun URL aperto. Un tipo non testuale non diventa mai testo.
+
+WHATSAPP COEXISTENCE (fase C): con il numero dell'app WhatsApp Business
+collegato alla Cloud API arrivano anche
+  * `smb_message_echoes`  i messaggi scritti dall'app sul telefono (o da un
+    dispositivo collegato): diventano messaggi `out`, origine `app_echo`;
+  * `history`             lo storico condiviso dal titolare, a blocchi: ogni
+    messaggio diventa `in` o `out` secondo chi l'ha scritto, origine `history`,
+    con l'ora originale; l'avanzamento resta un evento senza dati personali;
+  * `smb_app_state_sync`  la rubrica dell'app: aggiunte e rimozioni di contatti.
+`sender_phone` e' SEMPRE il numero del cliente, in entrambe le direzioni.
+Degli allegati si tiene anche l'identificativo opaco di Meta (`media_id`),
+mai l'indirizzo di scaricamento: l'allegato si apre solo su richiesta di chi
+vede la conversazione (whatsapp_coexistence.media).
 """
 from __future__ import annotations
 
@@ -20,6 +33,20 @@ class MalformedPayload(ValueError):
     pass
 
 
+#: Direzione e origine (migrazione 132). Le ricezioni di sempre sono ('in', 'webhook').
+DIRECTION_IN = "in"
+DIRECTION_OUT = "out"
+ORIGIN_WEBHOOK = "webhook"
+ORIGIN_APP_ECHO = "app_echo"
+ORIGIN_HISTORY = "history"
+
+#: I campi del webhook che appartengono a Coexistence.
+FIELD_ECHOES = "smb_message_echoes"
+FIELD_HISTORY = "history"
+FIELD_STATE_SYNC = "smb_app_state_sync"
+COEXISTENCE_FIELDS = frozenset({FIELD_ECHOES, FIELD_HISTORY, FIELD_STATE_SYNC})
+
+
 @dataclass
 class InboundMessage:
     provider_message_id: str
@@ -31,6 +58,23 @@ class InboundMessage:
     text_body: str | None
     metadata: dict
     provider_timestamp: datetime | None
+    direction: str = DIRECTION_IN
+    origin: str = ORIGIN_WEBHOOK
+
+    @property
+    def coexistence(self) -> bool:
+        return self.direction != DIRECTION_IN or self.origin != ORIGIN_WEBHOOK
+
+
+@dataclass
+class AppContactChange:
+    """Una voce della rubrica dell'app WhatsApp Business (`smb_app_state_sync`)."""
+    phone_number_id: str
+    contact_phone: str
+    full_name: str | None
+    first_name: str | None
+    action: str                          # 'add' | 'remove'
+    changed_at: datetime | None
 
 
 @dataclass
@@ -48,6 +92,11 @@ class WebhookEvent:
 class ParsedPayload:
     messages: list[InboundMessage] = field(default_factory=list)
     events: list[WebhookEvent] = field(default_factory=list)
+    app_contacts: list[AppContactChange] = field(default_factory=list)
+
+    @property
+    def coexistence(self) -> bool:
+        return bool(self.app_contacts) or any(m.coexistence for m in self.messages)
 
 
 def _text(value, limit=META_TEXT_MAX) -> str | None:
@@ -87,6 +136,11 @@ def _metadata(msg: dict, msg_type: str) -> dict:
                 meta[key] = _text(body.get(key))
         if body.get("voice") is True:
             meta["voice"] = True
+        # COEXISTENCE: l'identificativo opaco dell'allegato presso Meta, per
+        # aprirlo a richiesta. Mai l'URL (`url`), che e' temporaneo e firmato.
+        media_id = _text(body.get("id"), 100)
+        if media_id and re.fullmatch(r"[0-9A-Za-z_.:-]{1,100}", media_id):
+            meta["media_id"] = media_id
     elif msg_type == "location":
         for key in ("name", "address"):
             if _text(body.get(key)):
@@ -137,6 +191,15 @@ def parse(payload) -> ParsedPayload:
             field_name = change.get("field")
             if field_name is None and (value.get("messages") or value.get("statuses")):
                 field_name = "messages"
+            if field_name == FIELD_ECHOES:
+                _echoes(out, value, phone_number_id, display)
+                continue
+            if field_name == FIELD_HISTORY:
+                _history(out, change, value, phone_number_id, display)
+                continue
+            if field_name == FIELD_STATE_SYNC:
+                _state_sync(out, change, value, phone_number_id)
+                continue
             if field_name != "messages":
                 out.events.append(_other(change, phone_number_id, "field", {"field": _text(change.get("field"), 100)}))
                 continue
@@ -175,3 +238,100 @@ def parse(payload) -> ParsedPayload:
                 out.events.append(_other(change, phone_number_id, "errors",
                                          {"errors": _error_codes(value.get("errors"))}))
     return out
+
+
+# ---------------------------------------------------------------------------
+# WHATSAPP COEXISTENCE
+# ---------------------------------------------------------------------------
+
+def _message_from(msg, *, customer: str | None, phone_number_id, display, direction, origin, profile=None,
+                  extra_meta: dict | None = None) -> InboundMessage | None:
+    """Un messaggio Coexistence, o None se manca qualcosa di essenziale."""
+    if not isinstance(msg, dict):
+        return None
+    provider_id = _text(msg.get("id"), 200)
+    msg_type = _text(msg.get("type"), 30)
+    if not provider_id or not customer or not msg_type:
+        return None
+    text_body = _text((msg.get("text") or {}).get("body"), TEXT_MAX) if msg_type == "text" else None
+    meta = _metadata(msg, msg_type)
+    if extra_meta:
+        meta.update(extra_meta)
+    return InboundMessage(
+        provider_message_id=provider_id, phone_number_id=phone_number_id or "", display_phone_number=display,
+        sender_phone=customer, sender_profile_name=profile, message_type=msg_type, text_body=text_body,
+        metadata=meta, provider_timestamp=_timestamp(msg.get("timestamp")), direction=direction, origin=origin)
+
+
+def _echoes(out: ParsedPayload, value: dict, phone_number_id, display) -> None:
+    """`smb_message_echoes`: un messaggio scritto dall'app. Il cliente e' `to`."""
+    for msg in value.get("message_echoes") or []:
+        m = _message_from(msg, customer=_digits(msg.get("to")) if isinstance(msg, dict) else None,
+                          phone_number_id=phone_number_id, display=display,
+                          direction=DIRECTION_OUT, origin=ORIGIN_APP_ECHO)
+        if m is None:
+            out.events.append(_other({"echo": msg, "phone_number_id": phone_number_id},
+                                     phone_number_id, "invalid_echo"))
+        else:
+            out.messages.append(m)
+
+
+def _history(out: ParsedPayload, change: dict, value: dict, phone_number_id, display) -> None:
+    """`history`: blocchi di conversazioni. Il cliente e' l'id del thread; il
+    messaggio e' suo se `from` e' il suo numero, altrimenti dell'azienda."""
+    for block in value.get("history") or []:
+        if not isinstance(block, dict):
+            continue
+        meta = block.get("metadata") if isinstance(block.get("metadata"), dict) else {}
+        progress = {"phase": meta.get("phase"), "chunk_order": meta.get("chunk_order"), "progress": meta.get("progress")}
+        if block.get("errors"):
+            # Lo storico non condiviso (rifiutato sul telefono o non disponibile).
+            out.events.append(_other(change, phone_number_id, "history_errors",
+                                     {"errors": _error_codes(block.get("errors")), **progress}))
+        threads = block.get("threads") or []
+        count = 0
+        for thread in threads if isinstance(threads, list) else []:
+            if not isinstance(thread, dict):
+                continue
+            customer = _digits(thread.get("id"))
+            for msg in thread.get("messages") or []:
+                sender = _digits(msg.get("from")) if isinstance(msg, dict) else None
+                direction = DIRECTION_IN if sender and sender == customer else DIRECTION_OUT
+                context = msg.get("history_context") if isinstance(msg, dict) else None
+                extra = {}
+                if isinstance(context, dict) and _text(context.get("status"), 20):
+                    extra["history_status"] = _text(context.get("status"), 20).lower()
+                m = _message_from(msg, customer=customer, phone_number_id=phone_number_id, display=display,
+                                  direction=direction, origin=ORIGIN_HISTORY, extra_meta=extra)
+                if m is None:
+                    out.events.append(_other({"history_message": msg, "phone_number_id": phone_number_id},
+                                             phone_number_id, "invalid_history_message"))
+                else:
+                    out.messages.append(m)
+                    count += 1
+        # L'avanzamento, senza alcun dato personale: fase, blocco, percentuale, quanti messaggi.
+        canonical = json.dumps({"pn": phone_number_id, **progress, "n": count}, sort_keys=True, default=str)
+        out.events.append(WebhookEvent(
+            event_kind="other", phone_number_id=phone_number_id,
+            dedupe_key="history:" + hashlib.sha256((canonical + json.dumps(block, sort_keys=True, default=str))
+                                                   .encode("utf-8")).hexdigest(),
+            details={"reason": "history_progress", **progress, "messages": count}))
+
+
+def _state_sync(out: ParsedPayload, change: dict, value: dict, phone_number_id) -> None:
+    """`smb_app_state_sync`: la rubrica dell'app. Solo i contatti; gli altri tipi restano eventi."""
+    for item in value.get("state_sync") or []:
+        if not isinstance(item, dict):
+            continue
+        contact = item.get("contact") if isinstance(item.get("contact"), dict) else None
+        action = _text(item.get("action"), 10)
+        phone = _digits(contact.get("phone_number")) if contact else None
+        if item.get("type") != "contact" or not phone or action not in ("add", "remove") or not phone_number_id:
+            out.events.append(_other({"state_sync": item, "phone_number_id": phone_number_id},
+                                     phone_number_id, "state_sync_other"))
+            continue
+        meta = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+        out.app_contacts.append(AppContactChange(
+            phone_number_id=phone_number_id, contact_phone=phone,
+            full_name=_text(contact.get("full_name"), 200), first_name=_text(contact.get("first_name"), 200),
+            action=action, changed_at=_timestamp(meta.get("timestamp"))))

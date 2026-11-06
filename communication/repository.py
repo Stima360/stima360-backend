@@ -950,3 +950,13 @@ def queued_unclaimed_ids(cur, ctx, *, channel: str, reason_codes: list[str], clo
         params.append(closes_before)
     cur.execute(sql + " ORDER BY m.id LIMIT %s", params + [limit])
     return [row["id"] for row in cur.fetchall()]
+
+
+def has_provider_message(cur, ctx, provider_message_id: str) -> bool:
+    """WHATSAPP COEXISTENCE: un messaggio gia' nel registro DELL'AGENZIA con
+    questo identificativo del fornitore. Sola lettura, con lo scope di sempre:
+    serve alla ricezione per non duplicare, come eco dell'app, una risposta
+    gia' inviata dal CRM."""
+    source, params = communication_scoped_source(ctx, "communication_messages", "m")
+    cur.execute(f"SELECT 1 FROM {source} AND m.provider_message_id = %s LIMIT 1", params + [provider_message_id])
+    return cur.fetchone() is not None
