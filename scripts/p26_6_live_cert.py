@@ -791,6 +791,30 @@ DOMAINS = (
              "agency_id o modo d'invio nel corpo -> 422, nessun giro eseguito",
     ),
     Domain(
+        "WHATSAPP_INBOXES", "/api/whatsapp-inboxes",
+        # WHATSAPP DUE CASELLE. SOLO RIFIUTI E LETTURE: la matrice non configura
+        # MAI una casella ne' i suoi accessi. L'agenzia viene SOLO dalla sessione:
+        # l'elenco e' quello della sessione (503 se la 130 manca), un `agency_id`
+        # nel corpo delle impostazioni o degli accessi e' 422.
+        certifier="whatsapp_inboxes",
+        depends_on=None,
+        api_delete=False,
+        note="quattro rotte sondate: anonimo e Basic -> 401, elenco della sola sessione, "
+             "agency_id nel corpo -> 422, nessuna casella configurata",
+    ),
+    Domain(
+        "CONTACT_IMPORTS", "/api/contact-imports",
+        # IMPORTAZIONE RUBRICA. SOLO RIFIUTI E LETTURE: la matrice non carica MAI
+        # una rubrica e non importa nulla. L'importazione e' cercata nell'agenzia
+        # e per l'operatore della sessione: una inesistente e' 404 (503 se la 131
+        # manca), un `agency_id` nel corpo di «Importa tutti» e' 422.
+        certifier="contact_imports",
+        depends_on=None,
+        api_delete=False,
+        note="cinque rotte sondate: anonimo e Basic -> 401, limiti in lettura, importazione "
+             "inesistente -> 404, agency_id nel corpo -> 422, nessuna importazione",
+    ),
+    Domain(
         "LEGACY_ADMIN", "/api/admin",
         listing="/api/admin/stime?day=oggi",
         note="le sette route /api/admin che toccano dati di tenant, migrate "
@@ -7691,6 +7715,86 @@ def certify_auto_replies(report, http, cert, domain, jars, owned, context) -> No
         risposta = http.request("PUT", base + "/settings", jar=jars[etichetta], payload={"mode": "meta"})
         report.check(f"AUTO_REPLIES-modo-ignoto-{etichetta}", risposta.status == 422,
                      f"{etichetta}: PUT {base}/settings con un modo inesistente -> {risposta.status} (atteso 422)")
+
+
+WHATSAPP_INBOXES_OPERAZIONI = (("GET", ""), ("GET", "/members"), ("PUT", "/900000000000099"),
+                               ("PUT", "/900000000000099/access"))
+
+
+def _agenzia_altra(context, altro):
+    valore = (context.get("agencies") or {}).get(altro)
+    return valore.get("id") if isinstance(valore, dict) else valore
+
+
+def _rifiuti_di_montaggio(report, http, nome, base, operazioni) -> None:
+    """Anonimo e solo HTTP Basic -> 401 su ogni rotta: la protezione del mount."""
+    credenziale = base64.b64encode(b"non-esiste:non-esiste").decode("ascii")
+    for metodo, suffisso in operazioni:
+        percorso = base + suffisso
+        corpo = {} if metodo != "GET" else None
+        risposta = http.request(metodo, percorso, payload=corpo)
+        report.check(f"{nome}-anonimo-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} senza sessione -> {risposta.status} (atteso 401)")
+        risposta = http.request(metodo, percorso, payload=corpo, headers={"Authorization": f"Basic {credenziale}"})
+        report.check(f"{nome}-basic-{metodo}{suffisso}", risposta.status == 401,
+                     f"{metodo} {percorso} con solo HTTP Basic -> {risposta.status} (atteso 401)")
+
+
+def certify_whatsapp_inboxes(report, http, cert, domain, jars, owned, context) -> None:
+    """WHATSAPP_INBOXES (due caselle): nessuna configurazione tentata con successo.
+
+        anonimo, Basic                                -> 401 su tutte le rotte (mount)
+        GET  elenco                                   -> 200 con `items` (503 se la 130 manca)
+        PUT  impostazioni con agency_id nel corpo     -> 422 (corpo chiuso)
+        PUT  accessi con agency_id nel corpo          -> 422 (corpo chiuso)
+    """
+    base = domain.prefix
+    _rifiuti_di_montaggio(report, http, "WHATSAPP_INBOXES", base, WHATSAPP_INBOXES_OPERAZIONI)
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        risposta = http.request("GET", base, jar=jars[etichetta])
+        corpo = risposta.json() if risposta.status == 200 else None
+        report.check(f"WHATSAPP_INBOXES-elenco-{etichetta}",
+                     risposta.status == 503 or (risposta.status == 200 and isinstance(corpo, dict)
+                                                and isinstance(corpo.get("items"), list)),
+                     f"{etichetta}: GET {base} -> {risposta.status}")
+        agenzia_altra = _agenzia_altra(context, altro)
+        risposta = http.request("PUT", f"{base}/900000000000099", jar=jars[etichetta],
+                                payload={"label": "x", "agency_id": agenzia_altra})
+        report.check(f"WHATSAPP_INBOXES-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: PUT {base}/<numero> con agency_id -> {risposta.status} (atteso 422)")
+        risposta = http.request("PUT", f"{base}/900000000000099/access", jar=jars[etichetta],
+                                payload={"user_ids": [], "agency_id": agenzia_altra})
+        report.check(f"WHATSAPP_INBOXES-accessi-chiusi-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: PUT {base}/<numero>/access con agency_id -> {risposta.status} (atteso 422)")
+
+
+CONTACT_IMPORTS_OPERAZIONI = (("GET", "/limits"), ("POST", "/preview"), ("POST", "/999999999/commit"),
+                              ("GET", "/999999999"), ("POST", "/contacts/999999999/share"))
+
+
+def certify_contact_imports(report, http, cert, domain, jars, owned, context) -> None:
+    """CONTACT_IMPORTS (importazione rubrica): nessun caricamento, nessuna importazione.
+
+        anonimo, Basic                                -> 401 su tutte le rotte (mount)
+        GET  /limits                                  -> 200 con `max_file_mb`
+        GET  importazione inesistente                 -> 404 (503 se la 131 manca)
+        POST «Importa tutti» con agency_id nel corpo  -> 422 (corpo chiuso)
+    """
+    base = domain.prefix
+    _rifiuti_di_montaggio(report, http, "CONTACT_IMPORTS", base, CONTACT_IMPORTS_OPERAZIONI)
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        risposta = http.request("GET", f"{base}/limits", jar=jars[etichetta])
+        corpo = risposta.json() if risposta.status == 200 else None
+        report.check(f"CONTACT_IMPORTS-limiti-{etichetta}",
+                     risposta.status == 200 and isinstance(corpo, dict) and "max_file_mb" in corpo,
+                     f"{etichetta}: GET {base}/limits -> {risposta.status}")
+        risposta = http.request("GET", f"{base}/999999999", jar=jars[etichetta])
+        report.check(f"CONTACT_IMPORTS-inesistente-{etichetta}", risposta.status in (404, 503),
+                     f"{etichetta}: GET {base}/<id inesistente> -> {risposta.status} (atteso 404)")
+        risposta = http.request("POST", f"{base}/999999999/commit", jar=jars[etichetta],
+                                payload={"decisions": {}, "agency_id": _agenzia_altra(context, altro)})
+        report.check(f"CONTACT_IMPORTS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: POST {base}/<id>/commit con agency_id -> {risposta.status} (atteso 422)")
 
 
 VISIT_BOOKING_LINKS_OPERAZIONI = (("GET", "?property_id=1"), ("POST", ""))

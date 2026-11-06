@@ -48,8 +48,10 @@ def create_contact(ctx, payload):
     return repository.create_contact(ctx, data)
 
 
-def list_contacts(ctx, limit, offset, search, status):
-    return repository.list_contacts(ctx, limit, offset, search, status)
+def list_contacts(ctx, limit, offset, search, status, sort=None):
+    if sort is None:                       # l'ordine di sempre: chiamata invariata
+        return repository.list_contacts(ctx, limit, offset, search, status)
+    return repository.list_contacts(ctx, limit, offset, search, status, sort=sort)
 
 
 def get_contact(ctx, contact_id):

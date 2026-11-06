@@ -49,6 +49,8 @@ import { renderTable, bindTableRowClicks, escapeHtml, formatDate } from '../comp
 import { bindRowDeletes, rowDeleteColumn, rowDeleteDialogHtml } from '../trash/trash-row-actions.js';
 // IMPORTAZIONE RUBRICA: «Importa rubrica» (.vcf, anteprima, «Importa tutti»; components/contact-import.js).
 import { openContactImportDialog } from '../components/contact-import.js';
+// ORDINAMENTO ALFABETICO: «A–Z | Z–A» per nome e cognome (ordine fatto dal server, `sort=name_asc|name_desc`).
+import { mountSortToggle, readSort, saveSort } from '../components/sort-toggle.js';
 
 const PAGE_SIZE = 50;
 
@@ -70,6 +72,7 @@ export async function renderContatti(container, { nuovo = false } = {}) {
         <input id="contatti-search" class="input" type="search" placeholder="Cerca per nome, telefono o email…">
         <button type="button" id="contatti-new-btn" class="btn primary">+ Nuovo contatto</button>
         <button type="button" id="contatti-import-btn" class="btn ghost" data-contatti-import>Importa rubrica</button>
+        <div id="contatti-sort" class="sort-toggle-host"></div>
       </div>
       <div id="contatti-feedback"></div>
       <div id="contatti-list-area" class="trash-row-host"><p class="muted">Caricamento…</p></div>
@@ -88,6 +91,12 @@ export async function renderContatti(container, { nuovo = false } = {}) {
 
   let offset = 0;
   let debounceHandle = null;
+  let sort = readSort('contatti');
+  if (sort !== 'asc' && sort !== 'desc') sort = 'asc';
+  mountSortToggle(container.querySelector('#contatti-sort'), {
+    current: sort, label: 'Ordina i contatti per nome',
+    onChange: (value) => { sort = value; saveSort('contatti', value); offset = 0; load(); },
+  });
 
   async function load() {
     listArea.innerHTML = '<p class="muted">Caricamento…</p>';
@@ -95,6 +104,7 @@ export async function renderContatti(container, { nuovo = false } = {}) {
     const term = searchInput.value.trim();
     const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
     if (term) params.set('search', term);
+    params.set('sort', sort === 'desc' ? 'name_desc' : 'name_asc');
 
     let items = [];
     try {

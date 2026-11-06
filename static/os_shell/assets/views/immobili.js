@@ -78,6 +78,8 @@ import { propertyDisplayName, propertyTypeLabel, loadFormOptions } from '../comp
 // SEMPLIFICAZIONE-CRM-1: il nome leggibile dell'immobile, mai il codice.
 import { propertyShortLabel } from '../components/property-label.js';
 import * as census from '../census/census-api.js';
+// ORDINAMENTO ALFABETICO: «A–Z | Z–A» per indirizzo (o titolo), civico come numero; ordine fatto dal server.
+import { mountSortToggle, readSort, saveSort } from '../components/sort-toggle.js';
 import { startCreation } from '../census/census-wizard.js';
 import { errorMessage } from '../census/census-model.js';
 // AGENZIE-TERRITORI C3: l'elenco «Commerciale» legge GET /api/property/properties/accessible
@@ -141,6 +143,7 @@ export async function renderImmobili(container, params = [], { nuovo = false } =
           <option value="">Tutte le classi</option>
           ${CLASS_OPTIONS.map((c) => `<option value="${c}">Classe ${c}</option>`).join('')}
         </select>
+        <div id="immobili-sort" class="sort-toggle-host"></div>
         <button type="button" id="immobili-new" class="btn primary">+ Nuovo immobile</button>
         <a href="#/cestino" class="btn ghost trash-link" id="immobili-trash-link">Cestino</a>
       </div>
@@ -175,6 +178,12 @@ export async function renderImmobili(container, params = [], { nuovo = false } =
   let offset = 0;
   let scope = 'all';
   let debounceHandle = null;
+  let sort = readSort('immobili');
+  if (sort !== 'asc' && sort !== 'desc') sort = 'asc';
+  mountSortToggle(container.querySelector('#immobili-sort'), {
+    current: sort, label: 'Ordina gli immobili per indirizzo',
+    onChange: (value) => { sort = value; saveSort('immobili', value); offset = 0; load(); },
+  });
   const sessione = getSession();
   // C3: «Elimina…» mai su una riga condivisa (resta dell'agenzia d'origine)
   const puoEliminare = (p) => !isSharedRow(p) && canManagePropertyLifecycle(p, sessione);
@@ -198,6 +207,7 @@ export async function renderImmobili(container, params = [], { nuovo = false } =
     const params = new URLSearchParams({ scope, limit: String(PAGE_SIZE), offset: String(offset) });
     if (term) params.set('search', term);
     if (city) params.set('city', city);
+    params.set('sort', sort === 'desc' ? 'address_desc' : 'address_asc');
     if (status) params.set('status', status);
     if (classification) params.set('classification', classification);
 

@@ -21,6 +21,7 @@ fino a mezzanotte italiana, non fino a quella UTC.
 """
 from __future__ import annotations
 
+from core import alpha_sort
 from core import property_mandate as _mandato
 from core.database import core_cursor
 from core.exceptions import NotFoundError, ValidationError
@@ -29,10 +30,23 @@ from core.scope import scoped_predicate
 from . import interactions
 
 EXPIRY_FILTERS = {"within_7": 7, "within_15": 15, "within_30": 30, "expired": None}
+_INDIRIZZO = alpha_sort.key("COALESCE(NULLIF(BTRIM(p.address), ''), p.title)")
+_CLIENTE = alpha_sort.key(interactions.NOME_CONTATTO.format(a="oc"))
+
+
+def _alfabetico(d: str) -> str:
+    """ORDINAMENTO ALFABETICO: indirizzo dell'immobile (civico come numero), poi il cliente."""
+    return (f"({_INDIRIZZO} = '') ASC, {_INDIRIZZO} COLLATE \"C\" {alpha_sort.DIRECTIONS[d]}, "
+            f"{alpha_sort.numeric_order('p.civic_number', d)}, "
+            f"{alpha_sort.order_by([alpha_sort.key('p.civic_number'), _CLIENTE], d, 'p.id')}")
+
+
 SORTS = {
     "expiry": "p.mandate_end ASC NULLS LAST, p.id ASC",
     "start": "p.mandate_start DESC, p.id DESC",
     "last_interaction": "ui.occurred_at DESC NULLS LAST, p.id DESC",
+    "address_asc": _alfabetico(alpha_sort.ASC),
+    "address_desc": _alfabetico(alpha_sort.DESC),
 }
 MAX_LIMIT = 200
 OGGI_ROMA = "(NOW() AT TIME ZONE 'Europe/Rome')::date"

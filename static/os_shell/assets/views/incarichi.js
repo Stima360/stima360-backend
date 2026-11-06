@@ -15,6 +15,9 @@ import { renderTable, bindTableRowClicks, renderBadge, escapeHtml, formatDate } 
 import { formatInteractionTime } from '../components/property-interactions.js';
 // SEMPLIFICAZIONE-CRM-1: l'incarico si legge come l'immobile (tipologia, via, piano), mai il codice.
 import { propertyPlaceText, propertyShortLabel } from '../components/property-label.js';
+// ORDINAMENTO ALFABETICO: «A–Z | Z–A» per indirizzo dell'immobile, poi cliente (ordine iniziale);
+// la tendina «Altro ordine» resta per scadenza, inizio e ultima interazione.
+import { mountSortToggle, readSort, saveSort } from '../components/sort-toggle.js';
 
 const PAGE_SIZE = 50;
 export const EXPIRY_LABELS = {
@@ -27,6 +30,12 @@ export const COMMERCIAL_STATUS_LABELS = {
   withdrawn: 'Ritirato', archived: 'Archiviato',
 };
 export const SORT_LABELS = { expiry: 'Scadenza più vicina', start: 'Inizio più recente', last_interaction: 'Ultima interazione' };
+/** Dall'ordine scelto al valore del server: A–Z / Z–A oppure uno degli altri ordini. */
+export function mandateSortParam(sort) {
+  if (sort === 'desc') return 'address_desc';
+  if (sort === 'asc' || !sort || !SORT_LABELS[sort]) return 'address_asc';
+  return sort;
+}
 
 export function formatPrice(value) {
   if (value === null || value === undefined || value === '') return '—';
@@ -57,7 +66,7 @@ export function mandateListParams(f = {}, offset = 0) {
     ['mandate_type', f.mandateType], ['commercial_status', f.status], ['expiry', f.expiry]]) {
     if (valore) params.set(chiave, String(valore));
   }
-  if (f.sort && f.sort !== 'expiry') params.set('sort', f.sort);
+  params.set('sort', mandateSortParam(f.sort));
   return params;
 }
 
@@ -77,7 +86,8 @@ export async function renderIncarichi(container) {
         <select id="inc-type" class="input"><option value="">Tipo incarico</option></select>
         <select id="inc-agent" class="input" hidden><option value="">Tutti gli agenti</option></select>
         <input id="inc-city" class="input" type="text" placeholder="Comune">
-        <select id="inc-sort" class="input">${Object.entries(SORT_LABELS).map(([v, l]) => `<option value="${v}">${escapeHtml(l)}</option>`).join('')}</select>
+        <div id="inc-alpha" class="sort-toggle-host"></div>
+        <select id="inc-sort" class="input" aria-label="Altro ordine"><option value="">Altro ordine…</option>${Object.entries(SORT_LABELS).map(([v, l]) => `<option value="${v}">${escapeHtml(l)}</option>`).join('')}</select>
       </div>
       <div id="inc-list-area"><p class="muted">Caricamento…</p></div>
       <div id="inc-pager" class="list-pager"></div>
@@ -88,6 +98,14 @@ export async function renderIncarichi(container) {
   let offset = 0;
   let debounce = null;
   let tipiCaricati = false;
+  // A–Z iniziale; la scelta (anche «Scadenza più vicina»…) resta mentre si naviga.
+  let sort = readSort('incarichi');
+  if (sort !== 'asc' && sort !== 'desc' && !SORT_LABELS[sort]) sort = 'asc';
+  if (SORT_LABELS[sort]) $('#inc-sort').value = sort;
+  const alpha = mountSortToggle($('#inc-alpha'), {
+    current: sort, label: 'Ordina gli incarichi per indirizzo e cliente',
+    onChange: (value) => { sort = value; saveSort('incarichi', value); $('#inc-sort').value = ''; offset = 0; load(); },
+  });
 
   // Gli agenti: solo per chi puo' assegnare (stessa regola di CRM-OPS-2);
   // per gli altri il filtro non c'e', e la richiesta non parte.
@@ -103,7 +121,7 @@ export async function renderIncarichi(container) {
   const filtri = () => ({
     search: $('#inc-search').value.trim(), expiry: $('#inc-expiry').value, status: $('#inc-status').value,
     mandateType: $('#inc-type').value, agentId: $('#inc-agent').value, city: $('#inc-city').value.trim(),
-    sort: $('#inc-sort').value,
+    sort,
   });
 
   async function load() {
@@ -152,6 +170,12 @@ export async function renderIncarichi(container) {
   for (const sel of ['#inc-search', '#inc-city']) {
     $(sel).addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(ricarica, 300); });
   }
-  for (const sel of ['#inc-expiry', '#inc-status', '#inc-type', '#inc-agent', '#inc-sort']) $(sel).addEventListener('change', ricarica);
+  for (const sel of ['#inc-expiry', '#inc-status', '#inc-type', '#inc-agent']) $(sel).addEventListener('change', ricarica);
+  $('#inc-sort').addEventListener('change', () => {
+    sort = $('#inc-sort').value || 'asc';
+    saveSort('incarichi', sort);
+    alpha.set(sort);
+    ricarica();
+  });
   await load();
 }

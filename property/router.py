@@ -60,8 +60,8 @@ def list_shared_properties(limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge
 # AGENZIE-TERRITORI C3: l'elenco «Immobili» unificato (propri + condivisi C1) con UNA paginazione e
 # i conteggi delle tre viste. Solo lettura; `/properties` resta quella dei selettori. Prima di `/{property_id}`.
 @router.get('/properties/accessible')
-def list_accessible_properties(scope:str=Query('all',pattern='^(all|mine|shared)$'),limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),search:str|None=None,status:str|None=None,classification:str|None=None,city:str|None=None,include_archived:bool=False,ctx:OperatorContext=Depends(legacy_basic_agency_context)):
-    return tr(accessible_list.list_accessible,ctx,scope=scope,limit=limit,offset=offset,search=search,status=status,classification=classification,city=city,include_archived=include_archived)
+def list_accessible_properties(scope:str=Query('all',pattern='^(all|mine|shared)$'),limit:int=Query(50,ge=1,le=200),offset:int=Query(0,ge=0),search:str|None=None,status:str|None=None,classification:str|None=None,city:str|None=None,include_archived:bool=False,sort:str|None=Query(None,pattern='^(address_asc|address_desc)$'),ctx:OperatorContext=Depends(legacy_basic_agency_context)):
+    return tr(accessible_list.list_accessible,ctx,scope=scope,limit=limit,offset=offset,search=search,status=status,classification=classification,city=city,include_archived=include_archived,sort=sort)
 # AGENZIE-TERRITORI C1: la scheda di sempre per l'agenzia d'origine (con il blocco `access`);
 # altrimenti la lettura territoriale; negato -> 404 come prima.
 @router.get('/properties/{property_id}')

@@ -29,6 +29,7 @@ from typing import Any
 
 from psycopg2 import errors
 
+from core import alpha_sort
 from core import property_trash as _property_trash
 from core.database import core_cursor
 from core.exceptions import ValidationError
@@ -37,6 +38,20 @@ from . import repository
 from .territorial_access import MODE_ORIGIN, MODE_TERRITORIAL, REASON_ORIGIN, REASON_TERRITORIAL, territorial_predicate
 
 SCOPES = ("all", "mine", "shared")
+
+#: ORDINAMENTO ALFABETICO: l'indirizzo (o, senza, il titolo), poi il civico
+#: come numero («2» prima di «10»), poi il comune. Senza `sort`: l'ordine di sempre.
+SORTS = {"address_asc": alpha_sort.ASC, "address_desc": alpha_sort.DESC}
+_ADDRESS = alpha_sort.key("COALESCE(NULLIF(BTRIM(p.address), ''), p.title)")
+
+
+def _order(sort: str | None) -> str:
+    if sort not in SORTS:
+        return "p.updated_at DESC, p.id DESC"
+    d = SORTS[sort]
+    return (f"({_ADDRESS} = '') ASC, {_ADDRESS} COLLATE \"C\" {alpha_sort.DIRECTIONS[d]}, "
+            f"{alpha_sort.numeric_order('p.civic_number', d)}, "
+            f"{alpha_sort.order_by([alpha_sort.key('p.civic_number'), alpha_sort.key('p.city')], d, 'p.id')}")
 
 _COLONNE = (
     "p.id, p.code, p.title, p.property_type, p.commercial_status, p.classification, p.address, p.civic_number, "
@@ -73,7 +88,7 @@ def _filtri(agency_id: int, *, search, status, classification, city, include_arc
 
 
 def _esegui(cur, agency_id: int, scope: str, filtri: list[str], params: list, limit: int, offset: int,
-            con_rete: bool) -> tuple[list[dict], dict[str, int]]:
+            con_rete: bool, sort: str | None = None) -> tuple[list[dict], dict[str, int]]:
     if con_rete:
         predicato, p_pred = territorial_predicate("p", agency_id)
         condivisi = f"(p.agency_id <> %s AND {predicato})"
@@ -98,7 +113,7 @@ def _esegui(cur, agency_id: int, scope: str, filtri: list[str], params: list, li
     cur.execute(
         f"SELECT {_COLONNE}, CASE WHEN p.agency_id = %s THEN p.assigned_agent_id END AS assigned_agent_id "
         "FROM properties p JOIN agencies ag ON ag.id = p.agency_id "
-        f"WHERE {' AND '.join([*filtri, vista])} ORDER BY p.updated_at DESC, p.id DESC LIMIT %s OFFSET %s",
+        f"WHERE {' AND '.join([*filtri, vista])} ORDER BY {_order(sort)} LIMIT %s OFFSET %s",
         [agency_id, *params, *p_vista, limit, offset],
     )
     return [dict(r) for r in cur.fetchall()], conteggi
@@ -106,18 +121,20 @@ def _esegui(cur, agency_id: int, scope: str, filtri: list[str], params: list, li
 
 def list_accessible(ctx, *, scope: str = "all", limit: int = 50, offset: int = 0, search: str | None = None,
                     status: str | None = None, classification: str | None = None, city: str | None = None,
-                    include_archived: bool = False) -> dict[str, Any]:
+                    include_archived: bool = False, sort: str | None = None) -> dict[str, Any]:
     if scope not in SCOPES:
         raise ValidationError("scope must be all, mine or shared")
+    if sort is not None and sort not in SORTS:
+        raise ValidationError("sort must be address_asc or address_desc")
     agency_id = ctx.require_agency()
     filtri, params = _filtri(agency_id, search=search, status=status, classification=classification, city=city,
                              include_archived=include_archived)
     try:
         with core_cursor() as (_, cur):
-            righe, conteggi = _esegui(cur, agency_id, scope, filtri, params, limit, offset, True)
+            righe, conteggi = _esegui(cur, agency_id, scope, filtri, params, limit, offset, True, sort)
     except (errors.UndefinedTable, errors.UndefinedColumn):
         with core_cursor() as (_, cur):
-            righe, conteggi = _esegui(cur, agency_id, scope, filtri, params, limit, offset, False)
+            righe, conteggi = _esegui(cur, agency_id, scope, filtri, params, limit, offset, False, sort)
     for r in righe:
         if r["origin_agency_id"] == agency_id:
             r["access"] = {"mode": MODE_ORIGIN, "reason": REASON_ORIGIN, "origin_agency_id": agency_id,
@@ -127,4 +144,4 @@ def list_accessible(ctx, *, scope: str = "all", limit: int = 50, offset: int = 0
                            "origin_agency_id": r["origin_agency_id"], "origin_agency_name": r["origin_agency_name"],
                            "read_only": True}
     return {"items": righe, "scope": scope, "total": conteggi[scope], "counts": conteggi,
-            "limit": limit, "offset": offset}
+            "limit": limit, "offset": offset, "sort": sort}

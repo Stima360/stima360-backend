@@ -2170,6 +2170,45 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 200, b'{"decisions": "di un\'altra agenzia"}')
         return self._reply(method, path, 404, b'{"detail":{"code":"NOT_FOUND"}}')
 
+    def _whatsapp_inboxes(self, method, path, agency, payload):
+        """WHATSAPP DUE CASELLE. Il doppio di `/api/whatsapp-inboxes`: elenco della
+        sola agenzia della sessione, corpi chiusi (modelli VERI). Rotto `isolation`:
+        l'elenco contiene le caselle di un'altra agenzia (corpo diverso da un elenco)."""
+        import json as _json
+
+        from whatsapp_inboxes.router import AccessRequest, InboxRequest
+
+        if method == "PUT":
+            modello = AccessRequest if path.endswith("/access") else InboxRequest
+            try:
+                modello(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            return self._reply(method, path, 403, b'{"detail":{"code":"INBOX_FORBIDDEN"}}')
+        if path == "/api/whatsapp-inboxes" and method == "GET":
+            if self._broken("isolation", "whatsapp_inboxes"):
+                return self._reply(method, path, 200, b'{"items": "caselle di un\'altra agenzia"}')
+            return self._reply(method, path, 200, _json.dumps({"items": [], "installed": True}).encode())
+        return self._reply(method, path, 200, b'{"items": []}')
+
+    def _contact_imports(self, method, path, agency, payload):
+        """IMPORTAZIONE RUBRICA. Il doppio di `/api/contact-imports`: limiti in
+        lettura, importazione cercata nella PROPRIA agenzia, corpo di «Importa
+        tutti» chiuso (modello VERO). Rotto `isolation`: l'importazione inesistente
+        (di un'altra agenzia) risponde 200, e la matrice deve fallire."""
+        from contact_imports.router import CommitRequest
+
+        if path == "/api/contact-imports/limits":
+            return self._reply(method, path, 200, b'{"max_file_mb": 200, "max_entries": null}')
+        if path.endswith("/commit") and method == "POST":
+            try:
+                CommitRequest(**(payload or {}))
+            except Exception:
+                return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+        if self._broken("isolation", "contact_imports"):
+            return self._reply(method, path, 200, b'{"status": "preview", "entries": []}')
+        return self._reply(method, path, 404, b'{"detail":{"code":"IMPORT_NOT_FOUND"}}')
+
     def _visit_booking_links(self, method, path, agency, payload):
         """BLOCCO-5A. Il doppio di `/api/visit-booking-links`: immobile cercato
         nella PROPRIA agenzia, corpo chiuso (modello VERO). Rotto `isolation`:
@@ -2670,6 +2709,14 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA BLOCCO-4D
         if path.startswith("/api/auto-replies"):
             return self._auto_replies(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA WHATSAPP DUE CASELLE
+        if path.startswith("/api/whatsapp-inboxes"):
+            return self._whatsapp_inboxes(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA IMPORTAZIONE RUBRICA
+        if path.startswith("/api/contact-imports"):
+            return self._contact_imports(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3698,6 +3745,44 @@ def test_13u_an_auto_reply_conversation_of_another_agency_fails_the_matrix(monke
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("AUTO_REPLIES-conversazione-altrui-A-B") for i in falliti), falliti
+
+
+def test_13zb_whatsapp_inboxes_are_certified_rejections_and_reads_only(monkeypatch):
+    """WHATSAPP DUE CASELLE: la sezione WHATSAPP_INBOXES gira e ogni prova e' un
+    PASS: 4 rotte anonime + 4 Basic + 3 domande per agenzia; nessuna configurazione."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("WHATSAPP_INBOXES-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 4 + 4 + 3 * 2, righe
+
+
+def test_13zc_inboxes_of_another_agency_fail_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="whatsapp_inboxes"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("WHATSAPP_INBOXES-elenco") for i in falliti), falliti
+
+
+def test_13zd_contact_imports_are_certified_rejections_and_reads_only(monkeypatch):
+    """IMPORTAZIONE RUBRICA: la sezione CONTACT_IMPORTS gira e ogni prova e' un
+    PASS: 5 rotte anonime + 5 Basic + 3 domande per agenzia; nessuna importazione."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("CONTACT_IMPORTS-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 5 + 5 + 3 * 2, righe
+
+
+def test_13ze_an_import_of_another_agency_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="contact_imports"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("CONTACT_IMPORTS-inesistente") for i in falliti), falliti
 
 
 def test_13v_visit_booking_links_are_certified_rejections_only(monkeypatch):

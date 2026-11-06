@@ -90,9 +90,12 @@ def list_contacts(
     offset: int = Query(default=0, ge=0),
     search: str | None = None,
     status: str | None = None,
+    # ORDINAMENTO ALFABETICO: `name_asc` / `name_desc` (nome e cognome). Senza, l'ordine di
+    # sempre (i piu' recenti): lo usano la ricerca globale e i selettori.
+    sort: str | None = Query(default=None, pattern="^(name_asc|name_desc)$"),
     ctx: OperatorContext = Depends(require_operator),
 ):
-    return {"items": _translate(service.list_contacts, ctx, limit, offset, search, status)}
+    return {"items": _translate(service.list_contacts, ctx, limit, offset, search, status, sort)}
 
 
 @router.get("/contacts/{contact_id}")

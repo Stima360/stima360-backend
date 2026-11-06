@@ -58,6 +58,7 @@ from .database import core_cursor
 from .exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
 from operator_auth.context import SystemAgencyContext
 
+from . import alpha_sort
 from .contact_privacy import contact_privacy_predicate
 from .scope import (
     ProgrammingError,
@@ -264,7 +265,19 @@ def _contact_phones_installed(cur) -> bool:
     return value is True
 
 
-def list_contacts(ctx, limit: int, offset: int, search: str | None, status: str | None) -> list[dict[str, Any]]:
+#: ORDINAMENTO ALFABETICO dei Contatti: il nome e cognome COME L'ELENCO LO MOSTRA
+#: (`display_name`, altrimenti nome + cognome, per le aziende la ragione sociale),
+#: poi il cognome a parita'. Vedi core/alpha_sort.py.
+CONTACT_NAME_KEYS = (
+    "COALESCE(NULLIF(BTRIM(c.display_name), ''), NULLIF(BTRIM(CONCAT_WS(' ', c.first_name, c.last_name)), ''), "
+    "c.company_name)",
+    "c.last_name",
+)
+CONTACT_SORTS = {"name_asc": alpha_sort.ASC, "name_desc": alpha_sort.DESC}
+
+
+def list_contacts(ctx, limit: int, offset: int, search: str | None, status: str | None,
+                  sort: str | None = None) -> list[dict[str, Any]]:
     source, params = scoped_source(ctx, "contacts", "c")
     privacy, privacy_params = contact_privacy_predicate(ctx, "c")
     where = [privacy]
@@ -294,7 +307,11 @@ def list_contacts(ctx, limit: int, offset: int, search: str | None, status: str 
             params.extend([term] * (7 if extra_phones else 6))
         clause = " AND " + " AND ".join(where) if where else ""
         params.extend([limit, offset])
-        cur.execute(f"SELECT * FROM {source}{clause} ORDER BY created_at DESC, id DESC LIMIT %s OFFSET %s", params)
+        if sort in CONTACT_SORTS:
+            order = alpha_sort.order_by([alpha_sort.key(k) for k in CONTACT_NAME_KEYS], CONTACT_SORTS[sort], "c.id")
+        else:
+            order = "created_at DESC, id DESC"
+        cur.execute(f"SELECT * FROM {source}{clause} ORDER BY {order} LIMIT %s OFFSET %s", params)
         return [dict(row) for row in cur.fetchall()]
 
 
