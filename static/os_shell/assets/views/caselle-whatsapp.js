@@ -93,7 +93,8 @@ export async function renderCaselleWhatsapp(container) {
     const c = el('div', 'card wa-inbox-card');
     c.setAttribute('data-wa-inbox', ib.phone_number_id);
     const head = el('div', 'wa-inbox-head');
-    const title = ib.display_phone_number ? `${ib.label} · +${ib.display_phone_number}` : ib.label;
+    const shown = ib.display_phone_number ? `+${ib.display_phone_number}` : null;
+    const title = shown && shown !== ib.label ? `${ib.label} · ${shown}` : ib.label;
     head.append(el('strong', null, title), el('span', 'muted', inboxSummary(ib)));
     c.appendChild(head);
     if (!data.can_configure) {

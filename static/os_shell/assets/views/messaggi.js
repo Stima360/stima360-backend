@@ -349,9 +349,16 @@ export async function renderMessaggi(container, params = []) {
   container.replaceChildren(root);
   // La chat occupa lo spazio fino al fondo della finestra: l'elenco e la
   // cronologia scorrono al loro interno, il campo di scrittura resta in basso.
+  // Su smartphone la barra di navigazione in basso copre la pagina: si toglie la
+  // sua altezza, cosi' il campo di scrittura resta sopra la barra.
+  const bottomBar = () => {
+    const nav = document.querySelector('.mobile-nav');
+    if (!nav || typeof window.getComputedStyle !== 'function' || window.getComputedStyle(nav).display === 'none') return 0;
+    return nav.getBoundingClientRect().height || 0;
+  };
   const fit = () => {
     const top = root.getBoundingClientRect().top + window.scrollY;
-    root.style.height = `${Math.max(420, window.innerHeight - top - 16)}px`;
+    root.style.height = `${Math.max(420, window.innerHeight - top - 16 - bottomBar())}px`;
   };
   fit();
   window.addEventListener('resize', fit);
