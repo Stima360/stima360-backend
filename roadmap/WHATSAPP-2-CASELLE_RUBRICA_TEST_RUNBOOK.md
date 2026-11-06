@@ -12,6 +12,7 @@ Solo **TEST** (`stima360_db_test`, servizio Render TEST). PROD esclusa. Dati sin
 | Caselle: etichetta, tipo, automazioni on/off, accesso `agency`/`restricted` + operatori autorizzati (configura il titolare) | `whatsapp_inboxes/`, `GET/PUT /api/whatsapp-inboxes`, Impostazioni → **Caselle WhatsApp** |
 | Vista WhatsApp: chip della casella, filtro per casella, «ricevuto su …», «Partirà da …», avviso «ha scritto anche a …» | `static/os_shell/assets/views/messaggi.js`, `components/whatsapp-reply.js`, `components/auto-reply.js` |
 | Contatti → **Importa rubrica** (.vcf): anteprima, «Importa tutti», voci ambigue decise dall'operatore; contatti riservati a chi importa; «Condividi con l'agenzia» nella scheda contatto | `contact_imports/`, `POST /api/contact-imports/preview`, `.../{id}/commit`, `components/contact-import.js` |
+| Rubriche grandi: **nessun limite di schede**; file letto a pezzi con foto scartate; «Importa tutti» a blocchi da 500 schede con avanzamento («Importate N di M schede…») e ripresa senza doppioni; unico limite la dimensione del file inviato, `CONTACT_IMPORT_MAX_MB` (predefinito **200 MB**), con messaggio chiaro (413) | `contact_imports/service.py`, `vcard.Stripper`, `GET /api/contact-imports/limits` |
 
 Che cosa **non** cambia: il numero 1 (nessuna riga di casella = comportamento di oggi), il template della stima, i follow-up email, la produzione `main`.
 
@@ -54,6 +55,7 @@ Il numero 2 **di prova** su TEST è un `phone_number_id` sintetico (es. `9000000
 10. Una chat WhatsApp ricevuta prima dell'import senza contatto si collega da sola dopo l'import; un messaggio da un altro numero dello stesso contatto si collega all'arrivo. A chi non vede il contatto riservato la chat mostra «Contatto riservato».
 11. Nessun invio: il registro comunicazioni non cambia durante l'import.
 12. «Condividi con l'agenzia» nella scheda del contatto riservato: da quel momento lo vedono tutti.
+13. Rubrica grande (oltre 5.000 schede, dati finti): l'anteprima mostra 200 schede e «Mostrate 200 schede su N»; «Importa tutti» mostra «Importate 500 di N schede…» che avanza fino all'esito; un secondo import dello stesso file dà «0 contatti creati». Un file oltre `CONTACT_IMPORT_MAX_MB` viene fermato prima dell'invio con il messaggio «Il file è troppo grande … esporta la rubrica senza foto, oppure dividila in più file». Da verificare sul TEST anche il limite di dimensione delle richieste di Render, che da qui non si può misurare.
 
 ## Rientro
 

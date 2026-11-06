@@ -8,8 +8,15 @@
 // a chi importa, esistenti completati senza sovrascrivere, ambigui secondo la
 // scelta fatta qui (unire / nuovo / salta). Nessun invio parte. Tutto il
 // testo passa da `textContent`; il file non si legge mai nel browser.
+//
+// Rubriche grandi: nessun limite di schede. L'unico limite è la dimensione del
+// file (GET /api/contact-imports/limits, controllato anche qui prima di
+// inviarlo, con lo stesso messaggio del server). «Importa tutti» lavora a
+// blocchi: il server risponde con l'avanzamento e qui si richiama finché non è
+// finita, mostrando «Importate N di M schede». Un'interruzione si riprende con
+// lo stesso pulsante, senza doppioni.
 
-import { apiPost } from '../core/api-client.js';
+import { apiGet, apiPost } from '../core/api-client.js';
 
 const API = '/api/contact-imports';
 
@@ -38,28 +45,43 @@ export const STATUS_LABELS = {
   new: 'Nuovo', existing: 'Già in rubrica', ambiguous: 'Da decidere', no_phone: 'Senza numero',
 };
 
+/** Un numero all'italiana (5.952). */
+const num = (x) => Number(x || 0).toLocaleString('it-IT');
+
 /** Il riepilogo dell'anteprima in parole. */
 export function summaryText(s) {
-  const parts = [`${s.entries} schede nel file`, `${s.new} nuove`, `${s.existing} già in rubrica`];
-  if (s.ambiguous) parts.push(`${s.ambiguous} da decidere`);
-  if (s.no_phone) parts.push(`${s.no_phone} senza numero (non importate)`);
-  if (s.merged_in_file) parts.push(`${s.merged_in_file} unite perché avevano lo stesso numero`);
-  if (s.invalid_phones) parts.push(`${s.invalid_phones} numeri non validi scartati`);
+  const parts = [`${num(s.entries)} schede nel file`, `${num(s.new)} nuove`, `${num(s.existing)} già in rubrica`];
+  if (s.ambiguous) parts.push(`${num(s.ambiguous)} da decidere`);
+  if (s.no_phone) parts.push(`${num(s.no_phone)} senza numero (non importate)`);
+  if (s.merged_in_file) parts.push(`${num(s.merged_in_file)} unite perché avevano lo stesso numero`);
+  if (s.invalid_phones) parts.push(`${num(s.invalid_phones)} numeri non validi scartati`);
   return parts.join(' · ');
 }
 
 /** L'esito dell'importazione in parole. */
 export function resultText(r) {
-  const parts = [`${r.created} contatti creati`, `${r.updated} completati con numeri nuovi`, `${r.unchanged} già presenti e invariati`];
-  if (r.undecided) parts.push(`${r.undecided} non importati perché non hai deciso`);
-  if (r.skipped) parts.push(`${r.skipped} saltati`);
-  if (r.no_phone) parts.push(`${r.no_phone} senza numero`);
-  parts.push(`${r.conversations_linked} chat WhatsApp collegate`);
+  const parts = [`${num(r.created)} contatti creati`, `${num(r.updated)} completati con numeri nuovi`, `${num(r.unchanged)} già presenti e invariati`];
+  if (r.undecided) parts.push(`${num(r.undecided)} non importati perché non hai deciso`);
+  if (r.skipped) parts.push(`${num(r.skipped)} saltati`);
+  if (r.no_phone) parts.push(`${num(r.no_phone)} senza numero`);
+  parts.push(`${num(r.conversations_linked)} chat WhatsApp collegate`);
   return parts.join(' · ');
 }
 
 export function entryName(e) {
   return e.display_name || e.company_name || 'Senza nome';
+}
+
+/** Il messaggio per un file oltre la dimensione massima (lo stesso del server). */
+export function tooLargeText(bytes, maxMb) {
+  return `Il file è troppo grande (${Math.round(bytes / 1024 / 1024)} MB): il massimo è ${maxMb} MB. `
+    + 'Quasi sempre il peso sono le foto dei contatti: esporta la rubrica senza foto, oppure dividila in più file '
+    + 'e importali uno dopo l’altro (i contatti già importati non si duplicano).';
+}
+
+/** L'avanzamento di «Importa tutti». */
+export function progressText(p) {
+  return `Importate ${num(p.processed)} di ${num(p.total)} schede…`;
 }
 
 /** Manda il file al server: la sola lettura del file la fa il server. */
@@ -113,6 +135,8 @@ export function openContactImportDialog(dialogEl, onDone) {
 
   let current = null;          // l'anteprima salvata dal server
   const decisions = {};        // index -> { action, contact_id }
+  let maxMb = null;            // dal server; senza, decide solo il server
+  apiGet(`${API}/limits`).then((l) => { maxMb = l && l.max_file_mb ? l.max_file_mb : null; }).catch(() => {});
 
   function renderPreview(data) {
     preview.replaceChildren();
@@ -161,13 +185,24 @@ export function openContactImportDialog(dialogEl, onDone) {
         table.appendChild(tr);
       }
       preview.appendChild(table);
-      if (data.entries.length > shown.length) preview.appendChild(el('p', 'muted', `Mostrate le prime ${shown.length} schede.`));
+      const total = data.entries_total || data.entries.length;
+      if (total > shown.length + ambiguous.length) {
+        const more = el('p', 'muted', `Mostrate ${shown.length} schede su ${total.toLocaleString('it-IT')}: «Importa tutti» le importa tutte.`);
+        more.setAttribute('data-contact-import-sample', '');
+        preview.appendChild(more);
+      }
     }
   }
 
   analyze.addEventListener('click', async () => {
     const file = input.files && input.files[0];
     if (!file) { status.replaceChildren(el('div', 'error-box', 'Scegli prima il file .vcf.')); return; }
+    if (maxMb && file.size > maxMb * 1024 * 1024) {
+      const box = el('div', 'error-box', tooLargeText(file.size, maxMb));
+      box.setAttribute('data-contact-import-too-large', '');
+      status.replaceChildren(box);
+      return;
+    }
     analyze.disabled = true;
     status.replaceChildren(el('p', 'muted', 'Analisi del file in corso…'));
     try {
@@ -185,9 +220,21 @@ export function openContactImportDialog(dialogEl, onDone) {
   importAll.addEventListener('click', async () => {
     if (!current) return;
     importAll.disabled = true;
-    status.replaceChildren(el('p', 'muted', 'Importazione in corso…'));
+    const line = el('p', 'muted', 'Importazione in corso…');
+    line.setAttribute('data-contact-import-progress', '');
+    status.replaceChildren(line);
+    // L'elenco dell'anteprima non serve più: resta il riepilogo e l'avanzamento è subito visibile.
+    const summaryLine = preview.querySelector('[data-contact-import-summary]');
+    preview.replaceChildren(...(summaryLine ? [summaryLine] : []));
+    if (typeof line.scrollIntoView === 'function') line.scrollIntoView({ block: 'nearest' });
     try {
-      const out = await apiPost(`${API}/${encodeURIComponent(String(current.import_id))}/commit`, { decisions });
+      // A blocchi: si richiama finché il server non dice «done».
+      let out = null;
+      for (let round = 0; round < 10000; round += 1) {
+        out = await apiPost(`${API}/${encodeURIComponent(String(current.import_id))}/commit`, { decisions });
+        if (out.progress) line.textContent = progressText(out.progress);
+        if (out.done || out.status === 'done') break;
+      }
       const ok = el('div', 'success-box', resultText(out.result));
       ok.setAttribute('data-contact-import-result', '');
       status.replaceChildren(ok);
@@ -196,7 +243,8 @@ export function openContactImportDialog(dialogEl, onDone) {
       cancel.textContent = 'Chiudi';
       if (onDone) await onDone(out);
     } catch (error) {
-      status.replaceChildren(el('div', 'error-box', errorMessage(error)));
+      // L'avanzamento confermato resta sul server: «Importa tutti» riprende da lì, senza doppioni.
+      status.replaceChildren(el('div', 'error-box', `${errorMessage(error)} Puoi premere di nuovo «Importa tutti»: riprende da dove si è fermata, senza doppioni.`));
       importAll.disabled = false;
     }
   });

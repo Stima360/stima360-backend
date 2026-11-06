@@ -291,3 +291,98 @@ def test_due_caselle_permessi_e_importazione_nel_browser(wa, server, tmp_path, m
     assert composer["composerBottom"] is not None and composer["composerBottom"] <= composer["navTop"], composer
     for k, v in out["mobile"].items():
         assert v["scroll"] <= v["view"], (k, v)
+
+
+GRANDE = r"""
+const { chromium } = require('playwright');
+const [base, password, vcf, heavy, shots] = process.argv.slice(2);
+(async () => {
+  const out = { errors: [], progress: [] };
+  const browser = await chromium.launch();
+  const ctx = await browser.newContext({ viewport: { width: 1280, height: 900 }, deviceScaleFactor: 2 });
+  const page = await ctx.newPage();
+  page.on('pageerror', (e) => out.errors.push(String(e)));
+  page.on('console', (m) => { if (m.type() === 'error' && !/favicon|Failed to load resource/.test(m.text())) out.errors.push(m.text()); });
+  await page.goto(`${base}/os/`);
+  await page.fill('#login-email', 'b2c.owner_b@example.test');
+  await page.fill('#login-password', password);
+  await page.click('#login-form button[type=submit]');
+  await page.waitForTimeout(1500);
+  await page.evaluate(() => { window.location.hash = '#/contatti'; });
+  await page.waitForTimeout(1500);
+  // file oltre il limite: fermato prima dell'invio, con il messaggio chiaro
+  await page.click('[data-contatti-import]');
+  await page.waitForTimeout(800);
+  await page.setInputFiles('[data-contact-import-file]', heavy);
+  await page.click('[data-contact-import-analyze]');
+  await page.waitForSelector('[data-contact-import-too-large]', { timeout: 10000 });
+  out.tooLarge = await page.$eval('[data-contact-import-too-large]', (e) => e.textContent);
+  await page.click('[data-contact-import-close]');
+  // rubrica grande: anteprima, «Importa tutti» a blocchi con l'avanzamento
+  await page.click('[data-contatti-import]');
+  await page.waitForTimeout(800);
+  await page.setInputFiles('[data-contact-import-file]', vcf);
+  await page.click('[data-contact-import-analyze]');
+  await page.waitForSelector('[data-contact-import-summary]', { timeout: 60000 });
+  out.summary = await page.$eval('[data-contact-import-summary]', (e) => e.textContent);
+  out.sample = await page.$eval('[data-contact-import-sample]', (e) => e.textContent);
+  out.rows = await page.$$eval('[data-contact-import-entry]', (els) => els.length);
+  await page.click('[data-contact-import-commit]');
+  const t0 = Date.now();
+  while (Date.now() - t0 < 180000) {
+    const done = await page.$('[data-contact-import-result]');
+    if (done) break;
+    const p = await page.$('[data-contact-import-progress]');
+    if (p) { const t = await p.textContent(); if (t && out.progress[out.progress.length - 1] !== t) out.progress.push(t); }
+    if (out.progress.length === 3) {
+      out.progressVisible = await page.$eval('[data-contact-import-progress]', (e) => {
+        const r = e.getBoundingClientRect(); return r.top >= 0 && r.bottom <= window.innerHeight; });
+      if (shots) await page.screenshot({ path: `${shots}/07-import-grande-avanzamento.png` });
+    }
+    await page.waitForTimeout(150);
+  }
+  out.result = await page.$eval('[data-contact-import-result]', (e) => e.textContent);
+  if (shots) await page.screenshot({ path: `${shots}/08-import-grande-esito.png` });
+  await browser.close();
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e); process.exit(1); });
+"""
+
+
+def test_rubrica_oltre_5000_schede_nel_browser(app, server, tmp_path, monkeypatch):
+    found = _node_con_playwright()
+    if found is None:
+        pytest.skip("node con playwright non disponibile: collaudo nel browser NON eseguito (BLOCKED)")
+    node, env = found
+    from contact_imports import service
+    from tests.test_contact_import_postgres import _big_vcf
+
+    monkeypatch.setattr(service, "BLOCK_SIZE", 1000)
+    monkeypatch.setattr(service, "TIME_BUDGET_SECONDS", 0.0)       # un blocco per chiamata: si vede l'avanzamento
+    monkeypatch.setenv("CONTACT_IMPORT_MAX_MB", "2")
+    n = 6200
+    vcf = tmp_path / "rubrica-grande.vcf"
+    vcf.write_bytes(_big_vcf(n, start=3450000000, photo_every=200))
+    heavy = tmp_path / "rubrica-con-foto.vcf"
+    heavy.write_bytes(_big_vcf(800, start=3440000000, photo_every=1))
+    assert heavy.stat().st_size > 2 * 1024 * 1024 > vcf.stat().st_size
+    shots = SHOTS or str(tmp_path)
+    Path(shots).mkdir(parents=True, exist_ok=True)
+    script = tmp_path / "grande.js"
+    script.write_text(GRANDE, encoding="utf-8")
+    esito = subprocess.run([node, str(script), server, PASSWORD, str(vcf), str(heavy), shots],
+                           capture_output=True, text=True, timeout=400, env=env)
+    assert esito.returncode == 0, esito.stderr[-4000:]
+    out = json.loads(esito.stdout.strip().splitlines()[-1])
+    assert out["errors"] == [], out["errors"]
+    distinct = n - n // 25
+    assert "il massimo è 2 MB" in out["tooLarge"] and "senza foto" in out["tooLarge"]
+    assert "5.952 schede nel file" in out["summary"] and "5.952 nuove" in out["summary"] and distinct == 5952
+    assert out["rows"] == service.PREVIEW_SAMPLE and "«Importa tutti» le importa tutte" in out["sample"]
+    steps = [t for t in out["progress"] if t.startswith("Importate ")]
+    assert len(steps) >= 3 and steps[0] == "Importate 1.000 di 5.952 schede…"
+    assert out["progressVisible"] is True                          # l'avanzamento si vede senza scorrere
+    assert "5.952 contatti creati" in out["result"]
+    ids = app["ids"]
+    assert _q(app, "SELECT count(*) FROM contacts WHERE agency_id = %s AND display_name LIKE 'Rubrica Grande%%' "
+                   "AND phone_normalized LIKE '39345%%'", (ids["b"],))[0][0] == distinct

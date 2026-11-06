@@ -70,6 +70,11 @@ def get_import(cur, agency_id: int, user_id: int, import_id: int, *, lock: bool 
     return dict(row) if row else None
 
 
+def save_progress(cur, import_id: int, summary: dict) -> None:
+    """L'avanzamento di «Importa tutti», nella stessa transazione del blocco."""
+    cur.execute("UPDATE contact_imports SET summary = %s WHERE id = %s AND status = 'preview'", (Json(summary), import_id))
+
+
 def finish_import(cur, import_id: int, summary: dict) -> None:
     """Confermata: resta il riepilogo, le voci (dati personali) si tolgono."""
     cur.execute("UPDATE contact_imports SET status = 'done', committed_at = NOW(), entries = NULL, summary = %s "

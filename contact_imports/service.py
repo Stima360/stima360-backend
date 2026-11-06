@@ -22,8 +22,24 @@ un'ANTEPRIMA; i contatti si scrivono solo con «Importa tutti». Regole:
     si collegano subito, quelle future al loro arrivo;
   * NESSUN invio: nessuna comunicazione, follow-up o automazione parte da
     un'importazione.
+
+RUBRICHE GRANDI. Nessun limite al numero di schede. Il file si legge a pezzi
+e le foto (e ogni altra parte binaria) si scartano mentre arriva
+(vcard.Stripper), cosi' conta solo il testo; l'unico limite e' la dimensione
+del file inviato (`CONTACT_IMPORT_MAX_MB`, predefinito 200 MB), con un
+messaggio chiaro. L'anteprima analizza tutto ma ne restituisce al browser solo
+un campione (piu' tutte le voci da decidere). «Importa tutti» lavora A BLOCCHI
+di `BLOCK_SIZE` schede, ciascuno nella propria transazione, con l'avanzamento
+scritto nel registro (`contact_imports.summary.progress`): ogni chiamata
+elabora i blocchi che stanno in `TIME_BUDGET_SECONDS` e il browser richiama
+finche' non e' finita. Un'interruzione non perde nulla e non duplica nulla: si
+riprende dal primo blocco non confermato e ogni scheda si riconfronta con la
+rubrica di quel momento. La riconciliazione WhatsApp gira una volta, alla fine.
 """
 from __future__ import annotations
+
+import os
+import time
 
 from core.database import core_cursor
 from core.normalization import normalize_email, normalize_phone
@@ -34,8 +50,17 @@ from . import repository, vcard
 
 SOURCE_VCF = "vcf"
 CONTACT_SOURCE = "rubrica_import"
-MAX_ENTRIES = 5000
-MAX_FILE_BYTES = 8 * 1024 * 1024
+#: Dimensione massima del file INVIATO (foto comprese), in MB. Configurabile.
+MAX_FILE_MB_ENV = "CONTACT_IMPORT_MAX_MB"
+DEFAULT_MAX_FILE_MB = 200
+#: Testo utile conservato dopo aver scartato foto e parti binarie: oltre questo
+#: non e' piu' una rubrica (centinaia di migliaia di schede).
+MAX_TEXT_BYTES = 64 * 1024 * 1024
+#: Schede per blocco (una transazione ciascuno) e tempo massimo di una chiamata.
+BLOCK_SIZE = 500
+TIME_BUDGET_SECONDS = 20.0
+#: Quante schede «normali» l'anteprima restituisce al browser (tutte restano nel registro).
+PREVIEW_SAMPLE = 200
 
 STATUS_NEW = "new"
 STATUS_EXISTING = "existing"
@@ -70,6 +95,44 @@ class Forbidden(ImportError_):
 
 class Conflict(ImportError_):
     status = 409
+
+
+class TooLarge(ImportError_):
+    status = 413
+
+
+def max_file_bytes() -> int:
+    raw = (os.getenv(MAX_FILE_MB_ENV) or "").strip()
+    mb = int(raw) if raw.isdigit() and int(raw) > 0 else DEFAULT_MAX_FILE_MB
+    return mb * 1024 * 1024
+
+
+def limits() -> dict:
+    """I limiti reali, per l'interfaccia: nessun limite di schede."""
+    return {"max_file_mb": max_file_bytes() // (1024 * 1024), "block_size": BLOCK_SIZE, "max_entries": None}
+
+
+def too_large_message(size_bytes: int | None = None) -> str:
+    mb = max_file_bytes() // (1024 * 1024)
+    seen = f" (almeno {size_bytes / 1024 / 1024:.0f} MB)" if size_bytes else ""
+    return (f"Il file è troppo grande{seen}: il massimo è {mb} MB. Quasi sempre il peso sono le foto dei contatti: "
+            "esporta la rubrica senza foto, oppure dividila in più file e importali uno dopo l'altro "
+            "(i contatti già importati non si duplicano).")
+
+
+def read_upload_chunks(chunks) -> tuple[bytes, int]:
+    """Legge il file a pezzi scartando foto e parti binarie; si ferma appena
+    supera il limite. Ritorna (testo utile, byte ricevuti)."""
+    limit = max_file_bytes()
+    stripper = vcard.Stripper()
+    for chunk in chunks:
+        stripper.feed(chunk)
+        if stripper.total > limit:
+            raise TooLarge("FILE_TOO_LARGE", too_large_message(stripper.total))
+        if stripper.kept > MAX_TEXT_BYTES:
+            raise TooLarge("TEXT_TOO_LARGE", "Il file contiene troppo testo per una sola rubrica: dividilo in più file "
+                                             "e importali uno dopo l'altro.")
+    return stripper.finish(), stripper.total
 
 
 def _iso(value):
@@ -153,7 +216,10 @@ def _candidate_view(c: dict) -> dict:
 
 
 def _classify(entries: list[dict], contacts: list[dict], index: dict[str, set[int]]) -> None:
-    by_id = {c["id"]: c for c in contacts}
+    _classify_by_id(entries, {c["id"]: c for c in contacts}, index)
+
+
+def _classify_by_id(entries: list[dict], by_id: dict, index: dict[str, set[int]]) -> None:
     for e in entries:
         if not e["phones"]:
             e["status"], e["candidates"] = STATUS_NO_PHONE, []
@@ -171,17 +237,24 @@ def _summary(entries: list[dict]) -> dict:
             "invalid_phones": sum(len(e.get("invalid_phones") or []) for e in entries), **counts}
 
 
-def preview(ctx, *, file_name: str | None, data: bytes, source: str = SOURCE_VCF) -> dict:
-    """Analizza il file e salva l'anteprima (nessun contatto scritto)."""
+def _preview_view(entries: list[dict]) -> list[dict]:
+    """Al browser: TUTTE le voci da decidere e un campione delle altre."""
+    others = {id(e) for e in [e for e in entries if e["status"] != STATUS_AMBIGUOUS][:PREVIEW_SAMPLE]}
+    return [e for e in entries if e["status"] == STATUS_AMBIGUOUS or id(e) in others]
+
+
+def preview(ctx, *, file_name: str | None, data: bytes, source: str = SOURCE_VCF,
+            received_bytes: int | None = None) -> dict:
+    """Analizza il file e salva l'anteprima (nessun contatto scritto).
+    `received_bytes`: il file e' gia' passato da read_upload_chunks (foto
+    scartate); senza, `data` e' il file intero e si filtra qui."""
     _require_operator(ctx)
     agency_id = ctx.require_agency()
-    if len(data) > MAX_FILE_BYTES:
-        raise ImportError_("FILE_TOO_LARGE", "Il file supera gli 8 MB.")
+    if received_bytes is None:
+        data, received_bytes = read_upload_chunks([data])
     raw_entries = vcard.parse(data)
     if not raw_entries:
         raise ImportError_("NO_ENTRIES", "Nel file non ci sono schede vCard (BEGIN:VCARD … END:VCARD).")
-    if len(raw_entries) > MAX_ENTRIES:
-        raise ImportError_("TOO_MANY_ENTRIES", f"Il file ha più di {MAX_ENTRIES} schede: dividilo.")
     entries = _merge_duplicates(raw_entries)
     with core_cursor(commit=True) as (_, cur):
         if not repository.installed(cur):
@@ -191,10 +264,12 @@ def preview(ctx, *, file_name: str | None, data: bytes, source: str = SOURCE_VCF
         for i, e in enumerate(entries):
             e["index"] = i
         summary = _summary(entries)
+        summary["file_bytes"] = received_bytes
         row = repository.insert_preview(cur, agency_id=agency_id, user_id=ctx.user_id, source=source,
                                         file_name=(file_name or "")[:200] or None, entries=entries, summary=summary)
+    shown = _preview_view(entries)
     return {"import_id": row["id"], "status": row["status"], "file_name": file_name, "summary": summary,
-            "entries": entries}
+            "entries": shown, "entries_shown": len(shown), "entries_total": len(entries)}
 
 
 # ---------------------------------------------------------------------------
@@ -254,47 +329,107 @@ def _merge(cur, entry: dict, agency_id: int, contact_id: int) -> int:
     return added
 
 
+RESULT_KEYS = ("created", "updated", "unchanged", "skipped", "undecided", "phones_added", "no_phone")
+
+
+def _apply(cur, ctx, agency_id: int, entry: dict, decisions: dict, result: dict, by_id: dict, index: dict) -> None:
+    """Una scheda: classificata ADESSO sull'indice della rubrica, poi scritta.
+    L'indice si aggiorna subito, cosi' le schede successive vedono i contatti
+    appena creati e i numeri appena aggiunti."""
+    _classify_by_id([entry], by_id, index)
+    action, contact_id = _decision(decisions, entry)
+    if entry["status"] == STATUS_NO_PHONE:
+        result["no_phone"] += 1
+    elif action == ACTION_CREATE:
+        new_id = _create(cur, ctx, entry, agency_id)
+        result["created"] += 1
+        by_id[new_id] = {"id": new_id, "display_name": entry.get("display_name"), "first_name": entry.get("first_name"),
+                         "last_name": entry.get("last_name"), "company_name": entry.get("company_name"),
+                         "phone": entry["phones"][0]["raw"], "status": "active", "private_user_id": ctx.user_id,
+                         "email": (entry.get("emails") or [None])[0]}
+        for p in entry["phones"]:
+            index.setdefault(p["normalized"], set()).add(new_id)
+    elif action == ACTION_MERGE and contact_id is not None and _nothing_new(entry, contact_id, by_id, index):
+        # gia' tutto in rubrica (tutti i numeri sul contatto, email gia' presente o assente): nessuna scrittura
+        result["unchanged"] += 1
+    elif action == ACTION_MERGE and contact_id is not None:
+        added = _merge(cur, entry, agency_id, contact_id)
+        result["phones_added"] += added
+        result["updated" if added else "unchanged"] += 1
+        for p in entry["phones"]:
+            index.setdefault(p["normalized"], set()).add(contact_id)
+        if contact_id in by_id and not by_id[contact_id].get("email") and entry.get("emails"):
+            by_id[contact_id]["email"] = entry["emails"][0]
+    elif entry["status"] == STATUS_AMBIGUOUS:
+        result["undecided"] += 1
+    else:
+        result["skipped"] += 1
+
+
+def _nothing_new(entry: dict, contact_id: int, by_id: dict, index: dict) -> bool:
+    """La scheda non aggiunge nulla al contatto: ogni suo numero e' gia' del
+    contatto e non porta un'email da mettere in un campo vuoto."""
+    if any(contact_id not in index.get(p["normalized"], ()) for p in entry["phones"]):
+        return False
+    contact = by_id.get(contact_id) or {}
+    return not entry.get("emails") or bool(contact.get("email"))
+
+
+def _progress_view(imp_id: int, status: str, progress: dict, total: int, result: dict) -> dict:
+    return {"import_id": imp_id, "status": status, "done": status == "done",
+            "progress": {"processed": progress["next"], "total": total, "blocks": progress.get("blocks", 0)},
+            "result": result}
+
+
 def commit(ctx, import_id: int, decisions: dict | None) -> dict:
-    """«Importa tutti»: scrive i contatti dell'anteprima in UNA transazione,
-    poi riconcilia le conversazioni WhatsApp. Nessun invio."""
+    """«Importa tutti», A BLOCCHI. Ogni blocco di BLOCK_SIZE schede e' una
+    transazione con il proprio avanzamento; una chiamata elabora i blocchi che
+    stanno in TIME_BUDGET_SECONDS e risponde con l'avanzamento («in_progress»);
+    il browser richiama finche' non risponde «done». Le decisioni sulle voci
+    ambigue si fissano alla prima chiamata. Alla fine: riconciliazione delle
+    conversazioni WhatsApp e voci tolte dal registro. Nessun invio."""
     _require_operator(ctx)
     agency_id = ctx.require_agency()
-    with core_cursor(commit=True) as (_, cur):
-        if not repository.installed(cur):
-            raise NotInstalled("NOT_INSTALLED", NOT_INSTALLED_MESSAGE)
-        imp = repository.get_import(cur, agency_id, ctx.user_id, import_id, lock=True)
-        if imp is None:
-            raise NotFound("IMPORT_NOT_FOUND", "Anteprima non trovata (o di un altro operatore).")
-        if imp["status"] != "preview":
-            raise Conflict("IMPORT_ALREADY_DONE", "Questa anteprima è già stata importata.")
-        entries = imp["entries"] or []
-        # Si riclassifica ADESSO: la rubrica puo' essere cambiata dopo l'anteprima.
-        contacts, index = repository.visible_contacts(cur, ctx)
-        _classify(entries, contacts, index)
-        result = {"created": 0, "updated": 0, "unchanged": 0, "skipped": 0, "undecided": 0, "phones_added": 0,
-                  "no_phone": 0}
-        for e in entries:
-            action, contact_id = _decision(decisions or {}, e)
-            if e["status"] == STATUS_NO_PHONE:
-                result["no_phone"] += 1
-            elif action == ACTION_CREATE:
-                _create(cur, ctx, e, agency_id)
-                result["created"] += 1
-            elif action == ACTION_MERGE and contact_id is not None:
-                added = _merge(cur, e, agency_id, contact_id)
-                result["phones_added"] += added
-                result["updated" if added else "unchanged"] += 1
-            elif e["status"] == STATUS_AMBIGUOUS:
-                result["undecided"] += 1
-            else:
-                result["skipped"] += 1
-        # Le conversazioni WhatsApp gia' ricevute senza contatto prendono il
-        # contatto appena importato (quelle future al loro arrivo). Mai le manuali.
-        linked = contact_match.reconcile(cur, agency_id)
-        result["conversations_linked"] = linked.get("linked_conversations", 0)
-        summary = {**(imp["summary"] or {}), "result": result}
-        repository.finish_import(cur, import_id, summary)
-    return {"import_id": import_id, "status": "done", "result": result}
+    started = time.monotonic()
+    by_id, index, loaded_at = None, None, None
+    while True:
+        with core_cursor(commit=True) as (_, cur):
+            if not repository.installed(cur):
+                raise NotInstalled("NOT_INSTALLED", NOT_INSTALLED_MESSAGE)
+            # Il lock del registro serializza due chiamate sulla stessa importazione.
+            imp = repository.get_import(cur, agency_id, ctx.user_id, import_id, lock=True)
+            if imp is None:
+                raise NotFound("IMPORT_NOT_FOUND", "Anteprima non trovata (o di un altro operatore).")
+            summary = dict(imp["summary"] or {})
+            entries = imp["entries"] or []
+            if imp["status"] != "preview":
+                raise Conflict("IMPORT_ALREADY_DONE", "Questa importazione è già stata completata.")
+            progress = dict(summary.get("progress") or {"next": 0, "blocks": 0})
+            if "decisions" not in summary:
+                summary["decisions"] = {k: v for k, v in (decisions or {}).items()}
+            result = dict(summary.get("result_partial") or {k: 0 for k in RESULT_KEYS})
+            # L'indice della rubrica: caricato una volta per chiamata, ricaricato
+            # se un'altra chiamata ha avanzato nel frattempo.
+            if index is None or loaded_at != progress["next"]:
+                contacts, index = repository.visible_contacts(cur, ctx)
+                by_id = {c["id"]: c for c in contacts}
+            if progress["next"] >= len(entries):
+                linked = contact_match.reconcile(cur, agency_id)
+                result["conversations_linked"] = linked.get("linked_conversations", 0)
+                final = {k: v for k, v in summary.items() if k not in ("decisions", "result_partial")}
+                final["progress"] = progress
+                final["result"] = result
+                repository.finish_import(cur, import_id, final)
+                return _progress_view(import_id, "done", progress, len(entries), result)
+            block = entries[progress["next"]:progress["next"] + BLOCK_SIZE]
+            for entry in block:
+                _apply(cur, ctx, agency_id, entry, summary["decisions"], result, by_id, index)
+            progress = {"next": progress["next"] + len(block), "blocks": progress.get("blocks", 0) + 1}
+            summary["progress"], summary["result_partial"] = progress, result
+            repository.save_progress(cur, import_id, summary)
+            loaded_at = progress["next"]
+        if time.monotonic() - started >= TIME_BUDGET_SECONDS and progress["next"] < len(entries):
+            return _progress_view(import_id, "in_progress", progress, len(entries), result)
 
 
 def get(ctx, import_id: int) -> dict:

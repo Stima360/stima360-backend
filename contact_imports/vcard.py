@@ -167,3 +167,76 @@ def parse(data: bytes) -> list[dict]:
             if raw and raw not in [p["raw"] for p in current.phones]:
                 current.phones.append({"raw": raw, "label": _label(params)})
     return [e.as_dict() for e in entries]
+
+
+# ---------------------------------------------------------------------------
+# Lettura in streaming: le parti binarie si scartano mentre il file arriva
+# ---------------------------------------------------------------------------
+
+#: Proprieta' binarie o pesanti che l'importazione non usa mai: foto, loghi,
+#: suoni, chiavi. In una rubrica esportata da iPhone le foto sono la quasi
+#: totalita' dei byte; scartarle durante la lettura tiene la memoria piccola
+#: qualunque sia il numero di schede.
+SKIPPED_PROPERTIES = frozenset({"PHOTO", "LOGO", "SOUND", "KEY", "X-ABCROP-RECTANGLE"})
+
+
+class Stripper:
+    """Riceve il file a pezzi (`feed`) e tiene solo le righe utili: le
+    proprieta' in SKIPPED_PROPERTIES spariscono con tutte le loro righe di
+    continuazione (spazio o tab iniziale, oppure, nel 2.1, fino alla riga
+    vuota). `total` conta i byte RICEVUTI, `kept` quelli conservati. I file
+    UTF-16 (rari: Outlook) non si possono dividere per righe a byte: si
+    conservano interi e si decodificano dopo."""
+
+    def __init__(self):
+        self.total = 0
+        self._out: list[bytes] = []
+        self.kept = 0
+        self._tail = b""
+        self._skipping = False
+        self._utf16 = None
+
+    def feed(self, chunk: bytes) -> None:
+        if not chunk:
+            return
+        self.total += len(chunk)
+        if self._utf16 is None:
+            self._utf16 = chunk[:2] in (b"\xff\xfe", b"\xfe\xff")
+        if self._utf16:
+            self._out.append(chunk)
+            self.kept += len(chunk)
+            return
+        data = self._tail + chunk
+        lines = data.split(b"\n")
+        self._tail = lines.pop()
+        for line in lines:
+            self._line(line + b"\n")
+
+    def _line(self, line: bytes) -> None:
+        bare = line.rstrip(b"\r\n")
+        if self._skipping:
+            if bare[:1] in (b" ", b"\t") or not bare.strip():
+                return                                   # continuazione della proprieta' scartata
+            self._skipping = False
+        head = bare.split(b":", 1)[0].split(b";", 1)[0].split(b".")[-1].strip().upper()
+        if head.decode("latin-1") in SKIPPED_PROPERTIES and b":" in bare:
+            self._skipping = True
+            return
+        self._out.append(line)
+        self.kept += len(line)
+
+    def finish(self) -> bytes:
+        if self._tail:
+            if self._utf16:
+                self._out.append(self._tail)
+            else:
+                self._line(self._tail)
+            self._tail = b""
+        return b"".join(self._out)
+
+
+def strip(data: bytes) -> bytes:
+    """Lo stesso filtro su un file gia' in memoria."""
+    s = Stripper()
+    s.feed(data)
+    return s.finish()

@@ -216,3 +216,45 @@ def test_u_whatsapp_view_speaks_per_inbox_and_settings_have_the_inboxes_tab():
 def test_u_changed_javascript_parses(rel):
     out = subprocess.run([NODE, "--check", str(ASSETS / rel)], capture_output=True, text=True, timeout=60)
     assert out.returncode == 0, out.stderr
+
+
+# ---------------------------------------------------------------------------
+# R - rubriche grandi: lettura a pezzi senza foto, nessun limite di schede
+# ---------------------------------------------------------------------------
+
+def test_r_the_stripper_drops_photos_in_any_chunking_and_keeps_every_card():
+    card = ("BEGIN:VCARD\r\nVERSION:3.0\r\nFN:Con Foto {i}\r\nPHOTO;ENCODING=b;TYPE=JPEG:" + "A" * 70
+            + "\r\n" + "".join(" " + "B" * 70 + "\r\n" for _ in range(30))
+            + "item1.TEL;type=CELL:+39 347 {i:07d}\r\nX-ABCROP-RECTANGLE:ABClipRect_1&0&0&1&1\r\nEND:VCARD\r\n")
+    v21 = ("BEGIN:VCARD\r\nVERSION:2.1\r\nFN:Vecchio 2.1\r\nPHOTO;ENCODING=BASE64;JPEG:/9j/4AAQ\r\n  AAAA\r\n  BBBB\r\n\r\n"
+           "TEL;CELL:+39 333 0000000\r\nEND:VCARD\r\n")
+    data = ("".join(card.format(i=i) for i in range(50)) + v21).encode()
+    whole = vcard.strip(data)
+    assert b"PHOTO" not in whole and b"BBBB" not in whole and b"ABClipRect" not in whole and len(whole) < len(data) / 5
+    for size in (1, 7, 64, 1000):
+        s = vcard.Stripper()
+        for i in range(0, len(data), size):
+            s.feed(data[i:i + size])
+        assert s.finish() == whole and s.total == len(data)
+    parsed = vcard.parse(whole)
+    assert len(parsed) == 51 and parsed[3]["phones"][0]["raw"] == "+39 347 0000003"
+    assert parsed[-1]["fn"] == "Vecchio 2.1" and parsed[-1]["phones"][0]["raw"] == "+39 333 0000000"
+
+
+def test_r_no_card_limit_and_a_clear_size_message(monkeypatch):
+    assert not hasattr(service, "MAX_ENTRIES")
+    assert service.limits()["max_entries"] is None and service.limits()["max_file_mb"] == 200
+    monkeypatch.setenv("CONTACT_IMPORT_MAX_MB", "2")
+    assert service.max_file_bytes() == 2 * 1024 * 1024
+    with pytest.raises(service.TooLarge) as e:
+        service.read_upload_chunks([b"x" * (1024 * 1024)] * 3)
+    assert e.value.status == 413 and e.value.code == "FILE_TOO_LARGE" and "il massimo è 2 MB" in str(e.value)
+    monkeypatch.setenv("CONTACT_IMPORT_MAX_MB", "nonnumero")
+    assert service.max_file_bytes() == 200 * 1024 * 1024
+
+
+def test_r_the_dialog_loops_over_blocks_and_checks_the_size():
+    comp = (ASSETS / "components" / "contact-import.js").read_text(encoding="utf-8")
+    assert "`${API}/limits`" in comp and "tooLargeText(file.size, maxMb)" in comp
+    assert "if (out.done || out.status === 'done') break;" in comp and "progressText(out.progress)" in comp
+    assert "data-contact-import-progress" in comp and "riprende da dove si è fermata" in comp

@@ -104,7 +104,8 @@ def test_i1_import_keeps_every_number_creates_private_contacts_and_repeats_witho
     assert p.status_code == 200, p.text
     preview = p.json()
     assert preview["summary"] == {"entries": 4, "merged_in_file": 1, "invalid_phones": 1, "new": 2, "existing": 0,
-                                  "ambiguous": 0, "no_phone": 2}
+                                  "ambiguous": 0, "no_phone": 2, "file_bytes": len(data)}
+    assert preview["entries_total"] == 4 and preview["entries_shown"] == 4
     mario = next(e for e in preview["entries"] if e["display_name"] == "Mario Rossi")
     assert [x["normalized"] for x in mario["phones"]] == [s1, s2, s3] and mario["merged"] == 1 and mario["status"] == "new"
     assert mario["first_name"] == "Mario" and mario["last_name"] == "Rossi"
@@ -297,3 +298,132 @@ def test_i7_previews_belong_to_their_operator_and_bad_files_are_refused(ib):
     assert r.status_code == 400 and r.json()["detail"]["code"] == "NO_ENTRIES"
     r = owner.post(f"{IMPORTS}/{p['import_id']}/commit", json={"decisions": {"0": {"action": "boom"}}})
     assert r.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# I8 - rubriche grandi: nessun limite di schede, «Importa tutti» a blocchi
+# ---------------------------------------------------------------------------
+
+PHOTO = "PHOTO;ENCODING=b;TYPE=JPEG:" + "A" * 74 + "\r\n" + "\r\n".join(" " + "B" * 74 for _ in range(40))
+
+
+def _big_vcf(n, start=3470000000, photo_every=0):
+    """`n` schede con numeri sintetici consecutivi; ogni 10 una ha due numeri,
+    ogni 25 ripete il numero della precedente (si unisce nel file)."""
+    lines = []
+    for i in range(n):
+        number = start + i - (1 if i % 25 == 24 else 0)
+        lines += ["BEGIN:VCARD", "VERSION:3.0", f"N:Grande{i};Rubrica;;;", f"FN:Rubrica Grande{i}",
+                  f"TEL;type=CELL:+39 {number}"]
+        if i % 10 == 0:
+            lines.append(f"TEL;type=HOME:+39 {number + 50_000_000}")
+        if photo_every and i % photo_every == 0:
+            lines.append(PHOTO)
+        lines.append("END:VCARD")
+    return ("\r\n".join(lines) + "\r\n").encode("utf-8")
+
+
+def _commit_all(client, import_id, decisions=None):
+    calls, last = 0, None
+    while True:
+        r = client.post(f"{IMPORTS}/{import_id}/commit", json={"decisions": decisions or {}})
+        assert r.status_code == 200, r.text
+        calls += 1
+        body = r.json()
+        assert last is None or body["progress"]["processed"] >= last
+        last = body["progress"]["processed"]
+        if body["done"]:
+            return body, calls
+        assert body["status"] == "in_progress" and calls < 1000
+
+
+def test_i8_more_than_5000_cards_import_in_blocks_and_repeat_without_duplicates(ib, monkeypatch):
+    import time as _time
+
+    from contact_imports import service
+
+    ids = ib["ids"]
+    owner = ib["login"]("owner_b")                               # agenzia B: rubrica vuota, conteggi puliti
+    n = 6200
+    data = _big_vcf(n, photo_every=50)
+    before = _ledger_count(ib)
+    t0 = _time.monotonic()
+    p = _preview(owner, data, name="rubrica-grande.vcf")
+    assert p.status_code == 200, p.text
+    preview = p.json()
+    distinct = n - n // 25                                        # ogni 25a si unisce alla precedente
+    assert preview["summary"]["entries"] == distinct and preview["summary"]["new"] == distinct
+    assert preview["summary"]["merged_in_file"] == n // 25 and preview["summary"]["file_bytes"] == len(data)
+    assert preview["entries_total"] == distinct and preview["entries_shown"] == service.PREVIEW_SAMPLE
+    # un blocco per chiamata: il browser richiama finche' non e' finita
+    monkeypatch.setattr(service, "TIME_BUDGET_SECONDS", 0.0)
+    body, calls = _commit_all(owner, preview["import_id"])
+    elapsed = _time.monotonic() - t0
+    blocks = -(-distinct // service.BLOCK_SIZE)
+    assert calls == blocks                                         # l'ultima chiamata scrive l'ultimo blocco, chiude e riconcilia
+    assert body["progress"] == {"processed": distinct, "total": distinct, "blocks": blocks}
+    assert body["result"]["created"] == distinct and body["result"]["phones_added"] == 0
+    count = _q(ib, "SELECT count(*) FROM contacts WHERE agency_id = %s AND source = 'rubrica_import' "
+                   "AND private_user_id = %s AND display_name LIKE 'Rubrica Grande%%'", (ids["b"], ids["owner_b"]))[0][0]
+    assert count == distinct
+    extra = _q(ib, "SELECT count(*) FROM contact_phones cp JOIN contacts c ON c.id = cp.contact_id "
+                   "WHERE c.agency_id = %s AND c.display_name LIKE 'Rubrica Grande%%'", (ids["b"],))[0][0]
+    assert extra == distinct + sum(1 for i in range(n) if i % 10 == 0 and i % 25 != 24)
+    imp = _q(ib, "SELECT status, entries IS NULL, summary->'progress'->>'next', summary ? 'decisions' "
+                 "FROM contact_imports WHERE id = %s", (preview["import_id"],))[0]
+    assert imp == ("done", True, str(distinct), False)
+    assert _commit(owner, preview["import_id"]).status_code == 409
+    assert _ledger_count(ib) == before                            # nessun invio
+    # stesso file di nuovo: tutto gia' in rubrica, nessun doppione
+    monkeypatch.setattr(service, "TIME_BUDGET_SECONDS", 20.0)
+    again = _preview(owner, data).json()
+    assert again["summary"]["existing"] == distinct and again["summary"]["new"] == 0
+    body2, _ = _commit_all(owner, again["import_id"])
+    assert body2["result"]["created"] == 0 and body2["result"]["unchanged"] == distinct
+    assert _q(ib, "SELECT count(*) FROM contacts WHERE agency_id = %s AND display_name LIKE 'Rubrica Grande%%'",
+              (ids["b"],))[0][0] == distinct
+    print(f"\n[I8] {n} schede ({len(data) / 1024 / 1024:.1f} MB con foto), {blocks} blocchi, import in {elapsed:.1f} s")
+
+
+def test_i9_an_interrupted_import_resumes_and_concurrent_calls_never_duplicate(ib, monkeypatch):
+    import threading
+
+    from contact_imports import service
+
+    ids = ib["ids"]
+    owner = ib["login"]("owner_b")
+    data = _big_vcf(1600, start=3480000000)
+    preview = _preview(owner, data).json()
+    monkeypatch.setattr(service, "TIME_BUDGET_SECONDS", 0.0)
+    first = owner.post(f"{IMPORTS}/{preview['import_id']}/commit", json={"decisions": {}}).json()
+    assert first["status"] == "in_progress" and first["progress"]["processed"] == service.BLOCK_SIZE
+    # «interruzione»: il browser si chiude. Due chiamate insieme riprendono dallo stesso punto.
+    results = []
+
+    def go():
+        results.append(_commit_all(ib["login"]("owner_b"), preview["import_id"]))
+
+    threads = [threading.Thread(target=go) for _ in range(2)]
+    [t.start() for t in threads]
+    [t.join() for t in threads]
+    total = preview["entries_total"]
+    assert _q(ib, "SELECT count(*) FROM contacts WHERE agency_id = %s AND phone_normalized LIKE '39348%%'",
+              (ids["b"],))[0][0] == total
+    assert _q(ib, "SELECT summary->'result'->>'created' FROM contact_imports WHERE id = %s",
+              (preview["import_id"],))[0][0] == str(total)
+
+
+def test_i10_size_limit_is_clear_and_photos_do_not_count_toward_the_text(ib, monkeypatch):
+    owner = ib["login"]("owner_b")
+    monkeypatch.setenv("CONTACT_IMPORT_MAX_MB", "1")
+    assert owner.get(f"{IMPORTS}/limits").json() == {"max_file_mb": 1, "block_size": 500, "max_entries": None}
+    heavy = _big_vcf(400, start=3490000000, photo_every=1)        # ~1,3 MB, quasi tutto foto: oltre il limite
+    assert len(heavy) > 1024 * 1024
+    r = _preview(owner, heavy)
+    assert r.status_code == 413 and r.json()["detail"]["code"] == "FILE_TOO_LARGE"
+    message = r.json()["detail"]["message"]
+    assert "il massimo è 1 MB" in message and "senza foto" in message and "dividila in più file" in message
+    # sotto il limite: le foto si scartano e le schede si leggono tutte
+    monkeypatch.setenv("CONTACT_IMPORT_MAX_MB", "5")
+    ok = _preview(owner, heavy)
+    assert ok.status_code == 200 and ok.json()["summary"]["entries"] == 400 - 400 // 25
