@@ -169,7 +169,8 @@ def test_01_la_071_e_valida_e_in_coda():
     # SENTINELLA AGGIORNATA DALLA FIRMA OTP: 129_signature_otp (additiva).
     # SENTINELLA AGGIORNATA DA WHATSAPP DUE CASELLE e IMPORTAZIONE RUBRICA: 130, 131 (additive).
     # SENTINELLA AGGIORNATA DA WHATSAPP COEXISTENCE: 132_whatsapp_coexistence (additiva).
-    assert numeri[numeri.index(76):] == list(range(76, 133))
+    # SENTINELLA AGGIORNATA DA SELEZIONE MULTIPLA: 133_contact_stop_fence_indexed (solo la funzione).
+    assert numeri[numeri.index(76):] == list(range(76, 134))
     nuova = trovate["097_tappa6_request_followup"]
     assert runner.validate_migration(nuova) == [] and nuova.down_available
     assert len(numeri) == len(set(numeri))

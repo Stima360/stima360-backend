@@ -130,6 +130,9 @@ APPROVED_VERSIONS = (
     # SENTINELLA AGGIORNATA DA WHATSAPP COEXISTENCE: la 132 (direzione e origine dei messaggi, rubrica
     # dell'app, registro dei collegamenti Meta; additiva, down che rifiuta se ci sono dati).
     "132_whatsapp_coexistence",
+    # SENTINELLA AGGIORNATA DA SELEZIONE MULTIPLA: la 133 (guardia T6 dei contatti con ricerche
+    # dirette sugli indici; stesso insieme e stessi lock della 097, nessun dato toccato).
+    "133_contact_stop_fence_indexed",
 )
 
 
