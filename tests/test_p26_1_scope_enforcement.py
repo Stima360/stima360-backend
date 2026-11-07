@@ -1029,6 +1029,14 @@ FROZEN_CORE_ROUTES = {
     ("POST", "/api/core/contacts/{contact_id}/trash", 200),
     ("POST", "/api/core/contacts/{contact_id}/restore", 200),
     ("GET", "/api/core/trash/contacts", 200),
+    # SENTINELLA AGGIORNATA DA SELEZIONE MULTIPLA: «Seleziona tutti i risultati», spostamento
+    # e ripristino a blocchi, le operazioni nel Cestino (core/contact_bulk.py; stesse regole
+    # del singolo, agenzia solo dalla sessione).
+    ("GET", "/api/core/contacts/selection", 200),
+    ("POST", "/api/core/contacts/bulk-trash", 200),
+    ("POST", "/api/core/contacts/bulk-restore", 200),
+    ("GET", "/api/core/contacts/trash-operations", 200),
+    ("GET", "/api/core/contacts/trash-operations/{operation_id}", 200),
 }
 
 

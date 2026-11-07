@@ -16,7 +16,7 @@ tasks.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Response
 from fastapi.responses import JSONResponse
 
 from operator_auth.context import OperatorContext
@@ -34,6 +34,8 @@ from .schemas import (
     ActivityCreate,
     AssignmentUpdate,
     ContactCreate,
+    ContactBulkRestore,
+    ContactBulkTrash,
     ContactTrash,
     ContactRoleCreate,
     ContactUpdate,
@@ -96,6 +98,43 @@ def list_contacts(
     ctx: OperatorContext = Depends(require_operator),
 ):
     return {"items": _translate(service.list_contacts, ctx, limit, offset, search, status, sort)}
+
+
+# ---------------------------------------------------------------------------
+# SELEZIONE MULTIPLA (core/contact_bulk.py): dichiarate PRIMA di
+# `/contacts/{contact_id}`. Stesse regole dello spostamento e del ripristino
+# singoli; l'agenzia e' solo quella della sessione.
+# ---------------------------------------------------------------------------
+
+@router.get("/contacts/selection")
+def contact_selection(
+    search: str | None = Query(default=None, max_length=200),
+    status: str | None = Query(default=None, max_length=30),
+    ctx: OperatorContext = Depends(require_operator),
+):
+    return _translate_trash(service.contact_selection, ctx, search, status)
+
+
+@router.post("/contacts/bulk-trash")
+def bulk_trash_contacts(payload: ContactBulkTrash, ctx: OperatorContext = Depends(require_operator)):
+    return _translate_trash(service.bulk_trash_contacts, ctx, payload)
+
+
+@router.post("/contacts/bulk-restore")
+def bulk_restore_contacts(payload: ContactBulkRestore, ctx: OperatorContext = Depends(require_operator)):
+    return _translate_trash(service.bulk_restore_contacts, ctx, payload)
+
+
+@router.get("/contacts/trash-operations")
+def contact_trash_operations(limit: int = Query(default=20, ge=1, le=50),
+                             ctx: OperatorContext = Depends(require_operator)):
+    return _translate_trash(service.contact_trash_operations, ctx, limit)
+
+
+@router.get("/contacts/trash-operations/{operation_id}")
+def contact_trash_operation_ids(operation_id: str = Path(..., max_length=36),
+                                ctx: OperatorContext = Depends(require_operator)):
+    return _translate_trash(service.contact_trash_operation_ids, ctx, operation_id)
 
 
 @router.get("/contacts/{contact_id}")

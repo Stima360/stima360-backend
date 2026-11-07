@@ -285,6 +285,8 @@ def _sul_cursore(fn):
 COVERAGE = {
     "create_contact": lambda ctx: repository.create_contact(ctx, {"display_name": "x"}),
     "list_contacts": lambda ctx: repository.list_contacts(ctx, 50, 0, None, None),
+    # SELEZIONE MULTIPLA: «Seleziona tutti i risultati» (stessa regola dell'elenco).
+    "list_contact_ids": lambda ctx: repository.list_contact_ids(ctx, None, None),
     "get_contact": lambda ctx: repository.get_contact(ctx, 1),
     "update_contact": lambda ctx: repository.update_contact(ctx, 1, {"status": "active"}),
     "add_contact_role": lambda ctx: repository.add_contact_role(ctx, 1, {"role": "owner", "is_primary": True, "valid_from": None, "valid_to": None, "metadata": None}),

@@ -265,6 +265,36 @@ class ContactTrash(CoreModel):
     note: str | None = Field(default=None, max_length=500)
 
 
+class ContactBulkTrash(CoreModel):
+    """SELEZIONE MULTIPLA: un blocco di contatti da spostare nel Cestino. Gli id
+    sono riletti nello scope di chi chiede (core/contact_bulk.py); nessun
+    `agency_id`, nessun operatore nel corpo. `confirm` deve essere esplicito."""
+    ids: list[int] = Field(..., min_length=1, max_length=100)
+    reason_code: str = Field(..., max_length=30)
+    note: str | None = Field(default=None, max_length=500)
+    operation_id: str | None = Field(default=None, max_length=36)
+    confirm: bool
+
+    @root_validator(skip_on_failure=True)
+    def _conferma(cls, values):
+        if values.get("confirm") is not True:
+            raise ValueError("confirm must be true")
+        return values
+
+
+class ContactBulkRestore(CoreModel):
+    """SELEZIONE MULTIPLA: un blocco di contatti da ripristinare dal Cestino."""
+    ids: list[int] = Field(..., min_length=1, max_length=100)
+    operation_id: str | None = Field(default=None, max_length=36)
+    confirm: bool
+
+    @root_validator(skip_on_failure=True)
+    def _conferma(cls, values):
+        if values.get("confirm") is not True:
+            raise ValueError("confirm must be true")
+        return values
+
+
 class TaskUpdate(CoreModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     description: str | None = None

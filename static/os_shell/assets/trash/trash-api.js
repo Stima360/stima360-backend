@@ -52,6 +52,41 @@ export function restoreContact(contactId) {
   return apiPost(`/api/core/contacts/${contactId}/restore`);
 }
 
+// --- SELEZIONE MULTIPLA dei Contatti (core/contact_bulk.py) -------------------
+// Gli id restano NON fidati: il server li rilegge nello scope, nella riservatezza
+// e nell'agenzia della sessione. Al piu' 100 per richiesta; `confirm` esplicito.
+
+/** «Seleziona tutti i risultati»: gli id della stessa ricerca dell'elenco. */
+export function contactSelectionIds({ search = '', status = '' } = {}) {
+  const params = new URLSearchParams();
+  if (search) params.set('search', search);
+  if (status) params.set('status', status);
+  const qs = params.toString();
+  return apiGet(`/api/core/contacts/selection${qs ? `?${qs}` : ''}`);
+}
+
+export function bulkTrashContacts(ids, reasonCode, note, operationId) {
+  const corpo = { ids, reason_code: reasonCode, confirm: true };
+  const testo = typeof note === 'string' ? note.trim() : '';
+  if (testo) corpo.note = testo;
+  if (operationId) corpo.operation_id = operationId;
+  return apiPost('/api/core/contacts/bulk-trash', corpo);
+}
+
+export function bulkRestoreContacts(ids, operationId) {
+  const corpo = { ids, confirm: true };
+  if (operationId) corpo.operation_id = operationId;
+  return apiPost('/api/core/contacts/bulk-restore', corpo);
+}
+
+export function listContactTrashOperations() {
+  return apiGet('/api/core/contacts/trash-operations');
+}
+
+export function contactTrashOperationIds(operationId) {
+  return apiGet(`/api/core/contacts/trash-operations/${encodeURIComponent(operationId)}`);
+}
+
 /** L'azione proposta dal blocco OWNER_PORTAL_ACTIVE: la rotta esistente. */
 export function disableOwnerAccount(accountId) {
   return apiPost(`/api/owner/admin/accounts/${Number(accountId)}/disable`, {});

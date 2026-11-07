@@ -2660,3 +2660,37 @@ a.scrivania-mini:hover { color: var(--primary); }
   .inc-toolbar .input { flex: none; width: 100%; max-width: none; }
   .inc-toolbar .sort-toggle-host { align-self: flex-start; }
 }
+
+/* SELEZIONE MULTIPLA dei Contatti (components/contact-bulk.js): caselle, barra fissa, conferma, avanzamento, riepilogo. */
+.bulk-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin: 0 0 10px; }
+.bulk-check { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; min-width: 44px; cursor: pointer; }
+.bulk-check input[type="checkbox"] { width: 22px; height: 22px; margin: 0; accent-color: var(--primary); cursor: pointer; }
+.trash-card-check { margin-right: 4px; }
+/* La barra e' FISSA in basso (la Shell scorre in un contenitore suo, dove `sticky` non tiene);
+   il suo segnaposto (`.bulk-bar-on`) lascia lo spazio in fondo all'elenco, cosi' non copre nulla. */
+.bulk-bar-on { min-height: 84px; }
+.bulk-bar { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(16px + env(safe-area-inset-bottom, 0px)); z-index: 30; width: min(760px, calc(100% - 32px)); box-sizing: border-box; display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 14px; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 8px 28px rgba(23, 35, 58, .22); }
+.bulk-bar[hidden] { display: none; }
+.bulk-bar .btn { min-height: 44px; }
+.bulk-bar-count { font-weight: 700; margin-right: auto; }
+.bulk-dialog .bulk-effects { margin: 0 0 12px; padding-left: 18px; }
+.bulk-dialog .field { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin: 10px 0; }
+.bulk-dialog .field .input { width: 100%; box-sizing: border-box; }
+.bulk-dialog .bulk-effects li { margin: 4px 0; }
+.bulk-progress-track { height: 10px; border-radius: 999px; background: var(--border); overflow: hidden; margin: 8px 0 14px; }
+.bulk-progress-fill { height: 100%; background: var(--primary); transition: width .2s ease; }
+.bulk-summary .bulk-group { margin-top: 12px; }
+.bulk-summary .bulk-group h4 { margin: 0 0 4px; font-size: 15px; }
+.bulk-summary .bulk-group-count { color: var(--muted); font-weight: 600; }
+.bulk-summary .bulk-list { margin: 4px 0; padding-left: 18px; max-height: 220px; overflow: auto; }
+.bulk-ops { margin: 0 0 12px; }
+.bulk-ops-title { margin: 0 0 6px; font-size: 15px; }
+.bulk-ops-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.bulk-ops-list li { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--panel); }
+.bulk-ops-list .btn { min-height: 44px; }
+@media (max-width: 767px) {
+  .bulk-bar { bottom: calc(var(--os-nav-h) + env(safe-area-inset-bottom, 0px) + 8px); width: calc(100% - 24px); }
+  .bulk-bar-on { min-height: 140px; }
+  .bulk-bar .btn { flex: 1 1 auto; }
+  .bulk-bar-count { flex-basis: 100%; }
+}

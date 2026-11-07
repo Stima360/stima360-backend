@@ -17,6 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from core.contact_privacy import contact_privacy_predicate
 from core.scope import scoped_predicate
 from operator_auth import permissions
 
@@ -60,6 +61,9 @@ def _vis_contact(ctx):
     spostato lui."""
     ctx.require_agency()
     predicato, params = scoped_predicate(ctx, "contacts", "c")
+    # IMPORTAZIONE RUBRICA: il contatto riservato a un altro operatore non si vede (come in list_trash).
+    privacy, privacy_params = contact_privacy_predicate(ctx, "c")
+    predicato, params = f"{predicato} AND {privacy}", [*params, *privacy_params]
     if not _gestisce_agenzia(ctx):
         predicato += " AND c.deleted_by_user_id = %s"
         params = [*params, getattr(ctx, "user_id", None)]

@@ -68,6 +68,10 @@ import {
   unifiedCardHtml, unifiedErrorText,
 } from '../trash/trash-unified.js';
 import { renderEliminazioni } from './rete-eliminazioni.js';
+// SELEZIONE MULTIPLA: «Ripristina selezionati» e «Ripristina questa operazione» (stesse regole del
+// ripristino singolo, decise dal server contatto per contatto).
+import { createSelection, fmt, mountBulkBar, openBulkRestoreDialog } from '../components/contact-bulk.js';
+import { contactTrashOperationIds, listContactTrashOperations } from '../trash/trash-api.js';
 import {
   CONTACT_RESTORED_TOAST, CONTACT_STATUS_LABELS, RESTORED_TOAST,
   contactLine, contactName, duplicatesView, propertyLine, reasonLabel, restoreErrorView,
@@ -105,8 +109,8 @@ function conflittiHtml(view) {
     `<li><a href="#/immobili/${Number(c.id)}">${escapeHtml(c.code)}</a> — ${escapeHtml(c.label)}</li>`).join('')}</ul>`;
 }
 
-/** Una card del Cestino Contatti (esportata per le prove). */
-export function contactTrashCardHtml(item) {
+/** Una card del Cestino Contatti (esportata per le prove). `selectable`: la casella della selezione multipla. */
+export function contactTrashCardHtml(item, { selectable = false } = {}) {
   const chi = item.deleted_by_name ? ` · da ${item.deleted_by_name}` : '';
   const motivo = reasonLabel(item.deleted_reason) + (item.deleted_note ? ` — ${item.deleted_note}` : '');
   const stato = CONTACT_STATUS_LABELS[item.status] || item.status || '—';
@@ -114,6 +118,8 @@ export function contactTrashCardHtml(item) {
   return `
     <article class="trash-card" data-contact-trash-item="${id}">
       <div class="trash-card-head">
+        ${selectable ? `<label class="bulk-check trash-card-check"><input type="checkbox" data-contact-trash-select="${id}"
+          aria-label="Seleziona ${escapeHtml(contactName(item))}"></label>` : ''}
         <strong class="trash-code">${escapeHtml(contactName(item))}</strong>
         <span class="muted trash-type">${escapeHtml(item.contact_type === 'company' ? 'Azienda' : 'Persona')}</span>
       </div>
@@ -252,8 +258,11 @@ function listaCestino(listEl, pagerEl, toastHost, cfg) {
         carica();
       });
     }
+    if (cfg.afterLoad) cfg.afterLoad();
   }
 
+  // SELEZIONE MULTIPLA: dopo un ripristino a blocchi l'elenco riparte dalla prima pagina.
+  carica.reset = () => { offset = 0; return carica(); };
   return carica;
 }
 
@@ -534,8 +543,15 @@ export async function renderCestino(container, { platformAdmin = false, platform
           <a href="#/contatti" class="btn ghost" data-contact-trash-back>← Contatti</a>
         </div>
         <div data-contact-trash-notice></div>
+        <div class="bulk-ops" data-contact-trash-ops=""></div>
+        <div class="bulk-tools" data-contact-trash-tools="" hidden>
+          <label class="bulk-check bulk-page"><input type="checkbox" data-contact-trash-all=""> Seleziona quelli mostrati</label>
+          <span class="muted" data-contact-trash-scope="" aria-live="polite"></span>
+        </div>
         <div class="trash-cards" data-contact-trash-list>${contatti ? '<p class="muted">Caricamento…</p>' : ''}</div>
         <div class="list-pager" data-contact-trash-pager></div>
+        <div id="contatti-cestino-bulk-bar" data-contact-trash-bar=""></div>
+        <dialog class="modal" data-contact-bulk-dialog=""></dialog>
       </section>
       <section class="trash-panel" data-trash-panel="edifici"${edifici ? '' : ' hidden'}>
         <div class="trash-page-head">
@@ -572,13 +588,100 @@ export async function renderCestino(container, { platformAdmin = false, platform
       errorHtml: (error) => conflittiHtml(restoreErrorView(error)),
       moreError: 'Impossibile caricare altri immobili.',
     });
-  const caricaContatti = listaCestino(container.querySelector('[data-contact-trash-list]'),
+  // SELEZIONE MULTIPLA nel Cestino Contatti: caselle sulle card mostrate, «Ripristina selezionati»,
+  // e le operazioni massive recenti con «Ripristina questa operazione».
+  const contattiListEl = container.querySelector('[data-contact-trash-list]');
+  const contattiTools = container.querySelector('[data-contact-trash-tools]');
+  const contattiAll = contattiTools.querySelector('[data-contact-trash-all]');
+  const contattiScope = contattiTools.querySelector('[data-contact-trash-scope]');
+  const opsEl = container.querySelector('[data-contact-trash-ops]');
+  const bulkDialog = container.querySelector('[data-contact-bulk-dialog]');
+  const selCestino = createSelection();
+  const idsMostrati = () => Array.from(contattiListEl.querySelectorAll('[data-contact-trash-select]'))
+    .map((b) => Number(b.dataset.contactTrashSelect));
+  const dopoRipristino = async () => {
+    selCestino.clear();
+    await caricaContatti.reset();
+    await caricaOperazioni();
+  };
+  const barCestino = mountBulkBar(container.querySelector('[data-contact-trash-bar]'), {
+    actionLabel: 'Ripristina selezionati', actionClass: 'btn primary',
+    onClear: () => { selCestino.clear(); aggiornaCestino(); },
+    onAction: () => {
+      const ids = selCestino.list();
+      if (ids.length) openBulkRestoreDialog(bulkDialog, { ids, onFinished: dopoRipristino });
+    },
+  });
+  function aggiornaCestino() {
+    const mostrati = idsMostrati();
+    for (const b of Array.from(contattiListEl.querySelectorAll('[data-contact-trash-select]'))) {
+      b.checked = selCestino.has(b.dataset.contactTrashSelect);
+    }
+    const scelti = mostrati.filter((id) => selCestino.has(id)).length;
+    contattiAll.checked = mostrati.length > 0 && scelti === mostrati.length;
+    contattiAll.indeterminate = scelti > 0 && scelti < mostrati.length;
+    contattiTools.hidden = !mostrati.length;
+    contattiScope.textContent = selCestino.count() ? `${fmt(selCestino.count())} selezionati.` : '';
+    barCestino.update(selCestino.count());
+  }
+  contattiListEl.addEventListener('change', (evento) => {
+    const box = evento.target && evento.target.closest ? evento.target.closest('[data-contact-trash-select]') : null;
+    if (!box) return;
+    selCestino.set(box.dataset.contactTrashSelect, box.checked);
+    aggiornaCestino();
+  });
+  contattiAll.addEventListener('change', () => { selCestino.setMany(idsMostrati(), contattiAll.checked); aggiornaCestino(); });
+
+  async function caricaOperazioni() {
+    let voci = [];
+    try {
+      voci = ((await listContactTrashOperations()) || {}).items || [];
+    } catch (_e) {
+      opsEl.innerHTML = '';
+      return;
+    }
+    if (!voci.length) { opsEl.innerHTML = ''; return; }
+    opsEl.innerHTML = `
+      <h4 class="bulk-ops-title">Eliminazioni multiple recenti</h4>
+      <ul class="bulk-ops-list">${voci.map((o) => `
+        <li data-contact-trash-op="${escapeHtml(o.operation_id)}">
+          <span><strong>${escapeHtml(fmt(o.in_trash))} ${Number(o.in_trash) === 1 ? 'contatto' : 'contatti'}</strong>
+            · ${escapeHtml(formatDateTime(o.deleted_at))} · ${escapeHtml(reasonLabel(o.reason_code))}${o.deleted_by_name ? ` · da ${escapeHtml(o.deleted_by_name)}` : ''}</span>
+          <button type="button" class="btn ghost" data-contact-trash-op-restore="${escapeHtml(o.operation_id)}">Ripristina questa operazione</button>
+        </li>`).join('')}</ul>`;
+    for (const b of Array.from(opsEl.querySelectorAll('[data-contact-trash-op-restore]'))) {
+      b.addEventListener('click', async () => {
+        b.disabled = true;
+        try {
+          const op = await contactTrashOperationIds(b.dataset.contactTrashOpRestore);
+          const ids = (op && op.ids) || [];
+          openBulkRestoreDialog(bulkDialog, {
+            ids, title: `Ripristina questa operazione (${fmt(ids.length)} ${ids.length === 1 ? 'contatto' : 'contatti'})`,
+            onFinished: dopoRipristino,
+          });
+        } catch (error) {
+          showToast(toastHost, { text: error.message || 'Operazione non più disponibile.' });
+          await caricaOperazioni();
+        } finally {
+          b.disabled = false;
+        }
+      });
+    }
+  }
+
+  const caricaContatti = listaCestino(contattiListEl,
     container.querySelector('[data-contact-trash-pager]'), toastHost, {
-      itemAttr: 'data-contact-trash-item', restoreAttr: 'data-contact-restore', restoreKey: 'contactRestore', card: contactTrashCardHtml,
+      itemAttr: 'data-contact-trash-item', restoreAttr: 'data-contact-restore', restoreKey: 'contactRestore',
+      card: (item) => contactTrashCardHtml(item, { selectable: true }),
+      afterLoad: () => aggiornaCestino(),
       list: listContactTrash, restore: restoreContact, toast: CONTACT_RESTORED_TOAST,
       errorHtml: (error) => escapeHtml(restoreErrorView(error).text),
       moreError: 'Impossibile caricare altri contatti.',
-      afterRestore: (riga) => { noticeEl.innerHTML = duplicatesNoticeHtml(contactName(riga), duplicatesView(riga)); },
+      afterRestore: (riga) => {
+        noticeEl.innerHTML = duplicatesNoticeHtml(contactName(riga), duplicatesView(riga));
+        if (riga && riga.id) selCestino.set(riga.id, false);
+        aggiornaCestino();
+      },
     });
   const caricaEdifici = gruppiEdifici(container.querySelector('[data-building-trash-list]'),
     container.querySelector('[data-building-trash-pager]'));
@@ -605,7 +708,8 @@ export async function renderCestino(container, { platformAdmin = false, platform
     }
     if (caricati[scheda]) return;
     caricati[scheda] = true;
-    const carica = { tutti: caricaTutti, immobili: caricaImmobili, contatti: caricaContatti, edifici: caricaEdifici,
+    const carica = { tutti: caricaTutti, immobili: caricaImmobili,
+                     contatti: () => Promise.all([caricaContatti(), caricaOperazioni()]), edifici: caricaEdifici,
                      richieste: caricaRichieste, 'richieste-edifici': caricaRichiesteEdifici }[scheda];
     await carica();
   }

@@ -51,6 +51,10 @@ import { bindRowDeletes, rowDeleteColumn, rowDeleteDialogHtml } from '../trash/t
 import { openContactImportDialog } from '../components/contact-import.js';
 // ORDINAMENTO ALFABETICO: «A–Z | Z–A» per nome e cognome (ordine fatto dal server, `sort=name_asc|name_desc`).
 import { mountSortToggle, readSort, saveSort } from '../components/sort-toggle.js';
+// SELEZIONE MULTIPLA: caselle, «Seleziona questa pagina» / «tutti i risultati», «Elimina selezionati»
+// (sempre e solo nel Cestino, a blocchi, con le regole del singolo decise dal server).
+import { createSelection, fmt, mountBulkBar, openBulkTrashDialog } from '../components/contact-bulk.js';
+import { contactSelectionIds } from '../trash/trash-api.js';
 
 const PAGE_SIZE = 50;
 
@@ -75,10 +79,17 @@ export async function renderContatti(container, { nuovo = false } = {}) {
         <div id="contatti-sort" class="sort-toggle-host"></div>
       </div>
       <div id="contatti-feedback"></div>
+      <div class="bulk-tools" id="contatti-bulk-tools" hidden>
+        <label class="bulk-check bulk-page"><input type="checkbox" data-bulk-page=""> Seleziona questa pagina</label>
+        <button type="button" class="btn ghost" data-bulk-all="">Seleziona tutti i risultati</button>
+        <span class="muted" data-bulk-scope="" aria-live="polite"></span>
+      </div>
       <div id="contatti-list-area" class="trash-row-host"><p class="muted">Caricamento…</p></div>
       <div id="contatti-pager" class="list-pager"></div>
+      <div id="contatti-bulk-bar"></div>
       ${rowDeleteDialogHtml()}
     </div>
+    <dialog id="contact-bulk-dialog" class="modal"></dialog>
     <dialog id="contact-create-dialog" class="modal"></dialog>
     <dialog id="contact-import-dialog" class="modal modal-wide"></dialog>
   `;
@@ -96,6 +107,58 @@ export async function renderContatti(container, { nuovo = false } = {}) {
   mountSortToggle(container.querySelector('#contatti-sort'), {
     current: sort, label: 'Ordina i contatti per nome',
     onChange: (value) => { sort = value; saveSort('contatti', value); offset = 0; load(); },
+  });
+
+  // SELEZIONE MULTIPLA: resta cambiando pagina o ordine; si azzera cambiando la ricerca.
+  const sel = createSelection();
+  const tools = container.querySelector('#contatti-bulk-tools');
+  const pageBox = tools.querySelector('[data-bulk-page]');
+  const allBtn = tools.querySelector('[data-bulk-all]');
+  const scopeEl = tools.querySelector('[data-bulk-scope]');
+  const bulkDialog = container.querySelector('#contact-bulk-dialog');
+  let pageIds = [];
+  const bar = mountBulkBar(container.querySelector('#contatti-bulk-bar'), {
+    actionLabel: 'Elimina selezionati',
+    onClear: () => { sel.clear(); aggiornaSelezione(); },
+    onAction: () => {
+      const ids = sel.list();
+      if (!ids.length) return;
+      openBulkTrashDialog(bulkDialog, {
+        ids,
+        onFinished: async () => { sel.clear(); offset = 0; await load(); },
+      });
+    },
+  });
+
+  function aggiornaSelezione() {
+    for (const box of Array.from(listArea.querySelectorAll('[data-bulk-select]'))) {
+      box.checked = sel.has(box.dataset.bulkSelect);
+    }
+    const sulla = pageIds.filter((id) => sel.has(id)).length;
+    pageBox.checked = pageIds.length > 0 && sulla === pageIds.length;
+    pageBox.indeterminate = sulla > 0 && sulla < pageIds.length;
+    const n = sel.count();
+    scopeEl.textContent = sel.mode === 'all'
+      ? `Selezionati tutti i ${fmt(sel.totalAll)} risultati${n < sel.totalAll ? ` (${fmt(sel.totalAll - n)} tolti)` : ''}.`
+      : (n ? `${fmt(n)} selezionati.` : '');
+    allBtn.hidden = sel.mode === 'all';
+    bar.update(n);
+  }
+
+  pageBox.addEventListener('change', () => { sel.setMany(pageIds, pageBox.checked); aggiornaSelezione(); });
+  allBtn.addEventListener('click', async () => {
+    allBtn.disabled = true;
+    allBtn.textContent = 'Selezione in corso…';
+    try {
+      const data = await contactSelectionIds({ search: searchInput.value.trim() });
+      sel.selectAll(Array.isArray(data?.ids) ? data.ids : []);
+    } catch (error) {
+      scopeEl.textContent = error.message || 'Impossibile selezionare tutti i risultati.';
+    } finally {
+      allBtn.disabled = false;
+      allBtn.textContent = 'Seleziona tutti i risultati';
+      aggiornaSelezione();
+    }
   });
 
   async function load() {
@@ -117,6 +180,8 @@ export async function renderContatti(container, { nuovo = false } = {}) {
 
     listArea.innerHTML = renderTable(
       [
+        { label: '', render: (c) => `<label class="bulk-check" data-bulk-cell=""><input type="checkbox" data-bulk-select="${Number(c.id)}"
+          aria-label="Seleziona ${escapeHtml(c.display_name || contactFallbackName(c))}"></label>` },
         { label: 'Nome', render: (c) => `<strong>${escapeHtml(c.display_name || contactFallbackName(c))}</strong>` },
         { label: 'Email', render: (c) => escapeHtml(c.email || '—') },
         { label: 'Telefono', render: (c) => escapeHtml(c.phone || '—') },
@@ -128,6 +193,15 @@ export async function renderContatti(container, { nuovo = false } = {}) {
       { emptyMessage: term ? 'Nessun contatto trovato per questa ricerca.' : 'Nessun contatto presente.', onRowClick: true },
     );
     bindTableRowClicks(listArea, (id) => navigate('contatti', [id]));
+    pageIds = items.map((c) => Number(c.id));
+    tools.hidden = !items.length && !sel.count();
+    for (const cella of Array.from(listArea.querySelectorAll('[data-bulk-cell]'))) {
+      // la casella non apre la scheda
+      cella.addEventListener('click', (evento) => evento.stopPropagation());
+      const box = cella.querySelector('[data-bulk-select]');
+      box.addEventListener('change', () => { sel.set(box.dataset.bulkSelect, box.checked); aggiornaSelezione(); });
+    }
+    aggiornaSelezione();
     bindRowDeletes(listArea, {
       rows: items,
       dialog: container.querySelector('[data-row-delete-dialog]'),
@@ -154,6 +228,8 @@ export async function renderContatti(container, { nuovo = false } = {}) {
 
   searchInput.addEventListener('input', () => {
     offset = 0;
+    sel.clear();
+    aggiornaSelezione();
     clearTimeout(debounceHandle);
     debounceHandle = setTimeout(load, 300);
   });

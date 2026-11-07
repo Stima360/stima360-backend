@@ -81,6 +81,33 @@ def list_contact_trash(ctx, limit, offset):
     return contact_lifecycle.list_trash(ctx, limit=limit, offset=offset)
 
 
+def contact_selection(ctx, search, status):
+    return repository.list_contact_ids(ctx, search, status)
+
+
+def bulk_trash_contacts(ctx, payload):
+    from . import contact_bulk
+    data = _dump(payload)
+    return contact_bulk.trash_many(ctx, data["ids"], data.get("reason_code"), data.get("note"),
+                                   data.get("operation_id"))
+
+
+def bulk_restore_contacts(ctx, payload):
+    from . import contact_bulk
+    data = _dump(payload)
+    return contact_bulk.restore_many(ctx, data["ids"], data.get("operation_id"))
+
+
+def contact_trash_operations(ctx, limit):
+    from . import contact_bulk
+    return contact_bulk.list_operations(ctx, limit)
+
+
+def contact_trash_operation_ids(ctx, operation_id):
+    from . import contact_bulk
+    return contact_bulk.operation_ids(ctx, operation_id)
+
+
 def update_contact(ctx, contact_id, payload):
     data = _dump(payload, exclude_unset=True)
     if "email" in data:

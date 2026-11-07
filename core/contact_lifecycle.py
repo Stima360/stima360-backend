@@ -43,6 +43,7 @@ from operator_auth import permissions
 from operator_auth.dependencies import OWNER_ADMIN_MIN_ROLE
 
 from . import property_mandate as _mandato
+from .contact_privacy import contact_privacy_predicate
 from .database import core_cursor
 from .exceptions import ConflictError, NotFoundError, PermissionDenied, ValidationError
 from .scope import scoped_predicate, scoped_source
@@ -153,10 +154,13 @@ def _vede_tutta_agenzia(ctx) -> bool:
 
 def _contatto(cur, ctx, contact_id: int, *, lock: bool = False) -> dict:
     """La riga nello scope di chi chiede (agent: solo i suoi). Fuori scope o
-    inesistente: 404, indistinguibili (D-6)."""
+    inesistente: 404, indistinguibili (D-6). IMPORTAZIONE RUBRICA: anche il
+    contatto RISERVATO a un altro operatore (`private_user_id`) e' un 404, per
+    qualunque ruolo, come nella scheda (core/contact_privacy.py)."""
     source, params = scoped_source(ctx, "contacts", "c")
-    cur.execute(f"SELECT c.* FROM {source} AND c.id = %s{' FOR UPDATE OF c' if lock else ''}",
-                params + [contact_id])
+    privacy, privacy_params = contact_privacy_predicate(ctx, "c")
+    cur.execute(f"SELECT c.* FROM {source} AND {privacy} AND c.id = %s{' FOR UPDATE OF c' if lock else ''}",
+                params + privacy_params + [contact_id])
     riga = cur.fetchone()
     if riga is None:
         raise NotFoundError(f"contact {contact_id} not found")
@@ -557,26 +561,38 @@ def trash_contact(ctx, contact_id: int, reason_code, note=None) -> dict:
     reason_code, note = _valida_motivo(reason_code, note)
     with core_cursor(commit=True) as (_, cur):
         _cestino_installato(cur)
-        contatto = _contatto(cur, ctx, contact_id, lock=True)
-        if contatto.get("deleted_at") is not None:
-            raise ContactLifecycleConflict(ALREADY_DELETED_MESSAGE, ALREADY_DELETED)
-        blocchi = trash_blockers(cur, ctx, agency_id, contatto)
-        if blocchi:
-            raise ContactLifecycleConflict(TRASH_BLOCKED_MESSAGE, TRASH_BLOCKED, blockers=blocchi)
-        if not _vede_tutta_agenzia(ctx):
-            storia = protected_history(cur, ctx, agency_id, contatto)
-            if storia:
-                raise ContactLifecycleForbidden(HISTORY_REQUIRES_ADMIN_MESSAGE, HISTORY_REQUIRES_ADMIN,
-                                                history=storico_per_lettore(ctx, storia))
-        comunicazioni = _sospendi_comunicazioni(cur, ctx, contact_id)
-        cur.execute("UPDATE contacts SET deleted_at = NOW(), deleted_by_user_id = %s, deleted_reason = %s, "
-                    "updated_at = NOW() WHERE id = %s AND agency_id = %s RETURNING *",
-                    (getattr(ctx, "user_id", None), reason_code, contact_id, agency_id))
-        riga = dict(cur.fetchone())
-        _evento(cur, ctx, agency_id, contact_id, "trash", reason=reason_code, note=note,
-                before={k: contatto.get(k) for k in ("status", "archived_at", "assigned_agent_id")},
-                metadata={"communications": comunicazioni})
+        riga = trash_locked(cur, ctx, agency_id, contact_id, reason_code, note)
     _audit("trash", ctx, entity_type="contact", entity_id=contact_id, reason=reason_code)
+    return riga
+
+
+def trash_locked(cur, ctx, agency_id: int, contact_id: int, reason_code, note, *, operation_id=None) -> dict:
+    """Lo spostamento di UN contatto dentro la transazione di chi chiama (motivo
+    gia' validato): stessa riga bloccata, stessi blocchi, stesso storico, stesse
+    comunicazioni sospese, stesso evento. Lo usa anche lo spostamento a blocchi
+    (core/contact_bulk.py), che passa `operation_id` per raggruppare gli eventi."""
+    contatto = _contatto(cur, ctx, contact_id, lock=True)
+    if contatto.get("deleted_at") is not None:
+        raise ContactLifecycleConflict(ALREADY_DELETED_MESSAGE, ALREADY_DELETED)
+    blocchi = trash_blockers(cur, ctx, agency_id, contatto)
+    if blocchi:
+        raise ContactLifecycleConflict(TRASH_BLOCKED_MESSAGE, TRASH_BLOCKED, blockers=blocchi)
+    if not _vede_tutta_agenzia(ctx):
+        storia = protected_history(cur, ctx, agency_id, contatto)
+        if storia:
+            raise ContactLifecycleForbidden(HISTORY_REQUIRES_ADMIN_MESSAGE, HISTORY_REQUIRES_ADMIN,
+                                            history=storico_per_lettore(ctx, storia))
+    comunicazioni = _sospendi_comunicazioni(cur, ctx, contact_id)
+    cur.execute("UPDATE contacts SET deleted_at = NOW(), deleted_by_user_id = %s, deleted_reason = %s, "
+                "updated_at = NOW() WHERE id = %s AND agency_id = %s RETURNING *",
+                (getattr(ctx, "user_id", None), reason_code, contact_id, agency_id))
+    riga = dict(cur.fetchone())
+    metadata = {"communications": comunicazioni}
+    if operation_id:
+        metadata["bulk_operation"] = str(operation_id)
+    _evento(cur, ctx, agency_id, contact_id, "trash", reason=reason_code, note=note,
+            before={k: contatto.get(k) for k in ("status", "archived_at", "assigned_agent_id")},
+            metadata=metadata)
     riga["communications"] = comunicazioni
     return riga
 
@@ -603,19 +619,29 @@ def restore_contact(ctx, contact_id: int) -> dict:
     agency_id = ctx.require_agency()
     with core_cursor(commit=True) as (_, cur):
         _cestino_installato(cur)
-        contatto = _contatto(cur, ctx, contact_id, lock=True)
-        if contatto.get("deleted_at") is None:
-            raise ContactLifecycleConflict(NOT_DELETED_MESSAGE, NOT_DELETED)
-        if not _vede_tutta_agenzia(ctx) and contatto.get("deleted_by_user_id") != getattr(ctx, "user_id", None):
-            raise ContactLifecycleForbidden(NOT_DELETED_BY_YOU_MESSAGE, NOT_DELETED_BY_YOU)
-        cur.execute("UPDATE contacts SET deleted_at = NULL, deleted_by_user_id = NULL, deleted_reason = NULL, "
-                    "updated_at = NOW() WHERE id = %s AND agency_id = %s RETURNING *", (contact_id, agency_id))
-        riga = dict(cur.fetchone())
-        doppioni = possible_duplicates(cur, agency_id, riga)
-        _evento(cur, ctx, agency_id, contact_id, "restore",
-                before={k: contatto.get(k) for k in ("deleted_at", "deleted_by_user_id", "deleted_reason")},
-                metadata={"possible_duplicates": [d["id"] for d in doppioni]})
+        riga = restore_locked(cur, ctx, agency_id, contact_id)
     _audit("restore", ctx, entity_type="contact", entity_id=contact_id)
+    return riga
+
+
+def restore_locked(cur, ctx, agency_id: int, contact_id: int, *, operation_id=None) -> dict:
+    """Il ripristino di UN contatto dentro la transazione di chi chiama: stesse
+    regole (scope, riservatezza, chi l'ha spostato), stesso evento."""
+    contatto = _contatto(cur, ctx, contact_id, lock=True)
+    if contatto.get("deleted_at") is None:
+        raise ContactLifecycleConflict(NOT_DELETED_MESSAGE, NOT_DELETED)
+    if not _vede_tutta_agenzia(ctx) and contatto.get("deleted_by_user_id") != getattr(ctx, "user_id", None):
+        raise ContactLifecycleForbidden(NOT_DELETED_BY_YOU_MESSAGE, NOT_DELETED_BY_YOU)
+    cur.execute("UPDATE contacts SET deleted_at = NULL, deleted_by_user_id = NULL, deleted_reason = NULL, "
+                "updated_at = NOW() WHERE id = %s AND agency_id = %s RETURNING *", (contact_id, agency_id))
+    riga = dict(cur.fetchone())
+    doppioni = possible_duplicates(cur, agency_id, riga)
+    metadata = {"possible_duplicates": [d["id"] for d in doppioni]}
+    if operation_id:
+        metadata["bulk_operation"] = str(operation_id)
+    _evento(cur, ctx, agency_id, contact_id, "restore",
+            before={k: contatto.get(k) for k in ("deleted_at", "deleted_by_user_id", "deleted_reason")},
+            metadata=metadata)
     riga["possible_duplicates"] = doppioni
     return riga
 
@@ -630,7 +656,9 @@ def list_trash(ctx, *, limit: int = 50, offset: int = 0) -> dict:
     limit = max(1, min(int(limit), TRASH_LIST_MAX))
     offset = max(0, int(offset))
     source, params = scoped_source(ctx, "contacts", "c")
-    filtri = ["c.deleted_at IS NOT NULL"]
+    privacy, privacy_params = contact_privacy_predicate(ctx, "c")
+    filtri = ["c.deleted_at IS NOT NULL", privacy]
+    params += privacy_params
     if not _vede_tutta_agenzia(ctx):
         filtri.append("c.deleted_by_user_id = %s")
         params.append(getattr(ctx, "user_id", None))

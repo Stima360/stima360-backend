@@ -276,9 +276,12 @@ CONTACT_NAME_KEYS = (
 CONTACT_SORTS = {"name_asc": alpha_sort.ASC, "name_desc": alpha_sort.DESC}
 
 
-def list_contacts(ctx, limit: int, offset: int, search: str | None, status: str | None,
-                  sort: str | None = None) -> list[dict[str, Any]]:
-    source, params = scoped_source(ctx, "contacts", "c")
+def _contact_list_clause(cur, ctx, params: list, search: str | None, status: str | None) -> str:
+    """La clausola dell'elenco Contatti dopo lo scope (riservatezza, Cestino, stato,
+    ricerca), aggiungendo i suoi parametri a `params`: UNA sola regola per la pagina
+    (`list_contacts`) e per la selezione di tutti i risultati (`list_contact_ids`,
+    SELEZIONE MULTIPLA). Lo scope lo calcola il chiamante PRIMA di aprire la
+    connessione (un contesto senza agenzia si ferma li', senza toccare il database)."""
     privacy, privacy_params = contact_privacy_predicate(ctx, "c")
     where = [privacy]
     params.extend(privacy_params)
@@ -292,20 +295,26 @@ def list_contacts(ctx, limit: int, offset: int, search: str | None, status: str 
     # CESTINO-CONTATTI-1: un contatto nel Cestino non e' mai nella lista, nella
     # ricerca globale o nei selettori; si vede solo dal Cestino.
     where.append(contact_trash.live("c"))
-    term = f"%{search.strip()}%" if search else None
+    if search:
+        term = f"%{search.strip()}%"
+        # IMPORTAZIONE RUBRICA: la ricerca per numero trova anche il terzo numero del contatto.
+        extra_phones = (" OR EXISTS (SELECT 1 FROM contact_phones cp WHERE cp.contact_id = c.id "
+                        "AND cp.phone_normalized ILIKE %s)") if _contact_phones_installed(cur) else ""
+        where.append(
+            """(
+                display_name ILIKE %s OR first_name ILIKE %s OR last_name ILIKE %s OR
+                company_name ILIKE %s OR email_normalized ILIKE %s OR phone_normalized ILIKE %s
+            """ + extra_phones + ")"
+        )
+        params.extend([term] * (7 if extra_phones else 6))
+    return " AND " + " AND ".join(where) if where else ""
+
+
+def list_contacts(ctx, limit: int, offset: int, search: str | None, status: str | None,
+                  sort: str | None = None) -> list[dict[str, Any]]:
+    source, params = scoped_source(ctx, "contacts", "c")
     with core_cursor() as (_, cur):
-        if search:
-            # IMPORTAZIONE RUBRICA: la ricerca per numero trova anche il terzo numero del contatto.
-            extra_phones = (" OR EXISTS (SELECT 1 FROM contact_phones cp WHERE cp.contact_id = c.id "
-                            "AND cp.phone_normalized ILIKE %s)") if _contact_phones_installed(cur) else ""
-            where.append(
-                """(
-                    display_name ILIKE %s OR first_name ILIKE %s OR last_name ILIKE %s OR
-                    company_name ILIKE %s OR email_normalized ILIKE %s OR phone_normalized ILIKE %s
-                """ + extra_phones + ")"
-            )
-            params.extend([term] * (7 if extra_phones else 6))
-        clause = " AND " + " AND ".join(where) if where else ""
+        clause = _contact_list_clause(cur, ctx, params, search, status)
         params.extend([limit, offset])
         if sort in CONTACT_SORTS:
             order = alpha_sort.order_by([alpha_sort.key(k) for k in CONTACT_NAME_KEYS], CONTACT_SORTS[sort], "c.id")
@@ -313,6 +322,25 @@ def list_contacts(ctx, limit: int, offset: int, search: str | None, status: str 
             order = "created_at DESC, id DESC"
         cur.execute(f"SELECT * FROM {source}{clause} ORDER BY {order} LIMIT %s OFFSET %s", params)
         return [dict(row) for row in cur.fetchall()]
+
+
+#: SELEZIONE MULTIPLA: «Seleziona tutti i risultati» restituisce al massimo questi id.
+CONTACT_SELECTION_MAX = 50000
+
+
+def list_contact_ids(ctx, search: str | None, status: str | None,
+                     max_ids: int = CONTACT_SELECTION_MAX) -> dict[str, Any]:
+    """Gli id di TUTTI i risultati dell'elenco (stessa regola della pagina), per
+    «Seleziona tutti i risultati». Solo id: nessun dato del contatto."""
+    source, params = scoped_source(ctx, "contacts", "c")
+    with core_cursor() as (_, cur):
+        clause = _contact_list_clause(cur, ctx, params, search, status)
+        cur.execute(f"SELECT c.id FROM {source}{clause} ORDER BY c.id LIMIT %s", params + [max_ids + 1])
+        ids = [int(r["id"]) for r in cur.fetchall()]
+    if len(ids) > max_ids:
+        raise ValidationError(f"Troppi risultati da selezionare in una volta (oltre {max_ids:,}): "
+                              "restringi la ricerca o i filtri".replace(",", "."))
+    return {"ids": ids, "total": len(ids)}
 
 
 def get_contact(ctx, contact_id: int) -> dict[str, Any]:
