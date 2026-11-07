@@ -815,6 +815,20 @@ DOMAINS = (
              "inesistente -> 404, agency_id nel corpo -> 422, nessuna importazione",
     ),
     Domain(
+        "WHATSAPP_COEXISTENCE", "/api/whatsapp-coexistence",
+        # WHATSAPP COEXISTENCE (2fe746b). SOLO RIFIUTI E LETTURE: la matrice non
+        # avvia MAI un collegamento, non chiede nulla a Meta e non scarica allegati
+        # della propria agenzia. L'agenzia viene SOLO dalla sessione: il collegamento
+        # e il messaggio dell'ALTRA agenzia sono 404 (anche verifica e
+        # sincronizzazione, che cercano la riga nell'agenzia della sessione PRIMA di
+        # qualunque chiamata a Meta); `agency_id` nei corpi e' 422.
+        certifier="whatsapp_coexistence",
+        depends_on=None,
+        api_delete=False,
+        note="sei rotte sondate: anonimo e Basic -> 401, elenco della sola sessione, collegamento e "
+             "allegato dell'altra agenzia -> 404, agency_id nei corpi -> 422, nessuna chiamata a Meta",
+    ),
+    Domain(
         "LEGACY_ADMIN", "/api/admin",
         listing="/api/admin/stime?day=oggi",
         note="le sette route /api/admin che toccano dati di tenant, migrate "
@@ -7795,6 +7809,76 @@ def certify_contact_imports(report, http, cert, domain, jars, owned, context) ->
                                 payload={"decisions": {}, "agency_id": _agenzia_altra(context, altro)})
         report.check(f"CONTACT_IMPORTS-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
                      f"{etichetta}: POST {base}/<id>/commit con agency_id -> {risposta.status} (atteso 422)")
+
+
+WHATSAPP_COEXISTENCE_OPERAZIONI = (("GET", "/config"), ("GET", "/onboardings"), ("POST", "/onboardings"),
+                                   ("POST", "/onboardings/999999999/verify"),
+                                   ("POST", "/onboardings/999999999/sync"),
+                                   ("GET", "/messages/999999999/media"))
+
+
+def _collegamento_altrui(http, jar) -> int | None:
+    """L'id di un collegamento Coexistence visibile all'ALTRA sessione, se c'e'."""
+    risposta = http.request("GET", "/api/whatsapp-coexistence/onboardings", jar=jar)
+    try:
+        voci = (risposta.json() or {}).get("items") or []
+    except Exception:
+        return None
+    for voce in voci if isinstance(voci, list) else []:
+        if isinstance((voce or {}).get("id"), int):
+            return voce["id"]
+    return None
+
+
+def certify_whatsapp_coexistence(report, http, cert, domain, jars, owned, context) -> None:
+    """WHATSAPP_COEXISTENCE: nessun collegamento avviato, nessuna chiamata a Meta.
+
+        anonimo, Basic                                  -> 401 su tutte le rotte (mount)
+        GET  elenco dei collegamenti                    -> 200 con `items` (503 se la 132 manca)
+        POST nuovo collegamento con agency_id nel corpo -> 422 (corpo chiuso: prima di Meta)
+        POST sync con agency_id nel corpo               -> 422 (corpo chiuso)
+        POST verify / sync del collegamento ALTRUI      -> 404 (503 senza la 132), mai 2xx
+        GET  allegato di un messaggio ALTRUI            -> 404, mai il file
+    L'altrui e' quello visibile all'altra sessione; se non ne ha, un id inesistente.
+    """
+    base = domain.prefix
+    _rifiuti_di_montaggio(report, http, "WHATSAPP_COEXISTENCE", base, WHATSAPP_COEXISTENCE_OPERAZIONI)
+    for etichetta, altro in (("A", "B"), ("B", "A")):
+        risposta = http.request("GET", f"{base}/onboardings", jar=jars[etichetta])
+        corpo = risposta.json() if risposta.status == 200 else None
+        report.check(f"WHATSAPP_COEXISTENCE-elenco-{etichetta}",
+                     risposta.status == 503 or (risposta.status == 200 and isinstance(corpo, dict)
+                                                and isinstance(corpo.get("items"), list)),
+                     f"{etichetta}: GET {base}/onboardings -> {risposta.status}")
+        agenzia_altra = _agenzia_altra(context, altro)
+        risposta = http.request("POST", f"{base}/onboardings", jar=jars[etichetta],
+                                payload={"code": "sonda-p26-6", "waba_id": "100000000000001",
+                                         "agency_id": agenzia_altra})
+        report.check(f"WHATSAPP_COEXISTENCE-corpo-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: POST {base}/onboardings con agency_id -> {risposta.status} (atteso 422)")
+        risposta = http.request("POST", f"{base}/onboardings/999999999/sync", jar=jars[etichetta],
+                                payload={"kind": "contacts", "agency_id": agenzia_altra})
+        report.check(f"WHATSAPP_COEXISTENCE-sync-chiuso-{etichetta}-{altro}", risposta.status == 422,
+                     f"{etichetta}: POST {base}/onboardings/<id>/sync con agency_id -> {risposta.status} "
+                     "(atteso 422)")
+        altrui = _collegamento_altrui(http, jars[altro])
+        bersaglio = f"{base}/onboardings/{altrui or 999999999}"
+        nota = "" if altrui else ": nessuno visibile, id inesistente"
+        risposta = http.request("POST", f"{bersaglio}/verify", jar=jars[etichetta], payload={})
+        report.check(f"WHATSAPP_COEXISTENCE-verifica-altrui-{etichetta}-{altro}", risposta.status in (404, 503),
+                     f"{etichetta}: POST {bersaglio}/verify (collegamento di {altro}{nota}) -> {risposta.status} "
+                     "(atteso 404, mai 2xx)")
+        risposta = http.request("POST", f"{bersaglio}/sync", jar=jars[etichetta], payload={"kind": "contacts"})
+        report.check(f"WHATSAPP_COEXISTENCE-sync-altrui-{etichetta}-{altro}", risposta.status in (404, 503),
+                     f"{etichetta}: POST {bersaglio}/sync (collegamento di {altro}{nota}) -> {risposta.status} "
+                     "(atteso 404, mai 2xx)")
+        messaggio = _ultimo_messaggio(http, jars[altro])
+        percorso = f"{base}/messages/{messaggio or 999999999}/media"
+        risposta = http.request("GET", percorso, jar=jars[etichetta])
+        report.check(f"WHATSAPP_COEXISTENCE-allegato-altrui-{etichetta}-{altro}", risposta.status == 404,
+                     f"{etichetta}: GET {percorso} (messaggio di {altro}"
+                     f"{'' if messaggio else ': nessuno visibile, id inesistente'}) -> {risposta.status} "
+                     "(atteso 404)")
 
 
 VISIT_BOOKING_LINKS_OPERAZIONI = (("GET", "?property_id=1"), ("POST", ""))

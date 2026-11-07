@@ -2191,6 +2191,42 @@ class FakeHttp(cert.HttpProbe):
             return self._reply(method, path, 200, _json.dumps({"items": [], "installed": True}).encode())
         return self._reply(method, path, 200, b'{"items": []}')
 
+    def _whatsapp_coexistence(self, method, path, agency, payload):
+        """WHATSAPP COEXISTENCE. Il doppio di `/api/whatsapp-coexistence`: corpi
+        chiusi (modelli VERI), un collegamento per agenzia nell'elenco, il
+        collegamento e il messaggio dell'altra agenzia 404. Rotto `isolation`:
+        verifica, sincronizzazione e allegato altrui rispondono 200."""
+        import json as _json
+        import re as _re
+
+        from whatsapp_coexistence.router import OnboardingRequest, SyncRequest
+
+        rotto = self._broken("isolation", "whatsapp_coexistence")
+        if path == "/api/whatsapp-coexistence/config":
+            return self._reply(method, path, 200, b'{"configured": false}')
+        if path == "/api/whatsapp-coexistence/onboardings":
+            if method == "POST":
+                try:
+                    OnboardingRequest(**(payload or {}))
+                except Exception:
+                    return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+                return self._reply(method, path, 503, b'{"detail":{"code":"COEXISTENCE_NOT_CONFIGURED"}}')
+            return self._reply(method, path, 200, _json.dumps({"items": [{"id": 7000 + int(agency or 0)}]}).encode())
+        trovato = _re.match(r"^/api/whatsapp-coexistence/onboardings/(\d+)/(verify|sync)$", path)
+        if trovato:
+            if trovato.group(2) == "sync":
+                try:
+                    SyncRequest(**(payload or {}))
+                except Exception:
+                    return self._reply(method, path, 422, b'{"detail":"corpo non valido"}')
+            suo = int(trovato.group(1)) == 7000 + int(agency or 0)
+            if suo or rotto:
+                return self._reply(method, path, 200, b'{"status": "requested"}')
+            return self._reply(method, path, 404, b'{"detail":{"code":"COEXISTENCE_NOT_FOUND"}}')
+        if rotto:
+            return self._reply(method, path, 200, b"allegato")
+        return self._reply(method, path, 404, b'{"detail":{"code":"MESSAGE_NOT_FOUND"}}')
+
     def _contact_imports(self, method, path, agency, payload):
         """IMPORTAZIONE RUBRICA. Il doppio di `/api/contact-imports`: limiti in
         lettura, importazione cercata nella PROPRIA agenzia, corpo di «Importa
@@ -2717,6 +2753,10 @@ class FakeHttp(cert.HttpProbe):
         # SENTINELLA AGGIORNATA DA IMPORTAZIONE RUBRICA
         if path.startswith("/api/contact-imports"):
             return self._contact_imports(method, path, agency, payload)
+
+        # SENTINELLA AGGIORNATA DA WHATSAPP COEXISTENCE
+        if path.startswith("/api/whatsapp-coexistence"):
+            return self._whatsapp_coexistence(method, path, agency, payload)
 
         if path.startswith("/api/core/tasks") and method == "GET":
             wanted = re.search(r"contact_id=(\d+)", path)
@@ -3783,6 +3823,29 @@ def test_13ze_an_import_of_another_agency_fails_the_matrix(monkeypatch):
     assert code == 1
     falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
     assert any(i.startswith("CONTACT_IMPORTS-inesistente") for i in falliti), falliti
+
+
+def test_13zf_whatsapp_coexistence_is_certified_rejections_and_reads_only(monkeypatch):
+    """WHATSAPP COEXISTENCE: la sezione gira e ogni prova e' un PASS: 6 rotte anonime +
+    6 Basic + 6 domande per agenzia (elenco, due corpi chiusi, verifica, sync e allegato
+    dell'ALTRA agenzia); nessun collegamento, nessuna chiamata a Meta."""
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(prepopulate=DERIVED, stime=STIME),
+        stale_followup={1: [{"id": 11}], 2: [{"id": 22}]})
+    righe = [(k, i) for k, i, _ in report.rows if i.startswith("WHATSAPP_COEXISTENCE-")]
+    assert [k for k, _ in righe if k != cert.PASS and k != cert.NOTE] == [], righe
+    assert sum(1 for k, _ in righe if k == cert.PASS) >= 6 + 6 + 6 * 2, righe
+    # il collegamento altrui e' quello VERO dell'altra sessione, non un id inventato
+    testi = [t for k, i, t in report.rows if i.startswith("WHATSAPP_COEXISTENCE-verifica-altrui")]
+    assert testi and all("nessuno visibile" not in t for t in testi), testi
+
+
+def test_13zg_coexistence_of_another_agency_fails_the_matrix(monkeypatch):
+    code, report, _db, _probe, _ = working_run(
+        monkeypatch, http=FakeHttp(broken={"isolation"}, only="whatsapp_coexistence"))
+    assert code == 1
+    falliti = [i for k, i, _ in report.rows if k == cert.FAIL]
+    assert any(i.startswith("WHATSAPP_COEXISTENCE-verifica-altrui") for i in falliti), falliti
 
 
 def test_13v_visit_booking_links_are_certified_rejections_only(monkeypatch):
