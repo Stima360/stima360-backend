@@ -136,6 +136,10 @@ export function bulkSummaryHtml(esito, kind = 'trash') {
     const testi = (v.blockers || []).map((b) => b.label).filter(Boolean);
     return testi.length ? ` <span class="muted">— ${escapeHtml(testi.join(' · '))}</span>` : '';
   };
+  // Le comunicazioni: cosa e' successo e cosa NON torna da solo (lo stesso del singolo).
+  const nota = !fatti ? '' : (spostare
+    ? 'Per i contatti spostati le automazioni sono state sospese e i messaggi in coda annullati. Ripristinandoli tornano i contatti, non le automazioni né i messaggi: si riattivano a mano dalla scheda.'
+    : 'Le automazioni sospese e i messaggi annullati quando erano nel Cestino restano tali: si riattivano a mano dalla scheda di ogni contatto.');
   const avvisi = [];
   if (esito.stopped) avvisi.push(`Interrotto: ${contatti(esito.remaining.length)} non ${spostare ? 'spostati' : 'ripristinati'}.`);
   if (esito.error) avvisi.push(`Errore: ${esito.error.message || 'operazione non completata'}. ${contatti(esito.remaining.length)} non ancora ${spostare ? 'spostati' : 'ripristinati'}.`);
@@ -143,6 +147,7 @@ export function bulkSummaryHtml(esito, kind = 'trash') {
     <div class="bulk-summary" data-bulk-summary="${kind}">
       <p class="bulk-summary-head" data-bulk-done="${fatti}"><strong>${escapeHtml(titolo)}</strong>${nonFatti ? `, ${escapeHtml(contatti(nonFatti))} no` : ''}.</p>
       ${avvisi.map((a) => `<p class="field-error" role="alert">${escapeHtml(a)}</p>`).join('')}
+      ${nota ? `<p class="bulk-note" data-bulk-comm-note="">${escapeHtml(nota)}</p>` : ''}
       ${gruppoHtml('Bloccati da pratiche aperte', esito.blocked, { attr: 'blocked', dettaglio: motivi,
     spiega: 'Restano dove sono: chiudi prima le pratiche indicate (come per il singolo contatto).' })}
       ${gruppoHtml('Serve un amministratore', esito.needs_admin, { attr: 'needs_admin',
@@ -270,8 +275,12 @@ export function openBulkTrashDialog(dialog, { ids, onFinished = null } = {}) {
         annulla.className = 'btn ghost';
         annulla.setAttribute('data-bulk-undo', '');
         annulla.textContent = `Annulla: ripristina ${esito.done.length === 1 ? 'il contatto spostato' : `i ${fmt(esito.done.length)} spostati`}`;
-        annulla.addEventListener('click', () => esegui(dialog, esito.done.slice(),
-          (pezzo, op) => bulkRestoreContacts(pezzo, op), { kind: 'restore', onFinished }));
+        // Prima di ripristinare si DICE cosa non torna: la stessa conferma del Cestino.
+        annulla.addEventListener('click', () => openBulkRestoreDialog(dialog, {
+          ids: esito.done.slice(),
+          title: `Annulla: ripristina ${esito.done.length === 1 ? 'il contatto spostato' : `i ${fmt(esito.done.length)} contatti spostati`}`,
+          onFinished,
+        }));
         azioni.appendChild(annulla);
       },
     });

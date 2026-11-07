@@ -2680,6 +2680,7 @@ a.scrivania-mini:hover { color: var(--primary); }
 .bulk-progress-track { height: 10px; border-radius: 999px; background: var(--border); overflow: hidden; margin: 8px 0 14px; }
 .bulk-progress-fill { height: 100%; background: var(--primary); transition: width .2s ease; }
 .bulk-summary .bulk-group { margin-top: 12px; }
+.bulk-summary .bulk-note { margin: 8px 0 0; padding: 8px 10px; border-radius: 10px; background: #fdf3d8; color: #6b4a00; font-size: 14px; }
 .bulk-summary .bulk-group h4 { margin: 0 0 4px; font-size: 15px; }
 .bulk-summary .bulk-group-count { color: var(--muted); font-weight: 600; }
 .bulk-summary .bulk-list { margin: 4px 0; padding-left: 18px; max-height: 220px; overflow: auto; }

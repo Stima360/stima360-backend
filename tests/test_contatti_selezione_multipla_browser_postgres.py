@@ -146,7 +146,9 @@ SCRIPT_DESKTOP = COMUNE + r"""
   await foto(page, 'desktop-riepilogo');
   r.dopo_spostamento_selezionabili = await selezionabili(page, 'Massa');
   r.lista_dopo = await righe(page);
-  await page.click(`${D} [data-bulk-undo]`);
+  await page.click(`${D} [data-bulk-undo]`);                // «Annulla»: prima la conferma, poi il ripristino
+  await page.waitForSelector(`${D} [data-bulk-dialog="restore"] [data-bulk-confirm]`);
+  await page.click(`${D} [data-bulk-confirm]`);
   r.annulla = await sommario(page, D);
   await page.click(`${D} [data-bulk-close]`);
   await pronta(page, CA);
@@ -348,3 +350,64 @@ def test_03_iphone_5200_contatti(app, server, tmp_path, capsys):
     assert i["spostamento"]["done"] == 5200 and i["ripristino"]["done"] == 5200
     assert i["cestino_largo"]["scroll"] <= i["cestino_largo"]["client"] + 1
     assert _nel_cestino(app, rubrica) == 0 and _nel_cestino(app, di_b) == 0
+
+
+SCRIPT_INTERROMPI = COMUNE + r"""
+(async () => {
+  const browser = await chromium.launch();
+  const page = await entra(browser, 'b2c.owner_a@example.test', PASSWORD, { viewport: { width: 1280, height: 900 } });
+  const D = '#contact-bulk-dialog';
+  const r = {};
+  await vai(page, '#/contatti', CA);
+  await cerca(page, 'Ferma');
+  await page.click('[data-bulk-all]');
+  await page.waitForFunction(() => /Selezionati tutti/.test(document.querySelector('[data-bulk-scope]').textContent));
+  r.selezionati = await conta(page);
+  await page.click(`${BARRA()} [data-bulk-action]`);
+  await page.waitForSelector(`${D}[open] [data-bulk-confirm]`);
+  await page.selectOption(`${D} [data-bulk-reason]`, 'duplicate');
+  await page.fill(`${D} [data-bulk-typed]`, String(r.selezionati));
+  await page.click(`${D} [data-bulk-confirm]`);
+  await page.click(`${D} [data-bulk-stop]`);                 // subito: finisce il blocco in corso, poi si ferma
+  r.stop_testo = await page.$eval(`${D} [data-bulk-stop]`, (b) => b.textContent);
+  r.interrotto = await sommario(page, D);
+  r.interrotto_html = await page.$eval(`${D} [data-bulk-summary]`, (s) => s.textContent.replace(/\s+/g, ' '));
+  await foto(page, 'interrompi-riepilogo');
+  r.spostati_dal_server = r.selezionati - await selezionabili(page, 'Ferma');
+  await page.click(`${D} [data-bulk-undo]`);                 // «Annulla»: prima la conferma con cosa NON torna
+  await page.waitForSelector(`${D} [data-bulk-dialog="restore"] [data-bulk-confirm]`);
+  r.annulla_titolo = await page.$eval(`${D} .trash-title`, (e) => e.textContent);
+  r.annulla_conferma = await page.$eval(`${D} .bulk-effects`, (e) => e.textContent.replace(/\s+/g, ' '));
+  r.prima_della_conferma = await selezionabili(page, 'Ferma');
+  await foto(page, 'annulla-conferma');
+  await page.click(`${D} [data-bulk-confirm]`);
+  r.ripristino = await sommario(page, D);
+  r.ripristino_nota = await page.$eval(`${D} [data-bulk-comm-note]`, (e) => e.textContent);
+  r.dopo = await selezionabili(page, 'Ferma');
+  await foto(page, 'annulla-riepilogo');
+  out.r = r;
+  await browser.close();
+  console.log(JSON.stringify(out));
+})().catch((e) => { console.error(e); process.exit(1); });
+"""
+
+
+def test_04_interrompi_e_annulla_nel_browser(app, server, tmp_path):
+    found = _node_con_playwright()
+    if found is None:
+        pytest.skip("node con playwright non disponibile: collaudo nel browser NON eseguito (BLOCKED)")
+    node, env = found
+    ids = app["ids"]
+    ferma = _contatti(app, ids["a"], 1500, "Ferma")
+    out = _esegui(node, env, SCRIPT_INTERROMPI, tmp_path, server, 900)
+    r = out["r"]
+    assert r["selezionati"] == 1500 and "Interruzione" in r["stop_testo"]
+    fatti = r["interrotto"]["done"]
+    assert 0 < fatti < 1500 and fatti % 100 == 0                      # solo blocchi interi, poi stop
+    assert f"Interrotto: {1500 - fatti:,}".replace(",", ".") in r["interrotto_html"]
+    assert r["spostati_dal_server"] == fatti                         # il riepilogo dice il vero (letto in quel momento)
+    assert "Annulla: ripristina" in r["annulla_titolo"]
+    assert "Automazioni sospese e messaggi annullati restano tali" in r["annulla_conferma"]
+    assert r["prima_della_conferma"] == 1500 - fatti                # nulla ripristinato prima della conferma
+    assert r["ripristino"]["done"] == fatti and "restano tali" in r["ripristino_nota"]
+    assert r["dopo"] == 1500 and _nel_cestino(app, ferma) == 0

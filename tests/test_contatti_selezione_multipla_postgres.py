@@ -361,3 +361,33 @@ def test_b5_una_riga_occupata_non_ferma_le_altre(mondo, monkeypatch):
     assert [v["id"] for v in corpo["busy"]] == [ids[2]]
     assert sorted(corpo["trashed"]) == [i for i in ids if i != ids[2]]
     assert _nel_cestino(m, [ids[2]]) == set()
+
+
+# ---------------------------------------------------------------------------
+# B6 - isolamento delle rotte: chi non ha agenzia, operazioni dei colleghi
+# ---------------------------------------------------------------------------
+
+def test_b6_senza_agenzia_403_e_operazioni_altrui_invisibili(mondo):
+    m = mondo
+    agente, agente2 = m["ids"]["agent_a"], m["ids"]["agent_a2"]
+    [mio] = _contatti(m, 1, prefisso="Isolamento")
+    rotte = [("get", f"{C}/selection", None), ("post", f"{C}/bulk-trash",
+              {"ids": [mio], "reason_code": "duplicate", "confirm": True}),
+             ("post", f"{C}/bulk-restore", {"ids": [mio], "confirm": True}),
+             ("get", f"{C}/trash-operations", None), ("get", f"{C}/trash-operations/{uuid.uuid4()}", None)]
+    for metodo, percorso, corpo in rotte:                            # super admin senza agenzia: mai un contatto
+        r = getattr(m["api"]("platform_none"), metodo)(percorso, **({"json": corpo} if corpo else {}))
+        assert r.status_code == 403, (percorso, r.status_code, r.text)
+    assert _nel_cestino(m, [mio]) == set()
+
+    suoi = _contatti(m, 3, prefisso="Isolamento", agente=agente)
+    op = _codice(_sposta(m, "agent_a", suoi), 200)["operation_id"]
+    visibili = lambda chi: {o["operation_id"] for o in _codice(m["api"](chi).get(f"{C}/trash-operations"), 200)["items"]}  # noqa: E731
+    assert op in visibili("agent_a") and op in visibili("owner_a") and op in visibili("admin_a")
+    assert op not in visibili("agent_a2") and op not in visibili("owner_b")
+    assert m["api"]("agent_a2").get(f"{C}/trash-operations/{op}").status_code == 404
+    # il collega non ripristina e non legge i nomi
+    corpo = _codice(_ripristina(m, "agent_a2", suoi), 200)
+    assert corpo["restored"] == [] and all(v.get("label") is None for v in corpo["not_available"])
+    assert _nel_cestino(m, suoi) == set(suoi)
+    assert agente2 != agente
